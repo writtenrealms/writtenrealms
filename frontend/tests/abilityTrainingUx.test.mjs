@@ -249,6 +249,8 @@ test("learn and unlearn lists render rich, guarded exact commands and cap state"
   assert.match(consoleSource, /"cmd\.ability\.unlearn\.list": AbilityTrainingList/);
   assert.match(trainingListSource, /ability\?\.learn_command/);
   assert.match(trainingListSource, /ability\?\.unlearn_command/);
+  assert.match(trainingListSource, /:value="ability\.number"/);
+  assert.match(trainingListSource, /Select an ability, or use:/);
   assert.match(trainingListSource, /trainingProviderIsAvailableInRoom/);
   assert.match(trainingListSource, /store\.state\.game\.messages/);
   assert.match(trainingListSource, /startsWith\("cmd\.ability\.learn\."\)/);
@@ -266,6 +268,11 @@ test("learn and unlearn lists render rich, guarded exact commands and cap state"
   assert.match(consoleSource, /trainer_learning_denied/);
   assert.match(trainingListSource, /Only the first/);
   assert.match(lookRoomSource, /roomActionsForTrainingProvider/);
+  const disabledAbilityRule = trainingListSource.match(
+    /\.ability-name:disabled\s*\{([^}]*)\}/,
+  )?.[1] || "";
+  assert.match(disabledAbilityRule, /color:\s*inherit/);
+  assert.doesNotMatch(disabledAbilityRule, /opacity\s*:/);
 });
 
 test("profile learning status normalizes embedded and top-level quota payloads", () => {

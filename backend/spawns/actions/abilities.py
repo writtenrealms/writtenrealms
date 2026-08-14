@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+import re
 from typing import Any
 
 from django.db import transaction
@@ -79,6 +80,7 @@ from worlds.models import Room
 
 
 MAX_ABILITY_HOTKEY = 8
+_TRAINING_INDEX_RE = re.compile(r"^-?[0-9]+$")
 
 DIRECTION_ALIASES = {
     "n": adv_consts.DIRECTION_NORTH,
@@ -859,8 +861,11 @@ def _trainable_ability_payload(
     ability: AbilityDefinition,
     trainer: TrainingProvider | None,
     learning: dict[str, Any] | None = None,
+    *,
+    number: int,
 ) -> dict[str, Any]:
     return {
+        "number": number,
         "slug": ability.slug,
         "name": ability.name,
         "learn_command": _learn_command(ability),
@@ -872,13 +877,15 @@ def _trainable_ability_payload(
 def _trainable_ability_list_text(
     trainable: list[tuple[AbilityDefinition, TrainingProvider | None]],
 ) -> str:
-    labels = [
-        f"{ability.name} [ {_learn_command(ability)} ]"
-        for ability, _trainer in trainable
-    ]
-    if not labels:
+    if not trainable:
         return "There is nothing you can learn here right now."
-    return "You can learn here: " + ", ".join(labels) + "."
+    lines = ["You can learn here:"]
+    lines.extend(
+        f"{number}. {ability.name} [ {_learn_command(ability)} ]"
+        for number, (ability, _trainer) in enumerate(trainable, start=1)
+    )
+    lines.append("Use: learn <number>")
+    return "\n".join(lines)
 
 
 def _unlearn_command(ability: AbilityDefinition) -> str:
@@ -889,8 +896,11 @@ def _unlearnable_ability_payload(
     ability: AbilityDefinition,
     trainer: TrainingProvider | None,
     learning: dict[str, Any] | None = None,
+    *,
+    number: int,
 ) -> dict[str, Any]:
     return {
+        "number": number,
         "slug": ability.slug,
         "name": ability.name,
         "unlearn_command": _unlearn_command(ability),
@@ -949,13 +959,64 @@ def _unlearnable_ability_catalog(
 def _unlearnable_ability_list_text(
     unlearnable: list[tuple[AbilityDefinition, TrainingProvider | None]],
 ) -> str:
-    labels = [
-        f"{ability.name} [ {_unlearn_command(ability)} ]"
-        for ability, _trainer in unlearnable
-    ]
-    if not labels:
+    if not unlearnable:
         return "There is nothing you can unlearn here right now."
-    return "You can unlearn here: " + ", ".join(labels) + "."
+    lines = ["You can unlearn here:"]
+    lines.extend(
+        f"{number}. {ability.name} [ {_unlearn_command(ability)} ]"
+        for number, (ability, _trainer) in enumerate(unlearnable, start=1)
+    )
+    lines.append("Use: unlearn <number>")
+    return "\n".join(lines)
+
+
+def _training_catalog_index(
+    selector: str | None,
+    *,
+    verb: str,
+) -> int | None:
+    """Return a bounded one-based catalog index, or None for named selectors."""
+
+    normalized = str(selector or "").strip().lower()
+    if not _TRAINING_INDEX_RE.fullmatch(normalized):
+        return None
+
+    unsigned = normalized[1:] if normalized.startswith("-") else normalized
+    canonical = unsigned.lstrip("0") or "0"
+    limit_text = str(TRAINER_CATALOG_LIMIT)
+    number = None
+    if (
+        not normalized.startswith("-")
+        and len(canonical) <= len(limit_text)
+        and (len(canonical) < len(limit_text) or canonical <= limit_text)
+    ):
+        number = int(canonical)
+    if number is not None and 1 <= number <= TRAINER_CATALOG_LIMIT:
+        return number
+
+    label = f" #{number}" if number is not None else ""
+    raise ActionError(
+        f"There is no ability{label} to {verb}. Type {verb} to list your options.",
+        code="ability_index_not_found",
+        data={"number": number, "operation": verb} if number is not None else {
+            "operation": verb,
+        },
+    )
+
+
+def _catalog_ability_or_error(
+    catalog: list[tuple[AbilityDefinition, TrainingProvider | None]],
+    number: int,
+    *,
+    verb: str,
+) -> tuple[AbilityDefinition, TrainingProvider | None]:
+    if number <= len(catalog):
+        return catalog[number - 1]
+    raise ActionError(
+        f"There is no ability #{number} to {verb}. Type {verb} to list your options.",
+        code="ability_index_not_found",
+        data={"number": number, "operation": verb},
+    )
 
 
 def trainer_for_ability_change(player: Player, ability: AbilityDefinition):
@@ -1444,8 +1505,12 @@ class LearnAbilityAction:
                                         learning_statuses[trainer.profile_id]
                                         if trainer else None
                                     ),
+                                    number=number,
                                 )
-                                for ability, trainer in trainable
+                                for number, (ability, trainer) in enumerate(
+                                    trainable,
+                                    start=1,
+                                )
                             ],
                             "trainers": [
                                 _trainer_payload(
@@ -1467,7 +1532,22 @@ class LearnAbilityAction:
                     )
                 ])
 
-            ability = resolve_ability_for_learning(player, selector)
+            catalog_number = _training_catalog_index(selector, verb="learn")
+            catalog_trainer = None
+            catalog_learning = None
+            if catalog_number is not None:
+                _trainers, trainable, _truncated, learning_statuses = (
+                    _trainable_ability_catalog(player)
+                )
+                ability, catalog_trainer = _catalog_ability_or_error(
+                    trainable,
+                    catalog_number,
+                    verb="learn",
+                )
+                if catalog_trainer is not None:
+                    catalog_learning = learning_statuses[catalog_trainer.profile_id]
+            else:
+                ability = resolve_ability_for_learning(player, selector)
             if not ability:
                 raise ActionError("Learn what ability?", code="ability_missing")
 
@@ -1482,11 +1562,15 @@ class LearnAbilityAction:
             if ability.slug in known:
                 text = f"You already know {ability.name}."
             else:
-                trainer, trainer_learning = require_learning_provider(
-                    player,
-                    ability,
-                    known_slugs=known,
-                )
+                if catalog_number is not None:
+                    trainer = catalog_trainer
+                    trainer_learning = catalog_learning
+                else:
+                    trainer, trainer_learning = require_learning_provider(
+                        player,
+                        ability,
+                        known_slugs=known,
+                    )
                 max_known = max_known_abilities_for_world(player.world)
                 if max_known is not None and len(known) >= max_known:
                     raise ActionError(
@@ -1583,8 +1667,12 @@ class UnlearnAbilityAction:
                                         learning_statuses[trainer.profile_id]
                                         if trainer else None
                                     ),
+                                    number=number,
                                 )
-                                for ability, trainer in unlearnable
+                                for number, (ability, trainer) in enumerate(
+                                    unlearnable,
+                                    start=1,
+                                )
                             ],
                             "trainers": [
                                 _trainer_payload(
@@ -1605,12 +1693,27 @@ class UnlearnAbilityAction:
                         text=_unlearnable_ability_list_text(unlearnable),
                     )
                 ])
-            ability = resolve_ability_for_selector(
-                player.world,
-                selector,
-                include_inactive=True,
-                actor_type=None,
-            )
+            catalog_number = _training_catalog_index(selector, verb="unlearn")
+            catalog_trainer = None
+            catalog_learning = None
+            if catalog_number is not None:
+                _trainers, unlearnable, _truncated, learning_statuses = (
+                    _unlearnable_ability_catalog(player)
+                )
+                ability, catalog_trainer = _catalog_ability_or_error(
+                    unlearnable,
+                    catalog_number,
+                    verb="unlearn",
+                )
+                if catalog_trainer is not None:
+                    catalog_learning = learning_statuses[catalog_trainer.profile_id]
+            else:
+                ability = resolve_ability_for_selector(
+                    player.world,
+                    selector,
+                    include_inactive=True,
+                    actor_type=None,
+                )
             if not ability:
                 raise ActionError("Unlearn what ability?", code="ability_missing")
 
@@ -1620,17 +1723,21 @@ class UnlearnAbilityAction:
             if ability.slug not in known:
                 text = f"You do not know {ability.name}."
             else:
-                trainer = require_trainer_for_ability_change(
-                    player,
-                    ability,
-                    verb="unlearn",
-                )
-                if trainer is not None:
-                    trainer_learning = learning_statuses_for_providers(
+                if catalog_number is not None:
+                    trainer = catalog_trainer
+                    trainer_learning = catalog_learning
+                else:
+                    trainer = require_trainer_for_ability_change(
                         player,
-                        [trainer],
-                        known_slugs=known,
-                    )[trainer.profile_id]
+                        ability,
+                        verb="unlearn",
+                    )
+                    if trainer is not None:
+                        trainer_learning = learning_statuses_for_providers(
+                            player,
+                            [trainer],
+                            known_slugs=known,
+                        )[trainer.profile_id]
                 known.remove(ability.slug)
                 player.known_abilities = known
                 hotkey_removed = _remove_ability_hotkey(player, ability)

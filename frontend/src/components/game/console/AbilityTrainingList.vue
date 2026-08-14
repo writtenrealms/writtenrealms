@@ -23,6 +23,7 @@
         <li
           v-for="ability in group.abilities"
           :key="ability.key || ability.slug || ability.id"
+          :value="ability.number"
           class="ability-entry"
         >
           <button
@@ -47,7 +48,7 @@
       {{ capText }}
     </div>
     <div v-if="!isPolicyError && abilities.length" class="training-hint color-text-50 font-text-light ml-2">
-      Select an ability to {{ isUnlearn ? "unlearn" : "learn" }} it.
+      {{ selectionHint }}
     </div>
   </div>
 </template>
@@ -87,6 +88,10 @@ const heading = computed(() => {
       : "There is nothing you can learn here right now.";
   }
   return isUnlearn.value ? "You can unlearn here:" : "You can learn here:";
+});
+const selectionHint = computed(() => {
+  const verb = isUnlearn.value ? "unlearn" : "learn";
+  return `Select an ability, or use: ${verb} <number>.`;
 });
 
 interface AbilityTrainingGroup {
@@ -230,7 +235,6 @@ const selectAbility = (ability: any) => {
   border-bottom-color: transparent;
   color: inherit;
   cursor: default;
-  opacity: 0.55;
 }
 
 .training-group {

@@ -307,13 +307,14 @@ attached anywhere in the definition world, its abilities require an eligible
 provider in the player's current room for both learning and unlearning.
 Abilities absent from every attached profile remain ungated by location.
 
-Provider selection does not add command grammar. Bare `learn` and `unlearn`
-list eligible abilities at the current location, while their named forms apply
-the change. Learning checks providers in room-first, then stable mob-id order,
-skipping a profile whose condition fails or whose quota is full. The first
-eligible provider with capacity teaches the ability. Unlearning remains
-available through any local provider containing the ability, irrespective of
-its learning condition or quota.
+Provider selection does not add provider-specific command grammar. Bare
+`learn` and `unlearn` list and number eligible abilities at the current
+location; `learn <number>` and `unlearn <number>` resolve against those current,
+bounded catalogs, while named forms remain available. Learning checks providers
+in room-first, then stable mob-id order, skipping a profile whose condition
+fails or whose quota is full. The first eligible provider with capacity teaches
+the ability. Unlearning remains available through any local provider containing
+the ability, irrespective of its learning condition or quota.
 
 Each Trainer Profile may own a learning policy:
 

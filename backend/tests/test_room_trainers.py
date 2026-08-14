@@ -32,6 +32,7 @@ from tests.utils import (
 )
 from spawns.actions.abilities import (
     LearnAbilityAction,
+    UnlearnAbilityAction,
     resolve_ability_for_selector,
 )
 from spawns.actions.base import ActionError
@@ -320,6 +321,112 @@ class RoomTrainerRuntimeTests(RoomTrainerTestCase):
         self.assertEqual(unlearned["data"]["trainer"]["type"], "room")
         self.player.refresh_from_db()
         self.assertNotIn(self.ability.slug, self.player.known_abilities)
+
+    def test_learn_numbers_are_global_and_select_the_displayed_ability(self):
+        second = self._ability("shield-wall", "Shield Wall", "wall")
+        second_profile = self._profile(
+            "shield-training",
+            "Shield Training",
+            [second],
+        )
+        self.room.trainer_profile = self.profile
+        self.room.save(update_fields=["trainer_profile"])
+        _definition, second_trainer = self._trainer_mob(
+            second_profile,
+            slug="shield-master",
+        )
+
+        listed = self._messages(
+            self._dispatch("learn"),
+            "cmd.ability.learn.list",
+        )[0]
+        self.assertEqual(
+            [
+                (entry["number"], entry["slug"])
+                for entry in listed["data"]["abilities"]
+            ],
+            [(1, self.ability.slug), (2, second.slug)],
+        )
+
+        learned = self._messages(
+            self._dispatch("learn 2"),
+            "cmd.ability.learn.success",
+        )[0]
+        self.assertEqual(learned["data"]["ability"]["slug"], second.slug)
+        self.assertEqual(learned["data"]["trainer"]["id"], second_trainer.id)
+        self.player.refresh_from_db()
+        self.assertIn(second.slug, self.player.known_abilities)
+        self.assertNotIn(self.ability.slug, self.player.known_abilities)
+
+    def test_unlearn_number_removes_only_the_displayed_ability_and_hotkey(self):
+        second = self._ability("shield-wall", "Shield Wall", "wall")
+        TrainerProfileAbility.objects.create(
+            profile=self.profile,
+            ability=second,
+            order=1,
+        )
+        self.room.trainer_profile = self.profile
+        self.room.save(update_fields=["trainer_profile"])
+        self.player.known_abilities = [self.ability.slug, second.slug]
+        self.player.ability_hotkeys = {
+            "1": self.ability.slug,
+            "2": second.slug,
+        }
+        self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
+
+        listed = self._messages(
+            self._dispatch("unlearn"),
+            "cmd.ability.unlearn.list",
+        )[0]
+        self.assertEqual(
+            [
+                (entry["number"], entry["slug"])
+                for entry in listed["data"]["abilities"]
+            ],
+            [(1, self.ability.slug), (2, second.slug)],
+        )
+        self.assertEqual(
+            listed["text"],
+            "You can unlearn here:\n"
+            "1. Power Strike [ unlearn strike ]\n"
+            "2. Shield Wall [ unlearn wall ]\n"
+            "Use: unlearn <number>",
+        )
+
+        unlearned = self._messages(
+            self._dispatch("unlearn 2"),
+            "cmd.ability.unlearn.success",
+        )[0]
+        self.assertEqual(unlearned["data"]["ability"]["slug"], second.slug)
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, [self.ability.slug])
+        self.assertEqual(self.player.ability_hotkeys, {"1": self.ability.slug})
+
+    def test_numeric_training_selectors_fail_closed_without_mutation(self):
+        self.room.trainer_profile = self.profile
+        self.room.save(update_fields=["trainer_profile"])
+        self.player.known_abilities = []
+        self.player.ability_hotkeys = {}
+        self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
+
+        for selector in ("0", "-1", "2", "9" * 5000):
+            with self.subTest(selector=selector[:20]):
+                with self.assertRaises(ActionError) as error:
+                    LearnAbilityAction().execute(self.player.id, selector)
+                self.assertEqual(error.exception.code, "ability_index_not_found")
+                self.player.refresh_from_db()
+                self.assertEqual(self.player.known_abilities, [])
+                self.assertEqual(self.player.ability_hotkeys, {})
+
+        self.player.known_abilities = [self.ability.slug]
+        self.player.ability_hotkeys = {"1": self.ability.slug}
+        self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
+        with self.assertRaises(ActionError) as error:
+            UnlearnAbilityAction().execute(self.player.id, "2")
+        self.assertEqual(error.exception.code, "ability_index_not_found")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.known_abilities, [self.ability.slug])
+        self.assertEqual(self.player.ability_hotkeys, {"1": self.ability.slug})
 
     def test_ungated_known_ability_is_listed_and_unlearned_anywhere(self):
         open_ability = self._ability("field-mend", "Field Mend", "mend")

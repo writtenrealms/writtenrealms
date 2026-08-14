@@ -1221,11 +1221,17 @@ class TestCombatAbilities(WorldTestCase):
 
         lists = self._messages_by_type(messages, "cmd.ability.learn.list")
         self.assertEqual(len(lists), 1)
-        self.assertEqual(lists[0]["text"], "You can learn here: Field Mend [ learn mend ].")
+        self.assertEqual(
+            lists[0]["text"],
+            "You can learn here:\n"
+            "1. Field Mend [ learn mend ]\n"
+            "Use: learn <number>",
+        )
         self.assertEqual(
             lists[0]["data"]["abilities"],
             [
                 {
+                    "number": 1,
                     "slug": "field-mend",
                     "name": "Field Mend",
                     "learn_command": "learn mend",
@@ -1290,12 +1296,16 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(len(lists), 1)
         self.assertEqual(
             lists[0]["text"],
-            "You can learn here: Power Strike [ learn strike ], Field Mend [ learn mend ].",
+            "You can learn here:\n"
+            "1. Power Strike [ learn strike ]\n"
+            "2. Field Mend [ learn mend ]\n"
+            "Use: learn <number>",
         )
         self.assertEqual(
             lists[0]["data"]["abilities"],
             [
                 {
+                    "number": 1,
                     "slug": "power-strike",
                     "name": "Power Strike",
                     "learn_command": "learn strike",
@@ -1303,6 +1313,7 @@ class TestCombatAbilities(WorldTestCase):
                     "learning": trainer_payload["learning"],
                 },
                 {
+                    "number": 2,
                     "slug": "field-mend",
                     "name": "Field Mend",
                     "learn_command": "learn mend",

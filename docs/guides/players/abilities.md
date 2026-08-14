@@ -5,17 +5,23 @@ abilities and may also provide training through a room or an NPC.
 
 ## Learning
 
-Use bare `learn` to see the abilities currently available to you:
+Use bare `learn` to see a numbered list of the abilities currently available
+to you:
 
 ```text
 learn
 ```
 
-Then learn one by its displayed name or command:
+Then learn one by its displayed number, name, or command:
 
 ```text
+learn 2
 learn power strike
 ```
+
+Numbers refer to positions in the current local training list, not permanent
+ability identifiers. Learning, unlearning, or a provider arriving or leaving
+can change the list, so use bare `learn` again when in doubt.
 
 A training room shows a **LEARN** action and remains available without an NPC.
 An NPC trainer must be present in your current room and, depending on the
@@ -49,18 +55,22 @@ total known-ability limit: both must have room before you can learn.
 
 ## Unlearning
 
-Bare `unlearn` lists the known abilities you can unlearn at your current
-location:
+Bare `unlearn` lists and numbers the known abilities you can unlearn at your
+current location:
 
 ```text
 unlearn
 ```
 
-Choose one by name or command:
+Choose one by its displayed number, name, or command:
 
 ```text
+unlearn 2
 unlearn power strike
 ```
+
+Unlearn numbers likewise refer to the current local list. Use bare `unlearn`
+again after your known abilities or available providers change.
 
 Training rooms show an **UNLEARN** action. An ability that requires a provider
 for learning requires one for unlearning too. Unlearning removes its hotkey and

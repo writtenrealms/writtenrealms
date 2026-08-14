@@ -1296,8 +1296,10 @@ spec:
 
 The room automatically exposes **Learn** and **Unlearn** actions. Bare `learn`
 lists abilities the player can learn there; bare `unlearn` lists known
-abilities the player can unlearn there. A direct room provider is always
-available while the player is in that room.
+abilities the player can unlearn there. Both lists are numbered, so players may
+use `learn <number>` or `unlearn <number>` as well as an ability name or
+authored command. A direct room provider is always available while the player
+is in that room.
 
 Attach the same kind of profile to a mob definition only when the spawned NPC's
 presence should control training:
