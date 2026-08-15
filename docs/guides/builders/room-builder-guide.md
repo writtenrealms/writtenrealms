@@ -22,6 +22,14 @@ The editor accepts one room manifest. Use **World > Edit World** when applying
 multiple related documents, such as a room plus a zone, neighboring rooms,
 triggers, and spawn plans.
 
+## Navigating Builder Maps
+
+The Room Details, zone, and whole-world maps share the same plane selector.
+When the currently selected room has an up or down exit, the selector appears
+in the lower-left corner of the map. Select an arrow to move to that connected
+room and recenter the map on its plane. Selecting a normal room square also
+makes that room the center of the zone or world map.
+
 ## Importing A Complete Room Set
 
 **Create World** starts a world with scaffold `room@1` at `(0, 0, 0)`. A

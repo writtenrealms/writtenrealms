@@ -30,6 +30,7 @@
           :center_key="center_key"
           :map="map"
           :unit="8"
+          :display_planes="true"
           @clickRoom="onMapClickRoom"/>
       </div>
       <div v-else>

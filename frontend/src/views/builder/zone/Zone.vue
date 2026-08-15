@@ -29,6 +29,7 @@
             :unit="8"
             :map="map"
             :rooms_filter="zone_rooms"
+            :display_planes="true"
             @clickRoom="onClickRoom"
           />
           <div>

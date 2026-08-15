@@ -9,14 +9,18 @@ const [
   builderFrameSource,
   roomViewSource,
   zoneViewSource,
+  worldViewSource,
   pathViewSource,
 ] = await Promise.all([
   readSource("../src/store/modules/builder/index.ts"),
   readSource("../src/components/builder/BuilderFrame.vue"),
   readSource("../src/views/builder/room/Room.vue"),
   readSource("../src/views/builder/zone/Zone.vue"),
+  readSource("../src/views/builder/world/World.vue"),
   readSource("../src/views/builder/zone/PathDetails.vue"),
 ]);
+
+const mapMarkup = (source) => source.match(/<Map\b[\s\S]*?\/>/)?.[0] || "";
 
 test("world-map room selection has no implicit database fallback", () => {
   assert.match(builderStoreSource, /builderRoomDetailEndpoint/);
@@ -35,4 +39,10 @@ test("room map and breadcrumb navigation use the shared room route resolver", ()
 test("zone and path map navigation use the shared zone route resolver", () => {
   assert.match(zoneViewSource, /router\.push\(builderZoneIndexRoute\(/);
   assert.match(pathViewSource, /router\.push\(builderZoneIndexRoute\(/);
+});
+
+test("room, zone, and world builder maps enable the shared plane selector", () => {
+  for (const source of [roomViewSource, zoneViewSource, worldViewSource]) {
+    assert.match(mapMarkup(source), /:display_planes="true"/);
+  }
 });
