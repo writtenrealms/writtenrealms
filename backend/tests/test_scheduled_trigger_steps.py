@@ -29,6 +29,7 @@ from spawns.events import GameEvent, publish_events
 from spawns.handlers.registry import dispatch_command
 from spawns.models import (
     CombatEncounter,
+    DoorState,
     GameEventOutbox,
     Item,
     Mob,
@@ -56,7 +57,7 @@ from spawns.triggers import execute_command_fallback_trigger
 from spawns.script_commands import MAX_SCRIPT_COMMAND_DEPTH
 from spawns.wallet import mutate_balances
 from tests.base import WorldTestCase
-from worlds.models import Room, World, WorldConfig
+from worlds.models import Door, Doorway, Room, World, WorldConfig
 from tests.utils import capture_game_messages, dispatch_text_command
 
 
@@ -368,6 +369,40 @@ class TestScheduledTriggerSteps(WorldTestCase):
                 },
             ],
         )
+
+    def test_trigger_steps_accept_fifty_and_reject_fifty_one(self):
+        steps = [
+            {
+                "after_seconds": 0,
+                "actions": [
+                    {
+                        "type": "echo",
+                        "room": "trigger_room",
+                        "text": f"Beat {step_index + 1}.",
+                    },
+                ],
+            }
+            for step_index in range(50)
+        ]
+
+        self.assertEqual(len(normalize_trigger_steps(steps)), 50)
+        with self.assertRaisesRegex(
+            TriggerStepSpecError,
+            "cannot contain more than 50 steps",
+        ):
+            normalize_trigger_steps([
+                *steps,
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "One beat too many.",
+                        },
+                    ],
+                },
+            ])
 
     def test_send_actions_normalize_trigger_actor_and_text(self):
         normalized = normalize_trigger_steps([
@@ -2817,6 +2852,76 @@ class TestScheduledTriggerSteps(WorldTestCase):
                 (observer.key, "The ferry rocks against the pier."),
             },
         )
+
+    def test_room_command_locks_door_with_one_custom_room_message(self):
+        south_room = self.room.create_at(adv_consts.DIRECTION_SOUTH)
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction=adv_consts.DIRECTION_SOUTH,
+            from_room=self.room,
+            to_room=south_room,
+            name="bronze doors",
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction=adv_consts.DIRECTION_NORTH,
+            from_room=south_room,
+            to_room=self.room,
+            name="bronze doors",
+        )
+        custom_message = (
+            "The bronze doors close behind you. Nobody touches them."
+        )
+        trigger = self._create_trigger(
+            match="judge me",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 1,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_room",
+                            "command": f"/lock south {custom_message}",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        self._dispatch(self.player.id, "judge me")
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_ACTIVE)
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = process_due_trigger_runs(now=run.next_run_ts)
+
+        self.assertEqual(result["completed"], 1)
+        run.refresh_from_db()
+        self.assertEqual(
+            run.status,
+            ScheduledTriggerRun.STATUS_COMPLETED,
+        )
+        self.assertEqual(
+            DoorState.objects.get(
+                world=self.spawn_world,
+                doorway=doorway,
+            ).state,
+            adv_consts.DOOR_STATE_LOCKED,
+        )
+        player_door_messages = [
+            entry["message"]
+            for entry in messages
+            if entry["player_key"] == self.player.key
+            and entry["message"]["type"] == "door.state_changed"
+        ]
+        self.assertEqual(len(player_door_messages), 1)
+        self.assertEqual(player_door_messages[0]["text"], custom_message)
 
     def test_mob_command_before_currency_debit_commits_atomically(self):
         obol = create_currency(

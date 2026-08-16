@@ -448,6 +448,18 @@ Builders can force door states directly:
 /unlock north
 ```
 
+`/open`, `/close`, and `/lock` can replace their normal room notification with
+custom text. A direction target accepts the text directly; use `--` after a
+door name so the target boundary stays unambiguous:
+
+```text
+/lock north The bronze doors close behind you. Nobody touches them.
+/open ironbound gate -- The ironbound gate rises into the ceiling.
+```
+
+The override is one doorway state-change message, not an additional echo, and
+is sent only when the state actually changes.
+
 Trusted Trigger scripts can use a mob or room issuer through `/cmd`:
 
 ```yaml

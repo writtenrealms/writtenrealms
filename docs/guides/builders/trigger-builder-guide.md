@@ -328,6 +328,9 @@ Common commands you will often use in trigger scripts:
 - `/cmd room -- /state set character {{ actor_key }} ...`
 - `/echo -- ...`
 - `/cmd room -- /echo -- ...`
+- `/cmd room -- /open <door>`
+- `/cmd room -- /close <door>`
+- `/cmd room -- /lock <door>`
 - `/cmd room -- /send {{ actor_key }} -- <private message>`
 - `/cmd room -- /sendexcept {{ actor_key }} -- <witness message>`
 - `/cmd room -- /set <target> <field> <value>`
@@ -714,11 +717,18 @@ does not select an arbitrary bystander player by name or room position:
 `trigger_actor` is the stable player subject.
 
 Commands currently approved for transactional steps are room-local `say`,
-`emote`, `talk`, authored socials, room-subject, room-scoped `/echo`, and the
-audited transactional `/transfer` and `/exitinstance` commands. Most approved
-handlers are event-only. `/transfer` is one mutating exception: it can target
-only the Trigger actor, but any of the three supported subject forms may issue
-it. The canonical forms are `subject: trigger_room` with
+`emote`, `talk`, authored socials, room-subject, room-scoped `/echo`, the
+immediate `/open`, `/close`, and `/lock` door commands, and the audited
+transactional `/transfer` and `/exitinstance` commands. Most approved handlers
+are event-only. The door commands are transactional mutations and can use a
+`trigger_room` or selected-mob subject. A direction target can include custom
+room text directly, such as `/lock south The bronze doors close behind you.`;
+use `/lock bronze doors -- ...` for a named target. The custom text replaces
+the normal door state message and is emitted only for a real state change.
+
+`/transfer` is another mutating exception: it can target only the Trigger
+actor, but any of the three supported subject forms may issue it. The canonical
+forms are `subject: trigger_room` with
 `/transfer {{ actor_key }} room@<relative_id>` and `subject: trigger_actor` with
 `/transfer self room@<relative_id>`. An exact-one selected mob may also issue
 `/transfer {{ actor_key }} room@<relative_id>`. `self` or `me` is accepted only
@@ -795,7 +805,7 @@ letter, and are at most 64 characters. A replacement target must refer to a
 binding created by an earlier `spawn_room_item`; `previous_stage` is not an
 implicit target when multiple items could have been spawned.
 
-A trigger may contain at most 32 steps and each step at most 16 actions. Each
+A trigger may contain at most 50 steps and each step at most 16 actions. Each
 `after_seconds` value and the sum of all `after_seconds` values may be at most
 `31,536,000` (one year). `consume_item.count` and
 `consume_room_item.count` may each be at most `1,000`;

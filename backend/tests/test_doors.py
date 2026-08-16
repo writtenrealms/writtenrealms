@@ -847,6 +847,110 @@ class TestDoorCommands(WorldTestCase):
         )[0]
         self.assertTrue(unlock["data"]["changed"])
 
+    def test_forced_open_close_and_lock_can_replace_the_room_message(self):
+        doorway, _, _ = self._create_door(
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        commands = (
+            (
+                "/close east The bronze doors close without a sound.",
+                adv_consts.DOOR_STATE_CLOSED,
+                "The bronze doors close without a sound.",
+            ),
+            (
+                "/open iron gate -- The bronze doors swing open.",
+                adv_consts.DOOR_STATE_OPEN,
+                "The bronze doors swing open.",
+            ),
+            (
+                "/lock east The bronze doors close behind you. Nobody touches them.",
+                adv_consts.DOOR_STATE_LOCKED,
+                "The bronze doors close behind you. Nobody touches them.",
+            ),
+        )
+
+        for command, expected_state, expected_text in commands:
+            with self.subTest(command=command):
+                with capture_game_messages() as messages:
+                    dispatch_command(
+                        command_type="text",
+                        actor_type="room",
+                        actor_id=self.room.id,
+                        payload={
+                            "text": command,
+                            "runtime_world_id": self.spawn_world.id,
+                        },
+                        script_source=True,
+                    )
+
+                state = DoorState.objects.get(
+                    world=self.spawn_world,
+                    doorway=doorway,
+                )
+                self.assertEqual(state.state, expected_state)
+                notifications = self._messages(
+                    messages,
+                    "door.state_changed",
+                    recipient=self.player.key,
+                )
+                self.assertEqual(len(notifications), 1)
+                self.assertEqual(notifications[0]["text"], expected_text)
+
+    def test_forced_door_custom_message_is_silent_for_a_noop(self):
+        self._create_door(default_state=adv_consts.DOOR_STATE_LOCKED)
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": "/lock east This should not be broadcast.",
+                    "runtime_world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        self.assertFalse(
+            self._messages(
+                messages,
+                "door.state_changed",
+                recipient=self.player.key,
+            )
+        )
+
+    def test_direction_prefixed_door_name_keeps_its_existing_meaning(self):
+        doorway, _, _ = self._create_door(
+            name="east gate",
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_command(
+                command_type="text",
+                actor_type="room",
+                actor_id=self.room.id,
+                payload={
+                    "text": "/lock east gate",
+                    "runtime_world_id": self.spawn_world.id,
+                },
+                script_source=True,
+            )
+
+        self.assertEqual(
+            DoorState.objects.get(
+                world=self.spawn_world,
+                doorway=doorway,
+            ).state,
+            adv_consts.DOOR_STATE_LOCKED,
+        )
+        notification = self._messages(
+            messages,
+            "door.state_changed",
+            recipient=self.player.key,
+        )[0]
+        self.assertEqual(notification["text"], "The east gate closes and locks.")
+
     def test_real_transition_keeps_state_event_without_observers(self):
         doorway, _, _ = self._create_door(reciprocal=False)
         self.player.in_game = False

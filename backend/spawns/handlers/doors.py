@@ -6,7 +6,11 @@ from spawns.actions.doors import (
     execute_player_door_command,
 )
 from spawns.events import publish_events
-from spawns.handlers.base import CommandContext, CommandHandler
+from spawns.handlers.base import (
+    TRIGGER_STEP_MODE_TRANSACTIONAL,
+    CommandContext,
+    CommandHandler,
+)
 from spawns.handlers.permissions import has_builder_access
 from spawns.handlers.registry import register_handler
 from spawns.triggers import command_trigger_result_message
@@ -18,6 +22,55 @@ def _selector(ctx: CommandContext):
         if value not in (None, ""):
             return value
     return ctx.payload.get("args") or []
+
+
+_DIRECTION_SELECTORS = {
+    "n",
+    "north",
+    "e",
+    "east",
+    "s",
+    "south",
+    "w",
+    "west",
+    "u",
+    "up",
+    "d",
+    "down",
+}
+
+
+def _forced_selector_and_room_message(
+    ctx: CommandContext,
+    command: str,
+):
+    """Split an optional forced-door observer message without guessing names."""
+    selector = _selector(ctx)
+    if command not in {"/open", "/close", "/lock"}:
+        return selector, None, False
+
+    explicit_message = str(ctx.payload.get("room_message") or "").strip()
+    args = [str(arg) for arg in (ctx.payload.get("args") or [])]
+    if explicit_message or not args:
+        return selector, explicit_message or None, False
+
+    if "--" in args:
+        delimiter_index = args.index("--")
+        delimited_selector = args[:delimiter_index]
+        room_message = " ".join(args[delimiter_index + 1 :]).strip()
+        return delimited_selector, room_message or None, False
+
+    # Let the action resolve the full text first so an existing name such as
+    # "south gate" retains its historical meaning. If it is not a door name,
+    # the first direction becomes the target and the rest becomes the message.
+    implicit_direction_message = (
+        len(args) > 1
+        and args[0].strip().lower() in _DIRECTION_SELECTORS
+    )
+    if implicit_direction_message:
+        return args, None, True
+
+    return selector, None, False
 
 
 def _publish_error(ctx: CommandContext, command: str, err: ActionError) -> None:
@@ -166,13 +219,20 @@ def _handle_forced(ctx: CommandContext, command: str) -> None:
         _publish_error(ctx, command, err)
         return
     try:
+        (
+            selector,
+            room_message,
+            implicit_direction_message,
+        ) = _forced_selector_and_room_message(ctx, command)
         result = execute_forced_door_command(
             actor=ctx.actor,
             actor_type=ctx.actor_type,
             runtime_world=ctx.world,
             room=ctx.room,
             command=command,
-            selector=_selector(ctx),
+            selector=selector,
+            room_message=room_message,
+            implicit_direction_message=implicit_direction_message,
         )
     except ActionError as err:
         _publish_error(ctx, command, err)
@@ -190,6 +250,22 @@ class _ForcedDoorHandler(CommandHandler):
     allow_script_source = True
     supported_actor_types = ("player", "mob", "room")
 
+    def validate_trigger_step_command(
+        self,
+        *,
+        command: str,
+        subject_type: str,
+        subject_key: str,
+        render_actor_key: str,
+    ) -> tuple[str, str] | None:
+        del command, subject_key, render_actor_key
+        if subject_type not in {"mob", "room"}:
+            return (
+                "Trigger-step door commands require a room or mob subject.",
+                "unsupported_command_subject",
+            )
+        return None
+
     def handle(self, ctx: CommandContext) -> None:
         _handle_forced(ctx, self.command_type)
 
@@ -198,10 +274,14 @@ class _ForcedDoorHandler(CommandHandler):
 class ForceOpenDoorHandler(_ForcedDoorHandler):
     command_type = "/open"
     text_commands = ("/open",)
+    trigger_step_mode = TRIGGER_STEP_MODE_TRANSACTIONAL
     help = {
         "name": "Force Open",
-        "format": "/open <direction|door name> [direction]",
+        "format": "/open <direction|door name> [direction] [-- <room message>]",
         "description": "Immediately force a door open, bypassing its key.",
+        "details": [
+            "A direction target can omit -- before the optional room message.",
+        ],
     }
 
 
@@ -209,10 +289,14 @@ class ForceOpenDoorHandler(_ForcedDoorHandler):
 class ForceCloseDoorHandler(_ForcedDoorHandler):
     command_type = "/close"
     text_commands = ("/close",)
+    trigger_step_mode = TRIGGER_STEP_MODE_TRANSACTIONAL
     help = {
         "name": "Force Close",
-        "format": "/close <direction|door name> [direction]",
+        "format": "/close <direction|door name> [direction] [-- <room message>]",
         "description": "Immediately close an open door without unlocking it.",
+        "details": [
+            "A direction target can omit -- before the optional room message.",
+        ],
     }
 
 
@@ -220,10 +304,14 @@ class ForceCloseDoorHandler(_ForcedDoorHandler):
 class ForceLockDoorHandler(_ForcedDoorHandler):
     command_type = "/lock"
     text_commands = ("/lock",)
+    trigger_step_mode = TRIGGER_STEP_MODE_TRANSACTIONAL
     help = {
         "name": "Force Lock",
-        "format": "/lock <direction|door name> [direction]",
+        "format": "/lock <direction|door name> [direction] [-- <room message>]",
         "description": "Immediately force a door closed and locked.",
+        "details": [
+            "A direction target can omit -- before the optional room message.",
+        ],
     }
 
 

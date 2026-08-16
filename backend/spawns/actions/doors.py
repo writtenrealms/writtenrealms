@@ -96,7 +96,18 @@ def validate_runtime_door_context(
         )
 
 
-def resolve_door_target(room: Room, selector) -> DoorTarget:
+def _room_door_faces(room: Room) -> list[Door]:
+    return list(
+        Door.objects.filter(from_room=room)
+        .select_related("doorway", "doorway__key", "from_room", "to_room")
+        .order_by("direction", "id")
+    )
+
+
+def _resolve_door_target_from_faces(
+    faces: list[Door],
+    selector,
+) -> DoorTarget:
     normalized = _normalize_target(selector)
     if not normalized:
         raise ActionError(
@@ -104,11 +115,6 @@ def resolve_door_target(room: Room, selector) -> DoorTarget:
             code="door_target_required",
         )
 
-    faces = list(
-        Door.objects.filter(from_room=room)
-        .select_related("doorway", "doorway__key", "from_room", "to_room")
-        .order_by("direction", "id")
-    )
     if not faces:
         raise ActionError("There is no door here.", code="door_not_found")
 
@@ -157,6 +163,35 @@ def resolve_door_target(room: Room, selector) -> DoorTarget:
             },
         )
     return DoorTarget(face=matches[0], doorway=matches[0].doorway)
+
+
+def resolve_door_target(room: Room, selector) -> DoorTarget:
+    return _resolve_door_target_from_faces(
+        _room_door_faces(room),
+        selector,
+    )
+
+
+def _resolve_forced_door_target_and_message(
+    room: Room,
+    selector,
+    *,
+    room_message: str | None,
+    implicit_direction_message: bool,
+) -> tuple[DoorTarget, str | None]:
+    faces = _room_door_faces(room)
+    normalized_message = str(room_message or "").strip() or None
+    try:
+        target = _resolve_door_target_from_faces(faces, selector)
+    except ActionError as err:
+        if not implicit_direction_message or err.code != "door_not_found":
+            raise
+        tokens = list(selector) if isinstance(selector, (list, tuple)) else []
+        if len(tokens) < 2:
+            raise
+        target = _resolve_door_target_from_faces(faces, tokens[0])
+        normalized_message = " ".join(str(token) for token in tokens[1:]).strip()
+    return target, normalized_message or None
 
 
 def lock_runtime_door_state(
@@ -338,6 +373,7 @@ def _transition_events(
     changed: bool,
     consumed_key: dict | None = None,
     targeted_face_name: str | None = None,
+    room_message: str | None = None,
 ) -> list[GameEvent]:
     data = _transition_data(
         doorway=doorway,
@@ -416,7 +452,7 @@ def _transition_events(
                 type="door.state_changed",
                 recipients=recipients,
                 data=data,
-                text=_state_text(face_name, state),
+                text=room_message or _state_text(face_name, state),
             )
         )
     return events
@@ -992,13 +1028,20 @@ def execute_forced_door_command(
     room: Room | None,
     command: str,
     selector,
+    room_message: str | None = None,
+    implicit_direction_message: bool = False,
 ) -> ActionResult:
     if command not in {"/open", "/close", "/lock", "/unlock"}:
         raise ActionError("Unknown door command.", code="invalid_door_command")
     validate_runtime_door_context(runtime_world=runtime_world, room=room)
 
     with transaction.atomic():
-        target = resolve_door_target(room, selector)
+        target, room_message = _resolve_forced_door_target_and_message(
+            room,
+            selector,
+            room_message=room_message,
+            implicit_direction_message=implicit_direction_message,
+        )
         state = lock_runtime_door_state(
             runtime_world=runtime_world,
             doorway=target.doorway,
@@ -1039,6 +1082,7 @@ def execute_forced_door_command(
                 revision=state.revision,
                 changed=changed,
                 targeted_face_name=target.face.name,
+                room_message=room_message,
             )
         )
 

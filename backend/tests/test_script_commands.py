@@ -165,6 +165,22 @@ class TestScriptCommandRunner(WorldTestCase):
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, destination.id)
 
+    def test_transactional_door_command_rejects_a_player_subject(self):
+        with self.assertRaises(ScriptCommandError) as raised:
+            with transaction.atomic():
+                ScriptCommandRunner().execute(
+                    issuer=self.room,
+                    subject=self.player,
+                    command="/lock east The gate seals behind you.",
+                    render_actor=self.player,
+                    runtime_world=self.spawn_world,
+                )
+
+        self.assertEqual(
+            raised.exception.code,
+            "unsupported_command_subject",
+        )
+
     def test_transactional_transfer_rejects_noncanonical_room_aliases(self):
         destination = self.room.create_at("east")
         selectors = (

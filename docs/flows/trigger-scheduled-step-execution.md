@@ -82,7 +82,7 @@ The continuation executes at most that one step in a new transaction, then
 queues the next already-due cursor only after commit. The expected cursor makes
 duplicate or stale deliveries no-ops, and `select_for_update(skip_locked=True)`
 keeps competing workers from executing the same step. A sequence is capped at
-32 steps, so this one-at-a-time chain is bounded. The beat scan remains the
+50 steps, so this one-at-a-time chain is bounded. The beat scan remains the
 durable recovery path if an immediate continuation is lost or skipped during
 contention.
 

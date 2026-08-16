@@ -440,9 +440,9 @@ Examples:
 Formats:
 
 ```text
-/open <direction|door name>
-/close <direction|door name>
-/lock <direction|door name>
+/open <direction|door name> [direction] [-- <room message>]
+/close <direction|door name> [direction] [-- <room message>]
+/lock <direction|door name> [direction] [-- <room message>]
 /unlock <direction|door name>
 ```
 
@@ -459,6 +459,25 @@ builder and automation counterparts of the ordinary player commands:
 Targets can be a direction or a case-insensitive door name. When a name is
 ambiguous, include its direction, such as `/open iron gate north`. A missing or
 ambiguous target is rejected rather than selecting a door implicitly.
+
+`/open`, `/close`, and `/lock` accept an optional custom notification for
+occupants on both sides of the doorway. With a direction target, the message
+can follow the direction directly:
+
+```text
+/lock south The bronze doors close behind you. Nobody touches them.
+```
+
+Use `--` to separate the message from a multi-word door name or a name plus
+direction:
+
+```text
+/open iron gate north -- The iron gates grind open.
+```
+
+The custom text replaces the normal `The <door> opens/closes...` notification;
+it does not add a second echo. It is published only when the door actually
+changes state, so an idempotent no-op remains silent to room occupants.
 
 Direct use requires a builder player with access to the current world. Trusted
 mob and room scripts can also use these commands, but player-backed scripts
@@ -481,6 +500,17 @@ The room/mob forms are available only inside trusted Trigger scripts, where
 ```yaml
 script: /cmd room -- /close north
 script: /cmd gatekeeper -- /lock east
+```
+
+The three commands are also audited transactional Trigger-step commands for
+`trigger_room` and selected-mob subjects. For example:
+
+```yaml
+- actions:
+  - type: command
+    subject: trigger_room
+    command: /lock south The bronze doors close behind you. Nobody touches them.
+  after_seconds: 1
 ```
 
 Slash door commands are immediate: they bypass keys and the player's
