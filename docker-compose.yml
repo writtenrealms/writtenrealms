@@ -1,5 +1,12 @@
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   backend:
+    logging: *default-logging
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -36,6 +43,7 @@ services:
       redis-celery:
         condition: service_started
   celery-worker:
+    logging: *default-logging
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -70,6 +78,7 @@ services:
       redis-celery:
         condition: service_started
   celery-beat:
+    logging: *default-logging
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -104,6 +113,7 @@ services:
       redis-celery:
         condition: service_started
   fastapi:
+    logging: *default-logging
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -119,6 +129,7 @@ services:
       - redis
       - rabbitmq
   frontend:
+    logging: *default-logging
     image: node:20-alpine
     working_dir: /app
     volumes:
@@ -130,6 +141,7 @@ services:
     depends_on:
       - backend
   db:
+    logging: *default-logging
     image: postgres:15-alpine
     volumes:
       - ./data/db:/var/lib/postgresql/data
@@ -147,14 +159,17 @@ services:
       retries: 12
       start_period: 5s
   redis:
+    logging: *default-logging
     image: redis:7-alpine
     ports:
       - "6379:6379"
   redis-celery:
+    logging: *default-logging
     image: redis:7-alpine
     ports:
       - "6380:6379"
   rabbitmq:
+    logging: *default-logging
     image: rabbitmq:3.13-alpine
     ports:
       - "5672:5672"
