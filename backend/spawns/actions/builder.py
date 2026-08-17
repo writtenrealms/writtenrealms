@@ -58,6 +58,9 @@ from spawns.events import (
     PLAYER_ROOM_ENTER_EVENT_TYPE,
     TRANSFER_LOCATION_SEQUENCE_KEY,
     TRANSFER_RUNTIME_WORLD_KEY,
+    durable_follow_directional_move_event,
+    follow_directional_move_event,
+    persist_follow_dependent_game_events,
     player_room_enter_event,
 )
 from spawns.handlers.base import ChoiceResolutionError, resolve_unambiguous_choice
@@ -3450,6 +3453,7 @@ class TransferAction:
         room_selector: str,
         runtime_world: World | None = None,
         trigger_step: bool = False,
+        connection_id: str | None = None,
     ) -> ActionResult:
         issuer_room = _actor_room(actor)
         if issuer_room is None:
@@ -3475,6 +3479,7 @@ class TransferAction:
             runtime_world=resolved_runtime_world,
             selector=room_selector,
         )
+        transfer_direction = _normalize_jump_direction(room_selector)
         target_ref = self._resolve_target_ref(
             actor=actor,
             issuer_room=issuer_room,
@@ -3485,6 +3490,7 @@ class TransferAction:
         pvp_finished_encounter_ids: list[int] = []
         pvp_cleanup_events: list[GameEvent] = []
         door_cancellation_events: list[GameEvent] = []
+        follow_movement_event: GameEvent | None = None
         if target_ref.target_type == "player":
             target_room_id = (
                 Player.objects.filter(
@@ -3573,6 +3579,11 @@ class TransferAction:
                             int(target.location_sequence or 0) + 1
                         )
                         target_update_fields.append("location_sequence")
+                    elif transfer_direction:
+                        target.follow_move_sequence = (
+                            int(target.follow_move_sequence or 0) + 1
+                        )
+                        target_update_fields.append("follow_move_sequence")
                     target.save(update_fields=target_update_fields)
                     if isinstance(target, Player):
                         target.viewed_rooms.add(destination.id)
@@ -3656,6 +3667,107 @@ class TransferAction:
                     ).model_dump()
                     target_name = updated_target.name or "target"
                     target_state_events = []
+                    if moved and transfer_direction:
+                        follow_movement_event = (
+                            durable_follow_directional_move_event(
+                                follow_directional_move_event(
+                                    actor=updated_target,
+                                    origin_room_id=origin_room_id,
+                                    destination_room_id=destination.id,
+                                    direction=transfer_direction,
+                                    source="transfer",
+                                )
+                            )
+                        )
+
+                movement_data = {
+                    "actor": transferred_payload,
+                    "origin_room": origin_payload,
+                    "destination_room": destination_payload,
+                    TRANSFER_RUNTIME_WORLD_KEY: resolved_runtime_world.id,
+                }
+                if isinstance(updated_target, Player):
+                    movement_data[TRANSFER_LOCATION_SEQUENCE_KEY] = int(
+                        updated_target.location_sequence or 0
+                    )
+                    movement_data[PLAYER_ROOM_ENTER_EMITTED_KEY] = True
+                events: list[GameEvent] = [
+                    *door_cancellation_events,
+                    GameEvent(
+                        type="cmd./transfer.success",
+                        recipients=[actor.key],
+                        data={
+                            "transferred": transferred_payload,
+                            "transferred_type": target_ref.target_type,
+                            "target": destination_payload,
+                            "target_type": "room",
+                            "origin_room": origin_payload,
+                            "destination_room": destination_payload,
+                            "moved": moved,
+                            "finished_encounter_ids": finished_encounter_ids,
+                        },
+                        text=(
+                            f"You transfer {target_name} to "
+                            f"{destination.name}."
+                        ),
+                    )
+                ]
+                if moved and is_visible:
+                    events.append(
+                        GameEvent(
+                            type="notification./transfer.exit",
+                            recipients=[
+                                f"player.{player_id}"
+                                for player_id in origin_recipient_ids
+                            ],
+                            data=movement_data,
+                            text=f"{target_name} disappears.",
+                        )
+                    )
+                events.extend(target_state_events)
+                events.extend(combat_effect_events)
+                events.extend(ability_prepare_events)
+                if moved:
+                    events.append(
+                        GameEvent(
+                            type="notification./transfer.enter",
+                            recipients=[
+                                f"player.{player_id}"
+                                for player_id in destination_recipient_ids
+                            ],
+                            data=movement_data,
+                            text=(
+                                f"{target_name} appears."
+                                if is_visible
+                                else None
+                            ),
+                        )
+                    )
+                    if isinstance(updated_target, Player):
+                        events.append(
+                            player_room_enter_event(
+                                player=updated_target,
+                                origin_room_id=origin_room_id,
+                                destination_room_id=destination.id,
+                                source="transfer",
+                            )
+                        )
+                    elif transfer_direction:
+                        events.append(follow_movement_event)
+
+                result = ActionResult(
+                    events=persist_follow_dependent_game_events(
+                        events,
+                        actor_key=actor.key,
+                        connection_id=connection_id,
+                    ),
+                    data={
+                        "target_id": target_ref.target_id,
+                        "target_key": updated_target.key,
+                        "target_type": target_ref.target_type,
+                        "moved": moved,
+                    },
+                )
         except OperationalError as exc:
             cause = getattr(exc, "__cause__", None)
             sqlstate = getattr(cause, "sqlstate", None) or getattr(
@@ -3669,82 +3781,7 @@ class TransferAction:
                     code="target_busy",
                 ) from exc
             raise
-
-        movement_data = {
-            "actor": transferred_payload,
-            "origin_room": origin_payload,
-            "destination_room": destination_payload,
-            TRANSFER_RUNTIME_WORLD_KEY: resolved_runtime_world.id,
-        }
-        if isinstance(updated_target, Player):
-            movement_data[TRANSFER_LOCATION_SEQUENCE_KEY] = int(
-                updated_target.location_sequence or 0
-            )
-            movement_data[PLAYER_ROOM_ENTER_EMITTED_KEY] = True
-        events: list[GameEvent] = [
-            *door_cancellation_events,
-            GameEvent(
-                type="cmd./transfer.success",
-                recipients=[actor.key],
-                data={
-                    "transferred": transferred_payload,
-                    "transferred_type": target_ref.target_type,
-                    "target": destination_payload,
-                    "target_type": "room",
-                    "origin_room": origin_payload,
-                    "destination_room": destination_payload,
-                    "moved": moved,
-                    "finished_encounter_ids": finished_encounter_ids,
-                },
-                text=f"You transfer {target_name} to {destination.name}.",
-            )
-        ]
-        if moved and is_visible:
-            events.append(
-                GameEvent(
-                    type="notification./transfer.exit",
-                    recipients=[
-                        f"player.{player_id}"
-                        for player_id in origin_recipient_ids
-                    ],
-                    data=movement_data,
-                    text=f"{target_name} disappears.",
-                )
-            )
-        events.extend(target_state_events)
-        events.extend(combat_effect_events)
-        events.extend(ability_prepare_events)
-        if moved:
-            events.append(
-                GameEvent(
-                    type="notification./transfer.enter",
-                    recipients=[
-                        f"player.{player_id}"
-                        for player_id in destination_recipient_ids
-                    ],
-                    data=movement_data,
-                    text=f"{target_name} appears." if is_visible else None,
-                )
-            )
-            if isinstance(updated_target, Player):
-                events.append(
-                    player_room_enter_event(
-                        player=updated_target,
-                        origin_room_id=origin_room_id,
-                        destination_room_id=destination.id,
-                        source="transfer",
-                    )
-                )
-
-        return ActionResult(
-            events=events,
-            data={
-                "target_id": target_ref.target_id,
-                "target_key": updated_target.key,
-                "target_type": target_ref.target_type,
-                "moved": moved,
-            },
-        )
+        return result
 
 
 class EditRoomAction:

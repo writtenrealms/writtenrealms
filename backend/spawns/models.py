@@ -148,6 +148,7 @@ class Player(CharMixin, AdventBaseModel):
     wallet_revision = models.BigIntegerField(default=0)
     death_sequence = models.BigIntegerField(default=0)
     location_sequence = models.BigIntegerField(default=0)
+    follow_move_sequence = models.BigIntegerField(default=0)
 
     # Moderation flags
     nochat = models.BooleanField(default=False)
@@ -304,6 +305,11 @@ class Player(CharMixin, AdventBaseModel):
                 reset_origin_world_id = self.world_id
             if reset_origin_room_id is None:
                 reset_origin_room_id = self.room_id
+            from spawns.follow_lifecycle import (
+                clear_movement_follows_for_players,
+            )
+
+            clear_movement_follows_for_players([self.id])
         leveling_config = get_world_leveling_config(self.world)
         if level is None:
             level = leveling_config.starting_level
@@ -1423,6 +1429,11 @@ class GameEventOutbox(BaseModel):
 
     event_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     batch_id = models.UUIDField(default=uuid.uuid4, db_index=True, editable=False)
+    # A private control row remains ineligible for delivery until the visible
+    # batch identified here has been published and acknowledged.  This is a
+    # UUID rather than a foreign key because batch identity is shared by many
+    # rows and the visible rows are deleted as part of dependency activation.
+    depends_on_batch_id = models.UUIDField(db_index=True, **optional)
     sequence = models.PositiveIntegerField(default=0)
     event_type = models.TextField()
     data = models.JSONField(default=dict)
@@ -1435,6 +1446,23 @@ class GameEventOutbox(BaseModel):
     claimed_until = models.DateTimeField(db_index=True, **optional)
     attempt_count = models.PositiveIntegerField(default=0)
     last_error = models.TextField(blank=True, default='')
+
+    class Meta(BaseModel.Meta):
+        indexes = [
+            models.Index(
+                fields=[
+                    'available_ts',
+                    'created_ts',
+                    'batch_id',
+                    'id',
+                ],
+                condition=models.Q(
+                    sequence=0,
+                    depends_on_batch_id__isnull=True,
+                ),
+                name='spawn_event_due_ready',
+            ),
+        ]
 
 
 class EventSubscriptionReceipt(BaseModel):
@@ -1544,6 +1572,7 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
     pending_deletion_ts = models.DateTimeField(db_index=True, **optional)
     attackable = models.BooleanField(default=True)
     target_priority = models.IntegerField(default=0)
+    follow_move_sequence = models.BigIntegerField(default=0)
 
     class Meta:
         indexes = [
@@ -1601,6 +1630,81 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
 
 models.signals.post_save.connect(Mob.post_char_save, Mob)
 models.signals.post_delete.connect(Mob.post_char_delete, Mob)
+
+
+class MovementFollow(BaseModel):
+    """One player's directional movement intent toward a player or mob."""
+
+    follower = models.OneToOneField(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='movement_follow',
+    )
+    leader_player = models.ForeignKey(
+        'spawns.Player',
+        on_delete=models.CASCADE,
+        related_name='movement_followers',
+        db_index=False,
+        **optional,
+    )
+    leader_mob = models.ForeignKey(
+        'spawns.Mob',
+        on_delete=models.CASCADE,
+        related_name='movement_followers',
+        db_index=False,
+        **optional,
+    )
+    last_processed_sequence = models.BigIntegerField(default=0)
+
+    class Meta(BaseModel.Meta):
+        indexes = [
+            models.Index(
+                fields=['leader_player', 'id'],
+                condition=models.Q(leader_player__isnull=False),
+                name='spawn_follow_player_page',
+            ),
+            models.Index(
+                fields=['leader_mob', 'id'],
+                condition=models.Q(leader_mob__isnull=False),
+                name='spawn_follow_mob_page',
+            ),
+            models.Index(
+                fields=['leader_player', 'last_processed_sequence'],
+                condition=models.Q(leader_player__isnull=False),
+                name='spawn_follow_player_seq',
+            ),
+            models.Index(
+                fields=['leader_mob', 'last_processed_sequence'],
+                condition=models.Q(leader_mob__isnull=False),
+                name='spawn_follow_mob_seq',
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        leader_player__isnull=False,
+                        leader_mob__isnull=True,
+                    )
+                    | models.Q(
+                        leader_player__isnull=True,
+                        leader_mob__isnull=False,
+                    )
+                ),
+                name='spawns_follow_exactly_one_leader',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(leader_player__isnull=True)
+                    | ~models.Q(leader_player=models.F('follower'))
+                ),
+                name='spawns_follow_no_self_player',
+            ),
+        ]
+
+    @property
+    def leader(self):
+        return self.leader_player or self.leader_mob
 
 
 class MerchantRuntime(AdventBaseModel):

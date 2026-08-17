@@ -69,7 +69,10 @@ from spawns.ability_intents import (
 )
 from spawns.events import (
     GameEvent,
+    durable_follow_directional_move_event,
     enqueue_game_events,
+    follow_directional_move_event,
+    persist_follow_dependent_game_events,
     player_room_enter_event,
 )
 from spawns.models import (
@@ -1570,6 +1573,12 @@ def apply_player_death(
         for encounter in active_encounters:
             _finish_encounter(encounter)
 
+        from spawns.follow_lifecycle import (
+            clear_movement_follows_for_players,
+        )
+
+        clear_movement_follows_for_players([updated_player.id])
+
         if (
             routing_source == DEATH_ROUTING_SOURCE_BASE_WORLD
             and not used_transport_fallback
@@ -2305,6 +2314,17 @@ def _flee_success_events(
     ]
 
     if player.is_invisible:
+        events.append(
+            durable_follow_directional_move_event(
+                follow_directional_move_event(
+                    actor=player,
+                    origin_room_id=origin_room_id,
+                    destination_room_id=destination_room_id,
+                    direction=direction,
+                    source="flee",
+                )
+            )
+        )
         return events
 
     actor_char = serialize_char_from_player(player).model_dump()
@@ -2350,6 +2370,17 @@ def _flee_success_events(
             )
         )
 
+    events.append(
+        durable_follow_directional_move_event(
+            follow_directional_move_event(
+                actor=player,
+                origin_room_id=origin_room_id,
+                destination_room_id=destination_room_id,
+                direction=direction,
+                source="flee",
+            )
+        )
+    )
     return events
 
 
@@ -2589,8 +2620,14 @@ def _complete_flee(
 
     player.room_id = destination_room_id
     player.location_sequence = int(player.location_sequence or 0) + 1
+    player.follow_move_sequence = int(player.follow_move_sequence or 0) + 1
     player.last_action_ts = timezone.now()
-    player_update_fields = ["room", "location_sequence", "last_action_ts"]
+    player_update_fields = [
+        "room",
+        "location_sequence",
+        "follow_move_sequence",
+        "last_action_ts",
+    ]
     if route_changed:
         player_update_fields.append("stamina")
     player.save(update_fields=player_update_fields)
@@ -6277,6 +6314,10 @@ def resolve_combat_encounter_step(
             player=player,
             previous_slug=previous_prepared_slug,
             current_slug=_prepared_player_ability_slug(encounter),
+        )
+        result = replace(
+            result,
+            events=persist_follow_dependent_game_events(result.events),
         )
 
     if result.tracker_chase:

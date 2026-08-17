@@ -531,7 +531,30 @@ class World(AdventBaseModel):
                     force_active_duel=True,
                 )
 
-        self.players.update(in_game=False)
+        # Every successful world-stop path converges here. Clear both outgoing
+        # and incoming player follow edges in one database operation before
+        # the remaining runtime players are marked offline.
+        from spawns.follow_lifecycle import (
+            clear_movement_follows_for_world,
+            lock_movement_follow_graph,
+        )
+
+        # Follow registration locks the graph before either participant.
+        # Use the same order here, then keep relationship cleanup and the
+        # offline transition atomic so no follow edge can be recreated in
+        # between those operations.
+        with transaction.atomic():
+            lock_movement_follow_graph(self.id)
+            locked_player_ids = list(
+                self.players.select_for_update(of=('self',))
+                .order_by('id')
+                .values_list('id', flat=True)
+            )
+            clear_movement_follows_for_world(self.id)
+            if locked_player_ids:
+                self.players.filter(id__in=locked_player_ids).update(
+                    in_game=False,
+                )
 
         # Delete all pending deletion players
         self.players.filter(pending_deletion_ts__isnull=False).delete()

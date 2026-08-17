@@ -20,6 +20,14 @@ MAX_CARRIED_ITEM_COUNT = 1000
 MAX_CARRIED_ITEM_DEPTH = 16
 
 
+def _clear_movement_follows_for_players(player_ids):
+    # Keep this import lazy: spawns.models and worlds.models participate in
+    # Django's model bootstrap and worlds.models delegates into this module.
+    from spawns.follow_lifecycle import clear_movement_follows_for_players
+
+    return clear_movement_follows_for_players(player_ids)
+
+
 @dataclass(frozen=True)
 class InstanceResetResult:
     run_id: int
@@ -470,6 +478,7 @@ def enter_players_into_run(
                     "A player moved away before instance entry completed."
                 )
 
+        _clear_movement_follows_for_players(player_ids)
         now = timezone.now()
         for player in players:
             origin_room_id = player.room_id
@@ -810,6 +819,7 @@ def _transfer_instance_participant_locked(
     )
     origin_world_id = player.world_id
     origin_room_id = player.room_id
+    _clear_movement_follows_for_players([player.id])
     player.world = return_runtime
     player.room = destination_room
     player_update_fields = ['world', 'room']
@@ -1318,6 +1328,7 @@ def enter_instance(
             )
 
         origin_room_id = locked_player.room_id
+        _clear_movement_follows_for_players([locked_player.id])
         locked_player.world = run.spawned_world
         locked_player.room = transfer_to
         player_update_fields = ['world', 'room']
@@ -1526,6 +1537,8 @@ def reset_instance(*, player) -> InstanceResetResult:
         active_players = _active_participant_players(run)
         if all(active_player.id != player.id for active_player in active_players):
             active_players.append(player)
+        player_ids = [active_player.id for active_player in active_players]
+        _clear_movement_follows_for_players(player_ids)
         protected_item_ids = _protected_player_item_ids(active_players)
         cancellation_events = []
         for active_player in active_players:
@@ -1562,7 +1575,6 @@ def reset_instance(*, player) -> InstanceResetResult:
 
         spawn_plan_runs_reset = _reset_spawn_plan_runs(spawned_world)
 
-        player_ids = [active_player.id for active_player in active_players]
         room_enter_events = []
         if player_ids:
             player.__class__.objects.filter(

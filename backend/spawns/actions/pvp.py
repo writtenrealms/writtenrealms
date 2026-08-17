@@ -26,7 +26,7 @@ from spawns.actions.effects import (
     preventing_action_effect,
 )
 from spawns.actions.targeting import find_room_player_target
-from spawns.events import GameEvent
+from spawns.events import GameEvent, persist_follow_dependent_game_events
 from spawns.models import (
     CombatEncounter,
     CombatParticipant,
@@ -977,6 +977,7 @@ def _try_execute_room_opener_ability(
     ability,
     command: str,
     args: list[str],
+    connection_id: str | None = None,
 ) -> ActionResult:
     from spawns.actions import abilities as ability_actions
 
@@ -1008,6 +1009,7 @@ def _try_execute_room_opener_ability(
             movement = ability_actions.ResolveMoveAction().execute(
                 attacker,
                 direction,
+                source="ability",
             )
             move_context = movement.data["context"]
             for policy_event in (
@@ -1063,6 +1065,7 @@ def _try_execute_room_opener_ability(
             attacker.save(update_fields=[
                 "room",
                 "location_sequence",
+                "follow_move_sequence",
                 "stamina",
                 "state",
                 "last_action_ts",
@@ -1132,6 +1135,11 @@ def _try_execute_room_opener_ability(
                 target=opponent,
             ),
         ]
+        events = persist_follow_dependent_game_events(
+            events,
+            actor_key=attacker.key,
+            connection_id=connection_id,
+        )
 
     if interval == -1:
         step = resolve_pvp_encounter_step(
@@ -1151,6 +1159,7 @@ def try_execute_ability(
     ability,
     command: str,
     args: list[str],
+    connection_id: str | None = None,
 ) -> ActionResult | None:
     from spawns.actions import abilities as ability_actions
 
@@ -1180,6 +1189,7 @@ def try_execute_ability(
             ability=ability,
             command=command,
             args=args,
+            connection_id=connection_id,
         )
     participation = active_pvp_participation(attacker, room=attacker.room)
     target_type = str((ability.target or {}).get("type") or "hostile").lower()
@@ -1619,10 +1629,12 @@ def _complete_ready_flee(
         )
     player.room_id = destination.room_id
     player.location_sequence = int(player.location_sequence or 0) + 1
+    player.follow_move_sequence = int(player.follow_move_sequence or 0) + 1
     player.last_action_ts = timezone.now()
     update_fields = [
         "room",
         "location_sequence",
+        "follow_move_sequence",
         "last_action_ts",
         "modified_ts",
     ]
@@ -1837,7 +1849,7 @@ def resolve_pvp_encounter_step(
             if completed:
                 return combat.CombatStepResult(
                     actor_key=player.key,
-                    events=events,
+                    events=persist_follow_dependent_game_events(events),
                     encounter_active=False,
                 )
             if consumed:

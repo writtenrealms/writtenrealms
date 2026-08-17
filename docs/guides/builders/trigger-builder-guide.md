@@ -695,6 +695,11 @@ There are three subject forms:
   subject: trigger_actor
   command: /transfer self room@42
 
+# The triggering player begins following a visible local character.
+- type: command
+  subject: trigger_actor
+  command: follow hermes
+
 # Exactly one live mob of this definition in the original Trigger room acts.
 - type: command
   subject:
@@ -718,13 +723,37 @@ does not select an arbitrary bystander player by name or room position:
 
 Commands currently approved for transactional steps are room-local `say`,
 `emote`, `talk`, authored socials, room-subject, room-scoped `/echo`, the
-immediate `/open`, `/close`, and `/lock` door commands, and the audited
-transactional `/transfer` and `/exitinstance` commands. Most approved handlers
-are event-only. The door commands are transactional mutations and can use a
-`trigger_room` or selected-mob subject. A direction target can include custom
-room text directly, such as `/lock south The bronze doors close behind you.`;
-use `/lock bronze doors -- ...` for a named target. The custom text replaces
-the normal door state message and is emitted only for a real state change.
+immediate `/open`, `/close`, and `/lock` door commands, player-subject `follow`
+and `unfollow`, and the audited transactional `/transfer` and `/exitinstance`
+commands. Most approved handlers are event-only. The door commands are
+transactional mutations and can use a `trigger_room` or selected-mob subject.
+A direction target can include custom room text directly, such as
+`/lock south The bronze doors close behind you.`; use
+`/lock bronze doors -- ...` for a named target. The custom text replaces the
+normal door state message and is emitted only for a real state change.
+
+`follow <character>` and `unfollow [character]` are transactional player
+commands and therefore require `subject: trigger_actor`. Use the command
+directly; do not wrap it in `/force` or `/cmd`. A typical final step is:
+
+```yaml
+- after_seconds: 0
+  actions:
+    - type: command
+      subject: trigger_actor
+      command: follow hermes
+```
+
+Following is locomotion-only, not group or party membership, and shares no
+combat, rewards, or loot. Each follower still makes an ordinary movement
+attempt and remains subject to combat locks, stamina, movement policies, and
+door state. A chain is limited to 16 following links; a command that would
+exceed that limit fails without changing the relationship. Ordinary adjacent
+directional locomotion pulls followers. A
+direction-based `/transfer` of a mob through an adjacent exit also carries a
+direction and can pull that mob's followers. Player transfers, mob transfers
+using `here` or a room reference, instance transitions, death routing, resets,
+and other non-directional relocations do not.
 
 `/transfer` is another mutating exception: it can target only the Trigger
 actor, but any of the three supported subject forms may issue it. The canonical

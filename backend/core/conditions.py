@@ -209,7 +209,7 @@ def _serialize_target(actor):
     }
 
 
-def _build_actor_data(actor):
+def _build_actor_data(actor, *, following=False):
     health = int(getattr(actor, 'health', 0) or 0)
     health_max = int(getattr(actor, 'health_max', health) or health or 1)
     return {
@@ -221,7 +221,7 @@ def _build_actor_data(actor):
         'health': health,
         'health_max': health_max,
         'state': getattr(actor, 'state', '') or '',
-        'following': bool(getattr(actor, 'following', None)),
+        'following': bool(following),
         'factions': getattr(actor, 'factions', {}) or {},
         'marks': _serialize_marks(actor),
         'equipment': _serialize_equipment(actor),
@@ -369,13 +369,31 @@ def evaluate_conditions(
     world_data = {'facts': {}}
 
     try:
-        from spawns.models import Mob, Player
+        from spawns.models import Mob, MovementFollow, Player
     except Exception:
         Mob = None
+        MovementFollow = None
         Player = None
 
     if Player and Mob and (isinstance(actor, Player) or isinstance(actor, Mob)):
-        actor_data = _build_actor_data(actor)
+        # The legacy actor payload is built for every legacy condition. Only
+        # touch the follow table when this expression actually asks for the
+        # follow predicate, so unrelated conditions retain their query shape.
+        needs_following = bool(
+            structured_condition is None
+            and re.search(
+                r'(?<![a-z0-9_])is_following(?![a-z0-9_])',
+                str(text or ''),
+                flags=re.IGNORECASE,
+            )
+        )
+        following = bool(
+            needs_following
+            and isinstance(actor, Player)
+            and actor.pk
+            and MovementFollow.objects.filter(follower_id=actor.pk).exists()
+        )
+        actor_data = _build_actor_data(actor, following=following)
         condition_room = room if room is not None else getattr(actor, 'room', None)
         condition_world = getattr(actor, 'world', None) or world
         runtime_world = condition_world
@@ -681,7 +699,6 @@ def evaluate_condition(world_data, actor_data, room_data, text):
 
     # Is Following
     if (condition_name == 'is_following'):
-        print('in condition')
         if actor_data.get('following'):
             return return_true()
         return return_false("Not following anyone.")

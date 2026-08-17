@@ -14,6 +14,7 @@ from quests.subscriptions import dispatch_quest_subscriptions_for_event
 from spawns.actions.combat import resolve_due_character_effects
 from spawns.actions.movement import ChangeRoomAction
 from spawns.events import (
+    FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE,
     GameEvent,
     PLAYER_ROOM_ENTER_EVENT_TYPE,
     PRIVATE_CONTROL_EVENT_KEY,
@@ -29,6 +30,25 @@ from tests.utils import capture_game_messages, create_active_effect
 
 
 class TestGameEventOutbox(WorldTestCase):
+    def test_injected_publisher_cannot_delete_private_follow_control(self):
+        row = GameEventOutbox.objects.create(
+            event_type=FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE,
+            data={"movement_id": str(uuid.uuid4())},
+            recipients=[],
+        )
+        publisher = Mock()
+
+        with patch(
+            "spawns.following.enqueue_claimed_follow_movement",
+        ) as enqueue:
+            handed_off = flush_game_event_outbox(publisher=publisher)
+
+        self.assertEqual(handed_off, 1)
+        publisher.assert_not_called()
+        enqueue.assert_called_once()
+        row.refresh_from_db()
+        self.assertIsNotNone(row.claim_token)
+
     def test_private_control_event_is_not_dispatched_to_game_subscribers(self):
         event = GameEvent(
             type="cmd.trigger.accepted",

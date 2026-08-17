@@ -1930,6 +1930,7 @@ class TransferHandler(CommandHandler):
                 room_selector=room_selector,
                 runtime_world=ctx.world,
                 trigger_step=ctx.trigger_step,
+                connection_id=ctx.connection_id,
             )
         except ActionError as err:
             ctx.publish(

@@ -16,7 +16,12 @@ from spawns.ability_prepare_state import (
 )
 from spawns.actions.base import ActionResult
 from spawns.actions.doors import lock_door_state_for_movement
-from spawns.events import GameEvent
+from spawns.events import (
+    GameEvent,
+    durable_follow_directional_move_events,
+    follow_directional_move_event,
+    persist_follow_dependent_game_events,
+)
 from spawns.models import ActiveEffect, CombatEncounter, Mob, Player
 from spawns.state_payloads import (
     safe_capitalize,
@@ -516,6 +521,7 @@ class ResolveTrackerChaseAction:
         moved_mob_ids: list[int] = []
         destination_room_snapshot: dict | None = None
         movement_events: list[GameEvent] = []
+        follow_movement_events: list[GameEvent] = []
         engagement_events: list[GameEvent] = []
         mob_char_payloads: dict[int, dict] = {}
         with transaction.atomic():
@@ -678,9 +684,17 @@ class ResolveTrackerChaseAction:
                 if interval > 0:
                     for mob in eligible_mobs:
                         mob.room_id = destination_room_id
+                        mob.follow_move_sequence = (
+                            int(mob.follow_move_sequence or 0) + 1
+                        )
                     Mob.objects.bulk_update(
                         unprocessed_mobs,
-                        ["trait_instances", "room", "modified_ts"],
+                        [
+                            "trait_instances",
+                            "room",
+                            "follow_move_sequence",
+                            "modified_ts",
+                        ],
                     )
                     for mob in eligible_mobs:
                         engage_result = aggro_action._start_aggro_encounter(
@@ -710,7 +724,16 @@ class ResolveTrackerChaseAction:
                             break
                         moved_mob_id = mob.id
                         mob.room_id = destination_room_id
-                        mob.save(update_fields=["room", "modified_ts"])
+                        mob.follow_move_sequence = (
+                            int(mob.follow_move_sequence or 0) + 1
+                        )
+                        mob.save(
+                            update_fields=[
+                                "room",
+                                "follow_move_sequence",
+                                "modified_ts",
+                            ]
+                        )
                         engage_result = aggro_action._start_aggro_encounter(
                             player=player,
                             room=destination_room,
@@ -741,18 +764,34 @@ class ResolveTrackerChaseAction:
                 event_group=f"tracker:{chase_key}",
                 mob_char_payloads=mob_char_payloads,
             )
-
-        if not moved_mob_ids:
-            return ActionResult(
-                events=[*preparation_events, *movement_events],
-                data={"moved_mob_ids": []},
+            moved_mob_id_set = set(moved_mob_ids)
+            follow_movement_events.extend(
+                durable_follow_directional_move_events(
+                    follow_directional_move_event(
+                        actor=mob,
+                        origin_room_id=origin_room_id,
+                        destination_room_id=destination_room_id,
+                        direction=direction,
+                        source="tracker",
+                    )
+                    for mob in eligible_mobs
+                    if mob.id in moved_mob_id_set
+                )
             )
-        return ActionResult(
-            events=[
+            result_events = persist_follow_dependent_game_events([
                 *preparation_events,
                 *movement_events,
                 *engagement_events,
-            ],
+                *follow_movement_events,
+            ])
+
+        if not moved_mob_ids:
+            return ActionResult(
+                events=result_events,
+                data={"moved_mob_ids": []},
+            )
+        return ActionResult(
+            events=result_events,
             data={
                 "moved_mob_ids": moved_mob_ids,
                 "destination_room_snapshot": destination_room_snapshot,

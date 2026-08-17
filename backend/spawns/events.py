@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 import logging
 from typing import Callable, Iterable, Iterator, Sequence
@@ -30,6 +30,9 @@ TRANSFER_ENTER_EVENT_TYPE = "notification./transfer.enter"
 PLAYER_ROOM_ENTER_EVENT_TYPE = "lifecycle.player.room.enter"
 PLAYER_ROOM_ENTER_EMITTED_KEY = "_player_room_enter_emitted"
 PRIVATE_CONTROL_EVENT_KEY = "_private_control_event"
+FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE = "private.follow.directional_move"
+FOLLOW_OUTBOX_EVENT_ID_KEY = "_follow_outbox_event_id"
+FOLLOW_HAS_FOLLOWERS_KEY = "_follow_has_followers"
 COMMAND_REQUEST_COMPLETED_EVENT_TYPE = "cmd.request.completed"
 COMMAND_RECEIPT_STATUS_COMPLETED = "completed"
 COMMAND_RECEIPT_STATUS_FAILED = "failed"
@@ -365,6 +368,156 @@ def player_room_enter_event(
     )
 
 
+def follow_directional_move_event(
+    *,
+    actor,
+    origin_room_id: int,
+    destination_room_id: int,
+    direction: str,
+    source: str,
+    root_id: str | None = None,
+    depth: int = 0,
+) -> GameEvent:
+    """Build one private, sequenced edge for movement-follow propagation."""
+    actor_key = str(actor.key)
+    actor_type, separator, raw_actor_id = actor_key.partition(".")
+    if separator != "." or actor_type not in {"player", "mob"}:
+        raise ValueError("Follow movement actors must be players or mobs.")
+    return GameEvent(
+        type=FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE,
+        recipients=[],
+        data={
+            PRIVATE_CONTROL_EVENT_KEY: True,
+            "movement_id": str(uuid.uuid4()),
+            "root_id": str(root_id or uuid.uuid4()),
+            "depth": max(0, int(depth or 0)),
+            "actor": {
+                "key": actor_key,
+                "type": actor_type,
+                "id": int(raw_actor_id),
+                "name": str(getattr(actor, "name", "") or ""),
+                # This is the visibility snapshot at the committed movement
+                # edge. A later toggle must not reveal or conceal a route
+                # retroactively while the durable task is waiting.
+                "is_invisible": bool(
+                    getattr(actor, "is_invisible", False)
+                ),
+            },
+            "runtime_world_id": int(actor.world_id),
+            "origin_room_id": int(origin_room_id),
+            "destination_room_id": int(destination_room_id),
+            "direction": str(direction or "").strip().lower(),
+            "source": str(source or "").strip().lower(),
+            "sequence": int(actor.follow_move_sequence or 0),
+        },
+    )
+
+
+def durable_follow_directional_move_events(
+    events: Iterable[GameEvent],
+) -> list[GameEvent]:
+    """Persist followed movement edges in the caller's transaction.
+
+    Follower presence is resolved in at most one indexed query per leader
+    type for the whole input batch.  Each durable edge gets its own outbox
+    batch so acknowledging one leader can never strand a later sequence row.
+    Events already prepared by this function are returned unchanged.
+    """
+    event_list = list(events)
+    pending = [
+        event
+        for event in event_list
+        if event.type == FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE
+        and FOLLOW_HAS_FOLLOWERS_KEY not in event.data
+    ]
+    if not pending:
+        return event_list
+
+    from spawns.models import GameEventOutbox, MovementFollow
+    from spawns.following import MAX_FOLLOW_PROPAGATION_DEPTH
+
+    player_ids: set[int] = set()
+    mob_ids: set[int] = set()
+    for event in pending:
+        actor = event.data.get("actor") or {}
+        try:
+            actor_id = int(actor.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if actor.get("type") == "player":
+            player_ids.add(actor_id)
+        elif actor.get("type") == "mob":
+            mob_ids.add(actor_id)
+
+    followed_players = set()
+    followed_mobs = set()
+    if player_ids:
+        followed_players = set(
+            MovementFollow.objects.filter(
+                leader_player_id__in=player_ids,
+            ).values_list("leader_player_id", flat=True).distinct()
+        )
+    if mob_ids:
+        followed_mobs = set(
+            MovementFollow.objects.filter(
+                leader_mob_id__in=mob_ids,
+            ).values_list("leader_mob_id", flat=True).distinct()
+        )
+
+    prepared_by_identity: dict[int, GameEvent] = {}
+    outbox_rows = []
+    for event in pending:
+        actor = event.data.get("actor") or {}
+        actor_type = str(actor.get("type") or "").strip().lower()
+        try:
+            actor_id = int(actor.get("id"))
+        except (TypeError, ValueError):
+            actor_id = 0
+        try:
+            depth = max(0, int(event.data.get("depth") or 0))
+        except (TypeError, ValueError):
+            depth = MAX_FOLLOW_PROPAGATION_DEPTH
+        has_followers = depth < MAX_FOLLOW_PROPAGATION_DEPTH and (
+            actor_id in followed_players
+            if actor_type == "player"
+            else actor_id in followed_mobs
+            if actor_type == "mob"
+            else False
+        )
+        data = {
+            **event.data,
+            FOLLOW_HAS_FOLLOWERS_KEY: has_followers,
+        }
+        if has_followers:
+            event_id = uuid.uuid4()
+            data[FOLLOW_OUTBOX_EVENT_ID_KEY] = str(event_id)
+            # GameEventOutbox batches are discovered by sequence=0.  A unique
+            # batch per follow edge makes completion acknowledgement local.
+            outbox_rows.append(
+                GameEventOutbox(
+                    event_id=event_id,
+                    batch_id=uuid.uuid4(),
+                    sequence=0,
+                    event_type=event.type,
+                    data=deepcopy(data),
+                    recipients=[],
+                    text=None,
+                    group=None,
+                    connection_id=None,
+                )
+            )
+        prepared_by_identity[id(event)] = replace(event, data=data)
+
+    if outbox_rows:
+        GameEventOutbox.objects.bulk_create(outbox_rows)
+    return [prepared_by_identity.get(id(event), event) for event in event_list]
+
+
+def durable_follow_directional_move_event(event: GameEvent) -> GameEvent:
+    """Single-edge convenience wrapper around the batched durable recorder."""
+    return durable_follow_directional_move_events([event])[0]
+
+
 def _with_inherited_script_command_depth(
     event: GameEvent,
     depth: int,
@@ -485,7 +638,9 @@ def publish_events(
         capture_sink.extend(event_list)
         return
 
+    follow_movement_data: list[dict] = []
     for event in event_list:
+        event_type = str(event.type or "").strip().lower()
         message = event.to_message()
         if (
             SCRIPT_COMMAND_DEPTH_KEY in event.data
@@ -509,6 +664,8 @@ def publish_events(
             public_data.pop(TRANSFER_RUNTIME_WORLD_KEY, None)
             public_data.pop(PLAYER_ROOM_ENTER_EMITTED_KEY, None)
             public_data.pop(PRIVATE_CONTROL_EVENT_KEY, None)
+            public_data.pop(FOLLOW_HAS_FOLLOWERS_KEY, None)
+            public_data.pop(FOLLOW_OUTBOX_EVENT_ID_KEY, None)
             message["data"] = public_data
         for recipient in event.recipients:
             recipient_connection_id = event.connection_id
@@ -539,7 +696,8 @@ def publish_events(
         is_private_control_event = bool(
             event.data.get(PRIVATE_CONTROL_EVENT_KEY)
         )
-        event_type = str(event.type or "").strip().lower()
+        if event_type == FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE:
+            follow_movement_data.append(deepcopy(event.data))
         uses_canonical_player_entry = bool(
             event_type == TRANSFER_ENTER_EVENT_TYPE
             and event.data.get(PLAYER_ROOM_ENTER_EMITTED_KEY)
@@ -575,7 +733,7 @@ def publish_events(
                 event_type=event.type,
                 event_data=event.data,
                 actor_key=actor_key,
-                connection_id=connection_id,
+                connection_id=event.connection_id or connection_id,
             )
 
         if dispatch_quest_event:
@@ -587,36 +745,249 @@ def publish_events(
                 event_type=event.type,
                 event_data=event.data,
                 actor_key=actor_key,
-                connection_id=connection_id,
+                connection_id=event.connection_id or connection_id,
             )
+
+    # A follow edge is deliberately scheduled only after every visible event
+    # in this publish batch has been delivered. This preserves leader-before-
+    # follower room text and, through on_commit, keeps follower row locks out
+    # of the leader's movement transaction.
+    if follow_movement_data:
+        from spawns.following import schedule_follow_movement
+
+        for movement_data in follow_movement_data:
+            schedule_follow_movement(movement_data)
+
+
+def _prepare_follow_events(event_list: list[GameEvent]) -> list[GameEvent]:
+    """Replace structural follow edges with their durable metadata copies."""
+    follow_events = [
+        event
+        for event in event_list
+        if event.type == FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE
+    ]
+    if not follow_events:
+        return event_list
+    prepared = iter(durable_follow_directional_move_events(follow_events))
+    return [
+        next(prepared)
+        if event.type == FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE
+        else event
+        for event in event_list
+    ]
+
+
+def _schedule_follow_event_data(event_data: Sequence[dict]) -> None:
+    """Schedule control rows only after their dependencies are activated."""
+    from spawns.following import schedule_follow_movement
+
+    for data in event_data:
+        schedule_follow_movement(deepcopy(data))
+
+
+def _enqueue_game_event_batch(
+    events: Iterable[GameEvent],
+) -> tuple[int, uuid.UUID | None]:
+    """Persist one event batch and its follow-publication dependencies.
+
+    Follow controls remain independent durable batches because their Celery
+    task owns their acknowledgement. When visible events accompany them, the
+    control row depends on that batch. The dependency is removed only by the
+    visible batch's fenced acknowledgement, so neither the heartbeat nor a
+    concurrent flusher can make follower movement overtake room output and
+    room-entry subscribers.
+    """
+    from spawns.models import GameEventOutbox
+
+    with transaction.atomic():
+        event_list = _prepare_follow_events(list(events))
+        followed_controls = [
+            event
+            for event in event_list
+            if event.type == FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE
+            and bool(event.data.get(FOLLOW_HAS_FOLLOWERS_KEY))
+        ]
+        control_event_ids = {
+            uuid.UUID(str(event.data[FOLLOW_OUTBOX_EVENT_ID_KEY]))
+            for event in followed_controls
+        }
+
+        rows = []
+        batch_id = uuid.uuid4()
+        sequence = 0
+        for event in event_list:
+            # Follow controls are persisted as independent batches by the
+            # durable recorder. Mixing them with player-facing rows would make
+            # their delayed task acknowledgement replay visible messages.
+            if event.type == FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE:
+                continue
+            event_id = uuid.uuid4()
+            data = deepcopy(event.data)
+            data["_event_id"] = str(event_id)
+            rows.append(
+                GameEventOutbox(
+                    event_id=event_id,
+                    batch_id=batch_id,
+                    sequence=sequence,
+                    event_type=event.type,
+                    data=data,
+                    recipients=list(event.recipients),
+                    text=event.text,
+                    group=event.group,
+                    connection_id=event.connection_id,
+                )
+            )
+            sequence += 1
+
+        if rows:
+            GameEventOutbox.objects.bulk_create(rows)
+
+        if rows and control_event_ids:
+            attached = GameEventOutbox.objects.filter(
+                event_id__in=control_event_ids,
+                event_type=FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE,
+                depends_on_batch_id__isnull=True,
+            ).update(depends_on_batch_id=batch_id)
+            if attached != len(control_event_ids):
+                raise RuntimeError(
+                    "Could not attach every follow edge to its visible batch."
+                )
+        elif followed_controls:
+            # A standalone private edge has no visible work to gate it. Hand it
+            # off immediately after commit instead of waiting for the heartbeat.
+            standalone_data = [
+                deepcopy(event.data) for event in followed_controls
+            ]
+            transaction.on_commit(
+                lambda: _schedule_follow_event_data(standalone_data),
+                robust=True,
+            )
+
+    return (
+        len(rows) + len(control_event_ids),
+        batch_id if rows else None,
+    )
 
 
 def enqueue_game_events(events: Iterable[GameEvent]) -> int:
     """Persist events in the caller's transaction for later delivery."""
+    count, _batch_id = _enqueue_game_event_batch(events)
+    return count
+
+
+def persist_follow_dependent_game_events(
+    events: Iterable[GameEvent],
+    *,
+    force: bool = False,
+    actor_key: str | None = None,
+    connection_id: str | None = None,
+) -> list[GameEvent]:
+    """Durably consume an event list when follower ordering requires it.
+
+    The caller must still be inside the transaction that changed room state.
+    Returning an empty list tells an ordinary handler/task that publication is
+    now owned by the outbox. ``force`` is used for a move *caused* by a follow
+    edge: even a leaf follower needs durable visible/room-entry output before
+    its parent task can acknowledge that edge.
+    """
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError(
+            "Follow-dependent events must be persisted with their room state."
+        )
+    event_list = list(events)
+    if actor_key and connection_id:
+        event_list = [
+            replace(event, connection_id=connection_id)
+            if (
+                event.connection_id is None
+                and (
+                    (
+                        bool(event.recipients)
+                        and all(
+                            recipient == actor_key
+                            for recipient in event.recipients
+                        )
+                    )
+                    or (
+                        not event.recipients
+                        and isinstance(event.data.get("actor"), dict)
+                        and event.data["actor"].get("key") == actor_key
+                    )
+                )
+            )
+            else event
+            for event in event_list
+        ]
+    event_list = _prepare_follow_events(event_list)
+    has_followers = any(
+        event.type == FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE
+        and bool(event.data.get(FOLLOW_HAS_FOLLOWERS_KEY))
+        for event in event_list
+    )
+    if not force and not has_followers:
+        return event_list
+    _count, batch_id = _enqueue_game_event_batch(event_list)
+    if batch_id is not None:
+        transaction.on_commit(
+            lambda: flush_game_event_outbox_batch(batch_id),
+            robust=True,
+        )
+    return []
+
+
+def _acknowledge_visible_batch_and_activate_follow_edges(
+    *,
+    batch_id,
+    claim_token,
+    expected_event_ids: set[uuid.UUID],
+) -> int:
+    """Atomically fence-ack visible rows and release their control edges."""
     from spawns.models import GameEventOutbox
 
-    rows = []
-    batch_id = uuid.uuid4()
-    for sequence, event in enumerate(events):
-        event_id = uuid.uuid4()
-        data = deepcopy(event.data)
-        data["_event_id"] = str(event_id)
-        rows.append(
-            GameEventOutbox(
-                event_id=event_id,
-                batch_id=batch_id,
-                sequence=sequence,
-                event_type=event.type,
-                data=data,
-                recipients=list(event.recipients),
-                text=event.text,
-                group=event.group,
-                connection_id=event.connection_id,
-            )
+    activated_data: list[dict] = []
+    with transaction.atomic():
+        fenced_rows = list(
+            GameEventOutbox.objects.select_for_update(of=("self",))
+            .filter(batch_id=batch_id, claim_token=claim_token)
+            .order_by("sequence", "id")
         )
-    if rows:
-        GameEventOutbox.objects.bulk_create(rows)
-    return len(rows)
+        if {row.event_id for row in fenced_rows} != expected_event_ids:
+            raise RuntimeError("Game event outbox batch claim was lost.")
+
+        dependent_rows = list(
+            GameEventOutbox.objects.select_for_update(of=("self",))
+            .filter(
+                event_type=FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE,
+                depends_on_batch_id=batch_id,
+            )
+            .order_by("created_ts", "id")
+        )
+        dependent_ids = [row.id for row in dependent_rows]
+        if dependent_ids:
+            activated = GameEventOutbox.objects.filter(
+                id__in=dependent_ids,
+                depends_on_batch_id=batch_id,
+            ).update(
+                depends_on_batch_id=None,
+                available_ts=timezone.now(),
+            )
+            if activated != len(dependent_ids):
+                raise RuntimeError("Follow publication dependency fence was lost.")
+            activated_data = [deepcopy(row.data or {}) for row in dependent_rows]
+
+        deleted, _ = GameEventOutbox.objects.filter(
+            batch_id=batch_id,
+            claim_token=claim_token,
+        ).delete()
+        if deleted != len(fenced_rows):
+            raise RuntimeError("Game event outbox acknowledgement was incomplete.")
+
+        if activated_data:
+            transaction.on_commit(
+                lambda: _schedule_follow_event_data(activated_data),
+                robust=True,
+            )
+    return deleted
 
 
 def flush_game_event_outbox(
@@ -624,6 +995,7 @@ def flush_game_event_outbox(
     limit: int = 500,
     publisher: Callable[..., None] | None = None,
     now=None,
+    batch_id=None,
 ) -> int:
     """Claim due batches, publish outside locks, and acknowledge successes."""
     from spawns.models import GameEventOutbox
@@ -636,13 +1008,19 @@ def flush_game_event_outbox(
         claim_now = now or timezone.now()
         claim_token = uuid.uuid4()
         with transaction.atomic():
-            first = (
+            first_query = (
                 GameEventOutbox.objects.select_for_update(skip_locked=True)
-                .filter(sequence=0, available_ts__lte=claim_now)
+                .filter(
+                    sequence=0,
+                    available_ts__lte=claim_now,
+                    depends_on_batch_id__isnull=True,
+                )
                 .filter(Q(claimed_until__isnull=True) | Q(claimed_until__lte=claim_now))
-                .order_by("created_ts", "batch_id", "sequence", "id")
-                .first()
+                .order_by("available_ts", "created_ts", "batch_id", "id")
             )
+            if batch_id is not None:
+                first_query = first_query.filter(batch_id=batch_id)
+            first = first_query.first()
             if first is None:
                 break
             claimed_rows = list(
@@ -667,18 +1045,35 @@ def flush_game_event_outbox(
             )
 
         batches_examined += 1
-        try:
-            publisher([
-                GameEvent(
-                    type=row.event_type,
-                    recipients=list(row.recipients or []),
-                    data=deepcopy(row.data or {}),
-                    text=row.text,
-                    group=row.group,
-                    connection_id=row.connection_id,
-                )
+        follow_control_batch = bool(
+            claimed_rows
+            and all(
+                row.event_type == FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE
                 for row in claimed_rows
-            ])
+            )
+        )
+        try:
+            if follow_control_batch:
+                from spawns.following import enqueue_claimed_follow_movement
+
+                for row in claimed_rows:
+                    enqueue_claimed_follow_movement(
+                        deepcopy(row.data or {}),
+                        outbox_event_id=str(row.event_id),
+                        claim_token=str(claim_token),
+                    )
+            else:
+                publisher([
+                    GameEvent(
+                        type=row.event_type,
+                        recipients=list(row.recipients or []),
+                        data=deepcopy(row.data or {}),
+                        text=row.text,
+                        group=row.group,
+                        connection_id=row.connection_id,
+                    )
+                    for row in claimed_rows
+                ])
         except Exception as exc:
             backoff_seconds = min(300, 2 ** min(8, max(row.attempt_count for row in claimed_rows)))
             GameEventOutbox.objects.filter(
@@ -693,9 +1088,52 @@ def flush_game_event_outbox(
             logger.exception("Failed to publish game event outbox batch %s", first.batch_id)
             continue
 
-        deleted, _ = GameEventOutbox.objects.filter(
-            batch_id=first.batch_id,
-            claim_token=claim_token,
-        ).delete()
+        if follow_control_batch:
+            # Celery now owns the lease. The final bounded propagation page is
+            # the only code allowed to acknowledge/delete this durable row.
+            delivered += len(claimed_rows)
+            continue
+
+        try:
+            deleted = _acknowledge_visible_batch_and_activate_follow_edges(
+                batch_id=first.batch_id,
+                claim_token=claim_token,
+                expected_event_ids={row.event_id for row in claimed_rows},
+            )
+        except Exception as exc:
+            backoff_seconds = min(
+                300,
+                2 ** min(
+                    8,
+                    max(row.attempt_count for row in claimed_rows),
+                ),
+            )
+            GameEventOutbox.objects.filter(
+                batch_id=first.batch_id,
+                claim_token=claim_token,
+            ).update(
+                available_ts=claim_now + timedelta(seconds=backoff_seconds),
+                claim_token=None,
+                claimed_until=None,
+                last_error=str(exc)[:2000],
+            )
+            logger.exception(
+                "Failed to acknowledge game event outbox batch %s",
+                first.batch_id,
+            )
+            continue
         delivered += deleted
     return delivered
+
+
+def flush_game_event_outbox_batch(
+    batch_id,
+    *,
+    publisher: Callable[..., None] | None = None,
+) -> int:
+    """Fast-path exactly one committed batch; the heartbeat handles recovery."""
+    return flush_game_event_outbox(
+        limit=1,
+        publisher=publisher,
+        batch_id=batch_id,
+    )

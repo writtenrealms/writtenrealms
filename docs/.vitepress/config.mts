@@ -71,6 +71,7 @@ const builderSidebar: DefaultTheme.SidebarItem[] = [
 const playerSidebar: DefaultTheme.SidebarItem[] = [
   { text: "Player home", link: "/players/" },
   { text: "Map", link: "/players/map" },
+  { text: "Following", link: "/players/following" },
   { text: "Doors and keys", link: "/players/doors-and-keys" },
   { text: "Scripted interactions", link: "/players/scripted-interactions" },
   { text: "Combat", link: "/players/combat" },

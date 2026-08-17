@@ -8,7 +8,12 @@ from config import constants as adv_consts
 
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.movement_costs import movement_cost
-from spawns.events import GameEvent, player_room_enter_event
+from spawns.events import (
+    GameEvent,
+    durable_follow_directional_move_event,
+    follow_directional_move_event,
+    player_room_enter_event,
+)
 from spawns.models import Player
 from spawns.state_payloads import (
     build_map_payload,
@@ -48,10 +53,21 @@ class MoveContext:
     dest_room_id: int
     trigger_world_id: int
     movement_cost: int
+    source: str = "move"
+    follow_root_id: str | None = None
+    follow_depth: int = 0
 
 
 class ResolveMoveAction:
-    def execute(self, player: Player, direction: str) -> ActionResult:
+    def execute(
+        self,
+        player: Player,
+        direction: str,
+        *,
+        source: str = "move",
+        follow_root_id: str | None = None,
+        follow_depth: int = 0,
+    ) -> ActionResult:
         if direction not in adv_consts.DIRECTIONS:
             raise ActionError("Unknown direction.", code="invalid_direction")
 
@@ -108,6 +124,9 @@ class ResolveMoveAction:
             dest_room_id=dest_room.id,
             trigger_world_id=dest_room.world_id,
             movement_cost=movement_cost,
+            source=str(source or "move"),
+            follow_root_id=follow_root_id,
+            follow_depth=max(0, int(follow_depth or 0)),
         )
         return ActionResult(data={"context": context})
 
@@ -117,6 +136,9 @@ class ChangeRoomAction:
         if player.room_id != dest_room_id:
             player.room_id = dest_room_id
             player.location_sequence = int(player.location_sequence or 0) + 1
+            player.follow_move_sequence = (
+                int(player.follow_move_sequence or 0) + 1
+            )
         player.last_action_ts = timezone.now()
         return ActionResult(data={"dest_room_id": dest_room_id})
 
@@ -141,6 +163,7 @@ class BuildMoveEventsAction:
         context: MoveContext,
         *,
         room_payload_override: dict | None = None,
+        follow_event_override: GameEvent | None = None,
     ) -> ActionResult:
         player = get_player_with_related(context.player_id)
         dest_room = _room_with_exits(context.dest_room_id)
@@ -200,7 +223,7 @@ class BuildMoveEventsAction:
                 player=player,
                 origin_room_id=context.origin_room_id,
                 destination_room_id=context.dest_room_id,
-                source="move",
+                source=context.source,
                 direction=context.direction,
             ))
 
@@ -253,5 +276,21 @@ class BuildMoveEventsAction:
                         text=f"{safe_capitalize(player.name)} has arrived from {rev_text}.",
                     )
                 )
+
+        if context.origin_room_id != context.dest_room_id:
+            events.append(
+                follow_event_override
+                or durable_follow_directional_move_event(
+                    follow_directional_move_event(
+                        actor=player,
+                        origin_room_id=context.origin_room_id,
+                        destination_room_id=context.dest_room_id,
+                        direction=context.direction,
+                        source=context.source,
+                        root_id=context.follow_root_id,
+                        depth=context.follow_depth,
+                    )
+                )
+            )
 
         return ActionResult(events=events)

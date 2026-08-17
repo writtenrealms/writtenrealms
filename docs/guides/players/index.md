@@ -4,6 +4,7 @@ These guides cover the player-facing systems currently available in Written
 Realms Core.
 
 - [Map](map.md)
+- [Following](following.md)
 - [Doors and Keys](doors-and-keys.md)
 - [Combat](combat.md)
 - [Abilities and Training](abilities.md)

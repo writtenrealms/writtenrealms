@@ -30,8 +30,13 @@ from spawns.models import (
 from spawns.serializers import PlayerConfigSerializer
 from spawns.events import (
     COMMAND_RECEIPT_STATUS_FAILED,
+    FOLLOW_HAS_FOLLOWERS_KEY,
     GameEvent,
+    durable_follow_directional_move_event,
+    durable_follow_directional_move_events,
+    follow_directional_move_event,
     flush_game_event_outbox,
+    persist_follow_dependent_game_events,
     publish_events,
 )
 from spawns.handlers import (
@@ -56,6 +61,178 @@ GAME_HEARTBEAT_LOCK_KEY = "heartbeat_regen_lock"
 
 
 logger = logging.getLogger(__name__)
+
+
+def _follow_task_retry_count(task) -> int:
+    """Return Celery's retry count independently of edge sweep attempts."""
+    try:
+        return max(0, int(getattr(task.request, "retries", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _defer_failed_follow_task(
+    *,
+    outbox_event_id: str | None,
+    claim_token: str | None,
+    last_error: str,
+) -> bool:
+    """End a bounded broker retry chain at the durable fenced boundary."""
+    from spawns.following import defer_follow_outbox_retry
+
+    try:
+        return defer_follow_outbox_retry(
+            outbox_event_id,
+            claim_token,
+            last_error=last_error,
+        )
+    except Exception:
+        # Do not replace one bounded failure loop with an unbounded release
+        # loop. A durable row still has its lease and the heartbeat can safely
+        # reclaim it after expiry; a legacy non-durable edge simply ends.
+        logger.exception(
+            "Failed to defer follow movement after its task retry cap."
+        )
+        return False
+
+
+@shared_task(
+    bind=True,
+    name="spawns.tasks.propagate_follow_movement",
+    ignore_result=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=None,
+)
+def propagate_follow_movement(
+    self,
+    event_data: dict,
+    outbox_event_id: str | None = None,
+    claim_token: str | None = None,
+    after_id: int = 0,
+    sweep_needs_retry: bool = False,
+    attempt: int = 0,
+) -> int:
+    """Drain one durable edge through a single bounded page/retry chain."""
+    from spawns.following import (
+        MAX_FOLLOW_TASK_RETRIES,
+        MAX_FOLLOW_UNRESOLVED_SWEEPS,
+        _enqueue_follow_task,
+        acknowledge_follow_outbox,
+        extend_follow_outbox_lease,
+        has_unresolved_follow_movement,
+        propagate_follow_movement_batch,
+    )
+
+    if not extend_follow_outbox_lease(outbox_event_id, claim_token):
+        # A newer heartbeat claim owns this row. This delayed task is fenced
+        # out before it can move or acknowledge any followers.
+        return 0
+    try:
+        result = propagate_follow_movement_batch(
+            event_data,
+            after_id=after_id,
+        )
+    except Exception as exc:
+        celery_retry_count = _follow_task_retry_count(self)
+        logger.exception(
+            "Follow movement %s page failed.",
+            event_data.get("movement_id"),
+        )
+        if celery_retry_count >= MAX_FOLLOW_TASK_RETRIES:
+            movement_id = str(event_data.get("movement_id") or "unknown")
+            _defer_failed_follow_task(
+                outbox_event_id=outbox_event_id,
+                claim_token=claim_token,
+                last_error=(
+                    f"Follow movement {movement_id} page failed after "
+                    f"{celery_retry_count} task retries: {exc}"
+                ),
+            )
+            return 0
+        raise self.retry(
+            exc=exc,
+            countdown=min(30, 2 ** min(5, celery_retry_count)),
+            kwargs={
+                "event_data": event_data,
+                "outbox_event_id": outbox_event_id,
+                "claim_token": claim_token,
+                "after_id": after_id,
+                "sweep_needs_retry": sweep_needs_retry,
+                "attempt": attempt,
+            },
+        )
+
+    needs_retry = bool(sweep_needs_retry or result.retry_after_id is not None)
+    next_after_id = result.next_after_id
+    retry_attempt = max(0, int(attempt or 0))
+    countdown = 0
+    if next_after_id is None:
+        if has_unresolved_follow_movement(event_data):
+            next_after_id = 0
+            retry_attempt += 1
+            if retry_attempt >= MAX_FOLLOW_UNRESOLVED_SWEEPS:
+                movement_id = str(
+                    event_data.get("movement_id") or "unknown"
+                )
+                last_error = (
+                    f"Follow movement {movement_id} remained unresolved "
+                    f"after {retry_attempt} sweeps."
+                )
+                _defer_failed_follow_task(
+                    outbox_event_id=outbox_event_id,
+                    claim_token=claim_token,
+                    last_error=last_error,
+                )
+                return result.processed
+            countdown = min(30, 0.25 * (2 ** min(7, retry_attempt - 1)))
+            needs_retry = False
+        else:
+            acknowledge_follow_outbox(outbox_event_id, claim_token)
+            return result.processed
+
+    if not extend_follow_outbox_lease(outbox_event_id, claim_token):
+        return result.processed
+    try:
+        _enqueue_follow_task(
+            event_data,
+            outbox_event_id=outbox_event_id,
+            claim_token=claim_token,
+            after_id=next_after_id,
+            sweep_needs_retry=needs_retry,
+            attempt=retry_attempt,
+            countdown=countdown,
+        )
+    except Exception as exc:
+        celery_retry_count = _follow_task_retry_count(self)
+        logger.exception(
+            "Failed to continue follow movement %s.",
+            event_data.get("movement_id"),
+        )
+        if celery_retry_count >= MAX_FOLLOW_TASK_RETRIES:
+            movement_id = str(event_data.get("movement_id") or "unknown")
+            _defer_failed_follow_task(
+                outbox_event_id=outbox_event_id,
+                claim_token=claim_token,
+                last_error=(
+                    f"Follow movement {movement_id} continuation enqueue "
+                    f"failed after {celery_retry_count} task retries: {exc}"
+                ),
+            )
+            return result.processed
+        raise self.retry(
+            exc=exc,
+            countdown=min(30, 2 ** min(5, celery_retry_count)),
+            kwargs={
+                "event_data": event_data,
+                "outbox_event_id": outbox_event_id,
+                "claim_token": claim_token,
+                "after_id": after_id,
+                "sweep_needs_retry": sweep_needs_retry,
+                "attempt": attempt,
+            },
+        )
+    return result.processed
 
 
 @shared_task(ignore_result=True)
@@ -295,62 +472,71 @@ def _arrival_source_text(reverse_direction: str) -> str:
     return f"the {reverse_direction}"
 
 
-def _publish_mob_roam_events(
+def _mob_roam_events(
     *,
     mob: Mob,
     origin_room_id: int,
     destination_room_id: int,
     direction: str,
+    follow_event: GameEvent,
     event_group: str | None = None,
-) -> None:
-    if getattr(mob, "is_invisible", False):
-        return
-
-    actor_payload = serialize_char_from_mob(mob).model_dump()
-    actor_name = safe_capitalize(actor_payload.get("name") or mob.name or "Someone")
+    origin_recipient_ids=None,
+    destination_recipient_ids=None,
+) -> list[GameEvent]:
     events: list[GameEvent] = []
 
-    origin_recipient_ids = (
-        Player.objects.filter(
-            world=mob.world,
-            room_id=origin_room_id,
-            in_game=True,
+    if not getattr(mob, "is_invisible", False):
+        actor_payload = serialize_char_from_mob(mob).model_dump()
+        actor_name = safe_capitalize(
+            actor_payload.get("name") or mob.name or "Someone"
         )
-        .values_list("id", flat=True)
-    )
-    if origin_recipient_ids:
-        events.append(
-            GameEvent(
-                type="notification.movement.exit",
-                recipients=[f"player.{player_id}" for player_id in origin_recipient_ids],
-                data={"actor": actor_payload, "direction": direction},
-                text=f"{actor_name} leaves {direction}.",
-                group=event_group,
+        if origin_recipient_ids is None:
+            origin_recipient_ids = list(
+                Player.objects.filter(
+                    world=mob.world,
+                    room_id=origin_room_id,
+                    in_game=True,
+                ).values_list("id", flat=True)
             )
-        )
-
-    destination_recipient_ids = (
-        Player.objects.filter(
-            world=mob.world,
-            room_id=destination_room_id,
-            in_game=True,
-        )
-        .values_list("id", flat=True)
-    )
-    if destination_recipient_ids:
-        reverse_direction = api_consts.REVERSE_DIRECTIONS[direction]
-        events.append(
-            GameEvent(
-                type="notification.movement.enter",
-                recipients=[f"player.{player_id}" for player_id in destination_recipient_ids],
-                data={"actor": actor_payload, "direction": reverse_direction},
-                text=f"{actor_name} has arrived from {_arrival_source_text(reverse_direction)}.",
-                group=event_group,
+        if origin_recipient_ids:
+            events.append(
+                GameEvent(
+                    type="notification.movement.exit",
+                    recipients=[f"player.{player_id}" for player_id in origin_recipient_ids],
+                    data={"actor": actor_payload, "direction": direction},
+                    text=f"{actor_name} leaves {direction}.",
+                    group=event_group,
+                )
             )
-        )
 
-    if events:
-        publish_events(events, actor_key=mob.key)
+        if destination_recipient_ids is None:
+            destination_recipient_ids = list(
+                Player.objects.filter(
+                    world=mob.world,
+                    room_id=destination_room_id,
+                    in_game=True,
+                ).values_list("id", flat=True)
+            )
+        if destination_recipient_ids:
+            reverse_direction = api_consts.REVERSE_DIRECTIONS[direction]
+            events.append(
+                GameEvent(
+                    type="notification.movement.enter",
+                    recipients=[f"player.{player_id}" for player_id in destination_recipient_ids],
+                    data={"actor": actor_payload, "direction": reverse_direction},
+                    text=f"{actor_name} has arrived from {_arrival_source_text(reverse_direction)}.",
+                    group=event_group,
+                )
+            )
+
+    events.append(follow_event)
+    return events
+
+
+def _publish_mob_roam_events(**kwargs) -> None:
+    mob = kwargs["mob"]
+
+    publish_events(_mob_roam_events(**kwargs), actor_key=mob.key)
 
 
 def _record_roaming_aggro_target(
@@ -439,15 +625,41 @@ def _try_roam_mob(
             return False
 
         mob.room = destination
-        mob.save(update_fields=["room", "modified_ts"])
+        mob.follow_move_sequence = int(mob.follow_move_sequence or 0) + 1
+        mob.save(
+            update_fields=["room", "follow_move_sequence", "modified_ts"]
+        )
+        follow_event = durable_follow_directional_move_event(
+            follow_directional_move_event(
+                actor=mob,
+                origin_room_id=origin_room_id,
+                destination_room_id=destination.id,
+                direction=direction,
+                source="roam",
+            )
+        )
+        roam_events = None
+        if follow_event.data.get(FOLLOW_HAS_FOLLOWERS_KEY):
+            roam_events = persist_follow_dependent_game_events(
+                _mob_roam_events(
+                    mob=mob,
+                    origin_room_id=origin_room_id,
+                    destination_room_id=destination.id,
+                    direction=direction,
+                    follow_event=follow_event,
+                    event_group=event_group,
+                )
+            )
 
-    _publish_mob_roam_events(
-        mob=mob,
-        origin_room_id=origin_room_id,
-        destination_room_id=destination.id,
-        direction=direction,
-        event_group=event_group,
-    )
+    if roam_events is None:
+        _publish_mob_roam_events(
+            mob=mob,
+            origin_room_id=origin_room_id,
+            destination_room_id=destination.id,
+            direction=direction,
+            follow_event=follow_event,
+            event_group=event_group,
+        )
     _record_roaming_aggro_target(
         aggro_mob_ids_by_world_room,
         world_id=mob.world_id,
@@ -549,20 +761,72 @@ def _try_roam_cohort(
         modified_ts = timezone.now()
         for member in movable_members:
             member.room = destination
+            member.follow_move_sequence = (
+                int(member.follow_move_sequence or 0) + 1
+            )
             member.modified_ts = modified_ts
         Mob.objects.bulk_update(
             movable_members,
-            ["room", "modified_ts"],
+            ["room", "follow_move_sequence", "modified_ts"],
         )
+        follow_events = durable_follow_directional_move_events([
+            follow_directional_move_event(
+                actor=member,
+                origin_room_id=origin_room_id,
+                destination_room_id=destination.id,
+                direction=direction,
+                source="roam",
+            )
+            for member in movable_members
+        ])
+        cohort_events = None
+        if any(
+            event.data.get(FOLLOW_HAS_FOLLOWERS_KEY)
+            for event in follow_events
+        ):
+            origin_recipient_ids = list(
+                Player.objects.filter(
+                    world=leader.world,
+                    room_id=origin_room_id,
+                    in_game=True,
+                ).values_list("id", flat=True)
+            )
+            destination_recipient_ids = list(
+                Player.objects.filter(
+                    world=leader.world,
+                    room_id=destination.id,
+                    in_game=True,
+                ).values_list("id", flat=True)
+            )
+            cohort_events = []
+            for member, follow_event in zip(
+                movable_members,
+                follow_events,
+            ):
+                cohort_events.extend(_mob_roam_events(
+                    mob=member,
+                    origin_room_id=origin_room_id,
+                    destination_room_id=destination.id,
+                    direction=direction,
+                    follow_event=follow_event,
+                    event_group=event_group,
+                    origin_recipient_ids=origin_recipient_ids,
+                    destination_recipient_ids=destination_recipient_ids,
+                ))
+            cohort_events = persist_follow_dependent_game_events(
+                cohort_events
+            )
 
-    for member in movable_members:
-        _publish_mob_roam_events(
-            mob=member,
-            origin_room_id=origin_room_id,
-            destination_room_id=destination.id,
-            direction=direction,
-            event_group=event_group,
-        )
+    for member, follow_event in zip(movable_members, follow_events):
+        if cohort_events is None:
+            _publish_mob_roam_events(
+                mob=member,
+                origin_room_id=origin_room_id,
+                destination_room_id=destination.id,
+                direction=direction,
+                follow_event=follow_event,
+                event_group=event_group,
+            )
         _record_roaming_aggro_target(
             aggro_mob_ids_by_world_room,
             world_id=member.world_id,

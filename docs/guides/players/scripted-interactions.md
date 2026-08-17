@@ -59,6 +59,16 @@ items or currency for a later step. If the needed state changes before a
 delayed action executes, that step rolls back, the remaining sequence is
 cancelled, and the player receives safe cancellation feedback.
 
+A Trigger step may also issue `follow <character>` or `unfollow` as the player
+who activated it. The following change and every other same-step effect commit
+or roll back together. This is the same [locomotion-only relationship](following.md)
+used by the ordinary commands: it creates no party and shares no combat,
+rewards, or loot. Ordinary movement through an adjacent directional exit pulls
+a follower. A direction-based `/transfer` of a mob through an adjacent exit can
+also pull that mob's followers; player transfers, other transfer forms,
+instance transitions, death routing, and other non-directional relocations do
+not.
+
 A Trigger step may also use the audited `/transfer` command to move the
 character who activated it. The transfer, any same-step currency change, and
 same-step output succeed or fail together. If the step fails, your room and
@@ -82,6 +92,7 @@ new location epoch even when their destination uses the same authored room, so
 arrival behavior may run again for those lifecycle changes. Login, reconnect,
 and offline location repair do not count as room arrivals.
 
-Other movement, combat, inventory changes, and mutating player commands are not
-available through the generic step-command path. Builders use explicit typed
-actions for state changes that need transactional guarantees.
+Other movement, combat, inventory changes, and mutating player commands beyond
+the audited following and transfer exceptions are not available through the
+generic step-command path. Builders use explicit typed actions for state
+changes that need transactional guarantees.

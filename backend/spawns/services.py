@@ -259,6 +259,9 @@ class WorldGate:
             player = Player.objects.select_for_update(of=('self',)).get(
                 pk=self.player.pk,
             )
+            from spawns.follow_lifecycle import (
+                clear_movement_follows_for_players,
+            )
             from spawns.actions.doors import (
                 cancel_pending_player_door_action,
             )
@@ -272,6 +275,7 @@ class WorldGate:
                 code="actor_logged_out",
                 message="You stop working with the door as you leave the world.",
             )
+            clear_movement_follows_for_players([player.id])
             player.in_game = False
             player.save(update_fields=['in_game'])
             PlayerEvent.objects.create(

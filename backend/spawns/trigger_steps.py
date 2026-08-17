@@ -62,6 +62,7 @@ from spawns.events import (
     flush_game_event_outbox,
     publish_events,
 )
+from spawns.follow_lifecycle import lock_movement_follow_graph
 from spawns.handlers.base import TRIGGER_STEP_MODE_TRANSACTIONAL
 from spawns.models import (
     Item,
@@ -443,6 +444,46 @@ def lock_trigger_runtime_room(*, runtime_world_id: int, room_id: int) -> None:
     # Non-PostgreSQL development/test databases do not offer the scoped
     # advisory primitive. A runtime-world row lock preserves correctness there.
     World.objects.select_for_update().only("id").get(pk=runtime_world_id)
+
+
+def _step_has_player_follow_command(step: dict[str, Any]) -> bool:
+    """Return whether this step can dispatch follow as its player actor."""
+    from spawns.handlers.registry import resolve_text_handler
+
+    for action in step.get("actions") or []:
+        if not isinstance(action, dict):
+            continue
+        if (
+            action.get("type") != TRIGGER_STEP_ACTION_COMMAND
+            or action.get("subject") != TRIGGER_ACTOR_REF
+        ):
+            continue
+        command = str(action.get("command") or "").strip()
+        if not command:
+            continue
+        token = command.split(maxsplit=1)[0].lower()
+        # A rendered command token is unusual, but conservatively take the
+        # graph lock because the final handler cannot be known before the
+        # actor row is locked and rendered.
+        if "{" in token or "}" in token:
+            return True
+        resolved = resolve_text_handler(token, include_builder=True)
+        if resolved is not None and resolved[1].command_type == "follow":
+            return True
+    return False
+
+
+def _prelock_step_follow_graph(
+    *,
+    runtime_world_id: int,
+    actor_type: str,
+    step: dict[str, Any],
+) -> bool:
+    """Acquire Follow's graph lock before a Trigger locks actor/resources."""
+    if actor_type != "player" or not _step_has_player_follow_command(step):
+        return False
+    lock_movement_follow_graph(runtime_world_id)
+    return True
 
 
 def _definition_ref_parts(value: Any) -> tuple[str, int | str]:
@@ -1976,6 +2017,7 @@ def _execute_current_step(
     trigger_actor: Player | Mob | None = None,
     prelocks: TriggerStepPrelocks | None = None,
     resources_prelocked: bool = False,
+    follow_graph_prelocked: bool = False,
 ) -> list[GameEvent]:
     steps = run.steps if isinstance(run.steps, list) else []
     if run.next_step_index >= len(steps):
@@ -1996,6 +2038,13 @@ def _execute_current_step(
         raise TriggerStepExecutionError(
             "/exitinstance must be the only action in the final Trigger step.",
             code="instance_exit_not_terminal",
+        )
+
+    if not follow_graph_prelocked:
+        _prelock_step_follow_graph(
+            runtime_world_id=run.runtime_world_id,
+            actor_type=run.actor_type,
+            step=step,
         )
 
     if runtime_world is None:
@@ -2559,7 +2608,13 @@ def start_trigger_steps(
             first_step_delay_seconds = int(
                 snapshot_steps[0]["due_after_seconds"]
             )
+            initial_follow_graph_prelocked = False
             if first_step_delay_seconds == 0:
+                initial_follow_graph_prelocked = _prelock_step_follow_graph(
+                    runtime_world_id=runtime_world_id,
+                    actor_type=actor_type,
+                    step=snapshot_steps[0],
+                )
                 _prelock_terminal_instance_exit_run(
                     runtime_world_id=runtime_world_id,
                     step=snapshot_steps[0],
@@ -2734,6 +2789,9 @@ def start_trigger_steps(
                             trigger_actor=locked_actor,
                             prelocks=initial_prelocks,
                             resources_prelocked=resources_prelocked,
+                            follow_graph_prelocked=(
+                                initial_follow_graph_prelocked
+                            ),
                         )
                     )
                     if (

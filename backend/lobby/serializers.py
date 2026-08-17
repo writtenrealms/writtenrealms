@@ -1,6 +1,7 @@
 from config import constants as adv_consts
 from core.utils import is_ascii
 
+from django.db import transaction
 from rest_framework import serializers
 
 from config import constants as api_consts
@@ -262,44 +263,59 @@ class WorldTransferSerializer(serializers.Serializer):
     def create(self, validated_data):
         "Execute the transfer from SPW to MPW"
 
-        player = validated_data['player']
-        dest_room = player.room.transfer_to
+        with transaction.atomic():
+            player = (
+                Player.objects.select_for_update(of=('self',))
+                .select_related(
+                    'world',
+                    'room',
+                    'room__transfer_to',
+                    'room__transfer_to__world',
+                )
+                .get(pk=validated_data['player'].pk)
+            )
+            dest_room = player.room.transfer_to
 
-        # Make sure that we really are transfering to another world.
-        dest_spawn_world = dest_room.world.spawned_worlds.first()
-        if dest_spawn_world == player.world:
-            raise ValueError("Destination room is in current world.")
+            # Make sure that we really are transfering to another world.
+            dest_spawn_world = dest_room.world.spawned_worlds.first()
+            if dest_spawn_world == player.world:
+                raise ValueError("Destination room is in current world.")
 
-        # Get all the IDs of the items that are tied to this character
-        item_ids = []
-        # add inventory
-        item_ids.extend(player.inventory.values_list('id', flat=True))
-        item_ids.extend(
-            player.equipment.inventory.values_list('id', flat=True))
-        # See which of the containers have nested items
-        containers = Item.objects.filter(
-            id__in=item_ids,
-            type=adv_consts.ITEM_TYPE_CONTAINER)
-        for container in containers:
-            item_ids.extend(container.get_contained_ids())
+            # Get all the IDs of the items that are tied to this character
+            item_ids = []
+            # add inventory
+            item_ids.extend(player.inventory.values_list('id', flat=True))
+            item_ids.extend(
+                player.equipment.inventory.values_list('id', flat=True))
+            # See which of the containers have nested items
+            containers = Item.objects.filter(
+                id__in=item_ids,
+                type=adv_consts.ITEM_TYPE_CONTAINER)
+            for container in containers:
+                item_ids.extend(container.get_contained_ids())
 
-        # Set all the items to now belong to the new world
-        Item.objects.filter(id__in=item_ids).update(world=dest_spawn_world)
+            # Set all the items to now belong to the new world
+            Item.objects.filter(id__in=item_ids).update(world=dest_spawn_world)
 
-        # Set the player's world
-        player.world = dest_spawn_world
-        player.room = dest_room
-        # Change player's name
-        player.name = validated_data['name']
-        if validated_data.get('title'):
-            player.title = validated_data['title']
-        # Optionally change player's gender
-        if validated_data.get('gender'):
-            player.gender = validated_data['gender']
-        # Save changes
-        player.save()
+            from spawns.follow_lifecycle import (
+                clear_movement_follows_for_players,
+            )
 
-        # Clear out viewed rooms
-        player.viewed_rooms.through.objects.filter(player=player).delete()
+            clear_movement_follows_for_players([player.id])
+            # Set the player's world
+            player.world = dest_spawn_world
+            player.room = dest_room
+            # Change player's name
+            player.name = validated_data['name']
+            if validated_data.get('title'):
+                player.title = validated_data['title']
+            # Optionally change player's gender
+            if validated_data.get('gender'):
+                player.gender = validated_data['gender']
+            # Save changes
+            player.save()
+
+            # Clear out viewed rooms
+            player.viewed_rooms.through.objects.filter(player=player).delete()
 
         return player

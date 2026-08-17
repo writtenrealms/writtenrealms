@@ -30,6 +30,7 @@ def handle_dynamic_ability_command(ctx: CommandContext) -> bool:
             ability=ability,
             command=ctx.payload.get("command") or ability.slug,
             args=args,
+            connection_id=ctx.connection_id,
         )
     except ActionError as err:
         ctx.publish(

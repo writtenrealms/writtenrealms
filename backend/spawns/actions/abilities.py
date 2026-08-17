@@ -58,7 +58,7 @@ from spawns.ability_intents import (
     ABILITY_INTENT_STATUS_QUEUED,
     ability_intent_is_committed,
 )
-from spawns.events import GameEvent
+from spawns.events import GameEvent, persist_follow_dependent_game_events
 from spawns.models import CombatEncounter, CombatParticipant, Mob, Player
 from spawns.state_payloads import serialize_char_from_mob, serialize_char_from_player
 from spawns.triggers import evaluate_movement_policies
@@ -2011,6 +2011,7 @@ class AbilityAction:
         config,
         rules_config,
         active_encounter: CombatEncounter | None,
+        connection_id: str | None = None,
     ) -> ActionResult:
         if active_encounter:
             raise ActionError(
@@ -2032,7 +2033,11 @@ class AbilityAction:
 
         move_events: list[GameEvent] = []
         if direction:
-            movement = ResolveMoveAction().execute(player, direction)
+            movement = ResolveMoveAction().execute(
+                player,
+                direction,
+                source="ability",
+            )
             move_context = movement.data["context"]
 
             for policy_event in (
@@ -2099,6 +2104,7 @@ class AbilityAction:
                 update_fields=[
                     "room",
                     "location_sequence",
+                    "follow_move_sequence",
                     "stamina",
                     "state",
                     "last_action_ts",
@@ -2138,7 +2144,11 @@ class AbilityAction:
                 opening_priority=opening_priority,
             )
             aggro_result = ScanRoomAggroAction().execute(player.id)
-            return ActionResult(events=[*move_events, *result.events, *aggro_result.events])
+            return ActionResult(events=persist_follow_dependent_game_events(
+                [*move_events, *result.events, *aggro_result.events],
+                actor_key=player.key,
+                connection_id=connection_id,
+            ))
 
         encounter = CombatEncounter.objects.create(
             world=player.world,
@@ -2174,12 +2184,11 @@ class AbilityAction:
             auto_advance=interval > 0,
         )
         aggro_result = ScanRoomAggroAction().execute(player.id)
-        return ActionResult(events=[
-            *move_events,
-            ability_ack,
-            *step.events,
-            *aggro_result.events,
-        ])
+        return ActionResult(events=persist_follow_dependent_game_events(
+            [*move_events, ability_ack, *step.events, *aggro_result.events],
+            actor_key=player.key,
+            connection_id=connection_id,
+        ))
 
     def execute(
         self,
@@ -2188,6 +2197,7 @@ class AbilityAction:
         ability: AbilityDefinition,
         command: str,
         args: list[str],
+        connection_id: str | None = None,
     ) -> ActionResult:
         from spawns.actions.pvp import try_execute_ability
 
@@ -2196,6 +2206,7 @@ class AbilityAction:
             ability=ability,
             command=command,
             args=args,
+            connection_id=connection_id,
         )
         if pvp_result is not None:
             return pvp_result
@@ -2243,6 +2254,7 @@ class AbilityAction:
                     config=death_config,
                     rules_config=rules_config,
                     active_encounter=active_encounter,
+                    connection_id=connection_id,
                 )
 
             if target_type in {"self", "ally"}:

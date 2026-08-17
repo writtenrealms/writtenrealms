@@ -1078,9 +1078,26 @@ optional query-free `where`. One action executes one command; command chains,
 history references, and nested `/cmd` dispatch are rejected. The dedicated
 runner accepts only explicitly audited handlers. Current coverage is room-local
 `say`, `emote`, `talk`, authored socials, room-subject, room-scoped `/echo`,
-transactional `/transfer`, and transactional `/exitinstance`. The transfer
-target must be the Trigger actor, but any supported step subject may issue the
-command. The canonical forms are
+transactional `/open`, `/close`, and `/lock`, player-subject transactional
+`follow` and `unfollow`, transactional `/transfer`, and transactional
+`/exitinstance`.
+
+`follow <character>` and `unfollow [character]` require the player
+`trigger_actor` as their subject. They execute directly as that player; a
+Trigger must not wrap them in `/force` or `/cmd`. The relationship affects
+directional locomotion through an adjacent exit. Every follower's move retains
+its normal combat, stamina, policy, exit, and door checks. A chain is capped at
+16 following links, and relationship creation fails if it would exceed that
+propagation depth.
+A direction-based `/transfer` of a mob through an adjacent exit also emits a
+directional follow edge. Player transfers, mob transfers using `here` or a
+room reference, instance transitions, death routing, resets, and other
+non-directional relocations do not pull followers. Following is independent
+of group or party membership and shares no combat participation, rewards, or
+loot.
+
+The transfer target must be the Trigger actor, but any supported step subject
+may issue the command. The canonical forms are
 `subject: trigger_room` with
 `/transfer {{ actor_key }} room@<relative_id>` and
 `subject: trigger_actor` with `/transfer self room@<relative_id>`; an exact-one
@@ -2290,6 +2307,14 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   `trigger_room`, `trigger_actor`, or an exact-one room-local mob selector.
   Newlines, `;`/`&&` chains, history references, and nested `/cmd` are rejected;
   the resolved handler must explicitly support Trigger-step execution.
+  Transactional `follow <character>` and `unfollow [character]` require
+  exactly the player `trigger_actor` as subject. They establish or clear only
+  adjacent directional locomotion; normal movement blockers still apply, and
+  non-directional relocation never pulls a follower. Following chains are
+  capped at 16 links, and a longer relationship request fails. A direction-based
+  `/transfer` of a mob through an adjacent exit is directional and can pull
+  that mob's followers; player transfers and other mob transfer forms cannot.
+  They do not establish a group or share combat, rewards, or loot.
   Any supported subject may issue transactional `/transfer`, but only the
   Trigger actor may be its target. Relative destinations use the subject's room;
   authored content should use a stable `room@<relative_id>` destination. Moving a

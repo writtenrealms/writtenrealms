@@ -142,6 +142,7 @@ def find_room_char_target(
     lean: bool = False,
     include_invisible_players: bool = True,
     include_invisible_mobs: bool = True,
+    require_unambiguous: bool = False,
 ) -> Player | Mob | None:
     normalized = _normalize_selector(selector)
     if not normalized:
@@ -176,6 +177,7 @@ def find_room_char_target(
             "gender",
             "room_id",
             "world_id",
+            "follow_move_sequence",
             "mute_list",
             "is_invisible",
             "is_builder",
@@ -188,6 +190,7 @@ def find_room_char_target(
             "keywords",
             "room_id",
             "world_id",
+            "follow_move_sequence",
             "is_invisible",
             "definition_id",
             "definition__name",
@@ -210,10 +213,17 @@ def find_room_char_target(
     if counted_match is not None:
         return counted_match
 
-    for char in chars:
-        if room_char_matches_selector(char, normalized):
-            return char
-    return None
+    matches = [
+        char
+        for char in chars
+        if room_char_matches_selector(char, normalized)
+    ]
+    if require_unambiguous and len(matches) > 1:
+        raise ActionError(
+            "That target is ambiguous.",
+            code="ambiguous_target",
+        )
+    return matches[0] if matches else None
 
 
 def _resolve_item_name(item: Item) -> str:

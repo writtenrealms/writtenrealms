@@ -55,6 +55,7 @@ from spawns.handlers import information
 from spawns.handlers import movement
 from spawns.handlers import doors
 from spawns.handlers import combat
+from spawns.handlers import following
 from spawns.handlers import abilities
 from spawns.handlers import communication
 from spawns.handlers import socials
