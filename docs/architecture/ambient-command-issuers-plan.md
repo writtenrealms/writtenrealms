@@ -110,9 +110,14 @@ This plan remains directional, but several pieces are now implemented:
   arrival, and delivery rechecks in-game state, runtime, room, and location
   sequence. Transferred mobs retain their compatibility mob-reaction path.
 - Trigger command actions support the fixed Trigger room, the Trigger actor
-  (including a player), or one bounded exact-one room-local mob selector.
-  Single-command, nested-dispatch, alias/history, and fallback-trigger guards
-  are enforced at this boundary.
+  (including a player), or one bounded exact-one mob selector. A mob selector
+  names `trigger_room` or an authored `room@<relative_id>` and resolves only a
+  live mob in that room and the Trigger run's exact runtime world. This permits
+  cross-room RP within one world or instance without reaching the base world
+  or another instance run. Delayed steps re-resolve the live match. The
+  recorded command issuer remains the original Trigger room; only the physical
+  mob subject and its execution room change. Single-command, nested-dispatch,
+  alias/history, and fallback-trigger guards are enforced at this boundary.
 - The runner reuses the already resolved subject, issuer, and runtime world
   rather than refetching those identities once per command action.
 - Typed steps require item/mob mutations as an initial prefix. After that,

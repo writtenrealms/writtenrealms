@@ -549,7 +549,7 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
                             "type": "command",
                             "subject": {
                                 "type": "mob",
-                                "room": "trigger_room",
+                                "room": f"room.{self.harbor_room.id}",
                                 "mob": self.quartermaster.id,
                                 "where": {
                                     "eq": [
@@ -817,6 +817,11 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         )
         self.assertNotEqual(imported_item_trigger.target_id, self.brass_key.id)
         self.assertEqual(imported_item_trigger.target.slug, self.brass_key.slug)
+        imported_plant_trigger = target_world.triggers.get(name="Plant Barley")
+        self.assertEqual(
+            imported_plant_trigger.steps[0]["actions"][4]["subject"]["room"],
+            f"room@{self.harbor_room.relative_id}",
+        )
 
     def test_complete_import_replaces_lobby_scaffold_and_rehomes_builder(self):
         (
@@ -1194,6 +1199,10 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             "mobdefinition.quartermaster",
         )
         self.assertEqual(
+            trigger["spec"]["steps"][0]["actions"][4]["subject"]["room"],
+            f"room@{self.harbor_room.relative_id}",
+        )
+        self.assertEqual(
             trigger["spec"]["steps"][0]["actions"][4]["subject"]["where"],
             {
                 "eq": [
@@ -1411,12 +1420,14 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             ],
             mob_definitions=[self.quartermaster],
         )
+        room_ref_cache = builder_world_export._build_room_ref_cache(self.world)
 
         with self.assertNumQueries(0):
             manifest = builder_world_export._serialize_trigger_manifest(
                 trigger,
                 world=self.world,
                 entity_ref_cache=entity_ref_cache,
+                room_ref_cache=room_ref_cache,
             )
 
         self.assertEqual(
@@ -1438,6 +1449,10 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(
             manifest["spec"]["steps"][0]["actions"][4]["subject"]["mob"],
             "mobdefinition.quartermaster",
+        )
+        self.assertEqual(
+            manifest["spec"]["steps"][0]["actions"][4]["subject"]["room"],
+            f"room@{self.harbor_room.relative_id}",
         )
         self.assertEqual(
             manifest["spec"]["steps"][0]["actions"][4]["subject"]["where"],

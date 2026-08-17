@@ -1849,6 +1849,22 @@ def _canonicalize_trigger_steps(
                 isinstance(subject, dict)
                 and str(subject.get("type") or "").strip().lower() == "mob"
             ):
+                subject_room = subject.get("room")
+                if str(subject_room or "").strip().lower() != "trigger_room":
+                    if _room_ref_cache_key(
+                        subject_room,
+                        allow_bare_database_id=allow_bare_room_database_ids,
+                    ) is None:
+                        raise serializers.ValidationError(
+                            "Trigger command mob subject room must be "
+                            "'trigger_room' or a typed room reference."
+                        )
+                    subject["room"] = _canonicalize_room_ref(
+                        subject_room,
+                        world=world,
+                        room_ref_cache=room_ref_cache,
+                        allow_bare_database_id=allow_bare_room_database_ids,
+                    )
                 subject["mob"] = _canonicalize_entity_ref(
                     subject.get("mob"),
                     world=world,

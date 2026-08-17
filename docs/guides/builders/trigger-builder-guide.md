@@ -631,8 +631,8 @@ rendered text must remain non-empty and at most 4,000 characters.
 ### Running Commands From Steps
 
 Use one `command` action when a timed step should have the Trigger room, the
-triggering player or mob, or one exact room-local mob execute an audited
-command.
+triggering player or mob, or exactly one mob in an authored room of the same
+runtime world execute an audited command.
 
 This crossing has Charon react, charges the triggering player, gives a final
 instruction, and transfers that player:
@@ -711,15 +711,51 @@ There are three subject forms:
         - state.character.on_duty
         - true
   command: emote raises one skeletal hand.
+
+# Exactly one live Minos in another authored room of this runtime world acts.
+- type: command
+  subject:
+    type: mob
+    room: room@12
+    mob: mobdefinition.minos
+  command: 'say Name.'
 ```
 
 `trigger_actor` explicitly supports players. A delayed player command follows
 that player within the same runtime world and uses the player's current room;
 for example, a sixth step can force the player to `say` a line after five
-earlier stages. The fixed `trigger_room` and selected-mob forms stay attached
-to the original runtime world and room. The initial contract deliberately
-does not select an arbitrary bystander player by name or room position:
-`trigger_actor` is the stable player subject.
+earlier stages. `trigger_room` stays attached to the original runtime world and
+room. A mob selector may use `trigger_room` or a canonical
+`room@<relative_id>` from the same authored world. The room reference is fixed,
+but the live mob is resolved when the step executes. The initial contract
+deliberately does not select an arbitrary bystander player by name or room
+position: `trigger_actor` is the stable player subject.
+
+The remote form is useful for coordinated RP. In the example above, players
+in room 12 see the ordinary speech output `Minos says: "Name."`; it is
+indistinguishable from Minos using `say Name.` normally. A player in the
+Trigger room sees it only if they are also in room 12 when the command runs.
+Other local commands behave from the selected mob's perspective too: `emote`
+and socials address that mob's room, and directions for door commands or
+directional `/transfer` resolve from that room.
+
+`room@12` means the room's portable positive relative ID, not its database ID,
+coordinates, name, or a runtime instance ID. The referenced room and mob
+definition must belong to the Trigger's authored world. At runtime, selection
+is additionally restricted to the Trigger run's exact runtime world. In an
+instance, that means the matching mob in the same instance run; a mob in the
+base world or another instance run cannot be selected. A selector cannot
+use `world@base/room@...` to cross a runtime boundary.
+
+At execution time, exactly one live mob in that runtime world and selected
+room must match the definition and optional `where` condition. `where` uses the
+same query-free Boolean/comparison condition subset as a local selector and is
+evaluated with each candidate as `state.character`; the condition grammar is
+unchanged. The step fails if zero or more than one mob matches. This check is
+performed again for delayed steps: moving or despawning the intended mob, or
+spawning a second matching mob before the due time, can therefore make the
+step fail. The failed action rolls back every mutation and captured message in
+that step; `on_step_error: cancel` then cancels the remaining sequence.
 
 Commands currently approved for transactional steps are room-local `say`,
 `emote`, `talk`, authored socials, room-subject, room-scoped `/echo`, the
@@ -811,7 +847,7 @@ original Trigger actor before dispatch.
 
 | Type | Required fields | Effect |
 | --- | --- | --- |
-| `command` | `subject`, `command` | Executes one audited command as `trigger_room`, `trigger_actor`, or one exact room-local mob selector. Transactional `/transfer` is same-runtime; `/exitinstance` is restricted to the player Trigger actor and must be the sole action of the final step. Command failure rolls back the step. |
+| `command` | `subject`, `command` | Executes one audited command as `trigger_room`, `trigger_actor`, or an exact-one same-runtime mob selected in `trigger_room` or `room@<relative_id>`. Transactional `/transfer` is same-runtime; `/exitinstance` is restricted to the player Trigger actor and must be the sole action of the final step. Command or selector failure rolls back the step. |
 | `debit_currency` | `actor: trigger_actor`, `currency`, `amount` | Atomically removes a positive amount of one explicit currency from the triggering player. Fails if the actor is not a player or has insufficient funds. |
 | `grant_currency` | `actor: trigger_actor`, `currency`, `amount` | Atomically adds a positive amount of one explicit currency to the triggering player. Fails if the actor is not a player or the final balance would exceed the safe-integer limit. |
 | `consume_item` | `actor: trigger_actor`, `item`, optional `count` | Removes exact-definition items from the triggering actor's inventory. `count` defaults to `1`. |
@@ -1191,7 +1227,8 @@ steps:
         command: /exitinstance {{ actor_key }} world@base/room@42
 ```
 
-An exact-one room-local mob may be the final command subject instead of
+An exact-one same-runtime mob selected in `trigger_room` or an authored
+`room@<relative_id>` may be the final command subject instead of
 `trigger_room`, but the explicit target must still render to the player Trigger
 actor. The player `trigger_actor` may also be the subject and use
 `/exitinstance self world@base/room@42`. A typed step cannot select another

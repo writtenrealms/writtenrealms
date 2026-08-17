@@ -2420,7 +2420,9 @@ class TestScheduledTriggerSteps(WorldTestCase):
         )
 
         self.assertEqual(
-            prelocks.mob_ids_by_definition[definition.id],
+            prelocks.mob_ids_by_room_and_definition[
+                (self.room.id, definition.id)
+            ],
             tuple(guard.id for guard in guards[:2]),
         )
 
@@ -2485,7 +2487,9 @@ class TestScheduledTriggerSteps(WorldTestCase):
         )
 
         self.assertEqual(
-            prelocks.mob_ids_by_definition[definition.id],
+            prelocks.mob_ids_by_room_and_definition[
+                (self.room.id, definition.id)
+            ],
             tuple(guard.id for guard in guards[:2]),
         )
 
@@ -3725,6 +3729,443 @@ class TestScheduledTriggerSteps(WorldTestCase):
         self.assertEqual(result.code, "command_subject_ambiguous")
         self.assertFalse(ScheduledTriggerRun.objects.filter(trigger=trigger).exists())
         self.assertFalse(GameEventOutbox.objects.exists())
+
+    def test_remote_mob_command_uses_exact_subject_room_and_remote_audience(self):
+        remote_room = self.room.create_at("east")
+        origin_observer = self.create_player(
+            "Origin Witness",
+            user=self.create_user("remote-origin-witness@example.com"),
+        )
+        origin_observer.in_game = True
+        origin_observer.save(update_fields=["in_game"])
+        remote_observer = self.create_player(
+            "Remote Witness",
+            user=self.create_user("remote-room-witness@example.com"),
+            room=remote_room,
+        )
+        remote_observer.in_game = True
+        remote_observer.save(update_fields=["in_game"])
+        herald_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="remote-herald",
+            name="a herald",
+        )
+        herald_definition.spawn(self.room, self.spawn_world)
+        remote_herald = herald_definition.spawn(remote_room, self.spawn_world)
+        trigger = self._create_trigger(
+            match="summon the verdict",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.remote-herald",
+                            },
+                            "command": "say The verdict is ready.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "summon the verdict")
+
+        run = ScheduledTriggerRun.objects.get(trigger=trigger)
+        self.assertEqual(run.status, ScheduledTriggerRun.STATUS_COMPLETED)
+        subject_snapshot = run.steps[0]["actions"][0]["subject"]
+        self.assertEqual(
+            subject_snapshot["room"],
+            f"room@{remote_room.relative_id}",
+        )
+        self.assertEqual(subject_snapshot["room_id"], remote_room.id)
+        say_messages = [
+            entry
+            for entry in messages
+            if entry["message"]["type"] == "notification.cmd.say.success"
+            and entry["message"]["data"]["text"] == "The verdict is ready."
+        ]
+        self.assertEqual(
+            {entry["player_key"] for entry in say_messages},
+            {remote_observer.key},
+        )
+        self.assertTrue(all(
+            entry["message"]["data"]["actor"]["key"] == remote_herald.key
+            for entry in say_messages
+        ))
+        self.assertNotIn(
+            origin_observer.key,
+            {entry["player_key"] for entry in say_messages},
+        )
+        self.assertNotIn(
+            self.player.key,
+            {entry["player_key"] for entry in say_messages},
+        )
+
+    def test_delayed_remote_mob_command_resolves_current_room_candidate(self):
+        remote_room = self.room.create_at("east")
+        observer = self.create_player(
+            "Delayed Remote Witness",
+            user=self.create_user("delayed-remote-witness@example.com"),
+            room=remote_room,
+        )
+        observer.in_game = True
+        observer.save(update_fields=["in_game"])
+        herald_definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="delayed-remote-herald",
+            name="a delayed herald",
+        )
+        original_herald = herald_definition.spawn(
+            remote_room,
+            self.spawn_world,
+        )
+        trigger = self._create_trigger(
+            match="await remote verdict",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 1,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.delayed-remote-herald",
+                            },
+                            "command": "say The delayed verdict is ready.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+        self.assertTrue(result.started)
+        run = ScheduledTriggerRun.objects.get(pk=result.run_id)
+        original_herald.room = self.room
+        original_herald.save(update_fields=["room"])
+        current_herald = herald_definition.spawn(remote_room, self.spawn_world)
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                due_result = process_due_trigger_runs(now=run.next_run_ts)
+
+        self.assertEqual(due_result["completed"], 1)
+        self.assertTrue(any(
+            entry["player_key"] == observer.key
+            and entry["message"]["type"] == "notification.cmd.say.success"
+            and entry["message"]["data"]["actor"]["key"]
+            == current_herald.key
+            for entry in messages
+        ))
+        self.assertFalse(any(
+            entry["message"].get("data", {}).get("actor", {}).get("key")
+            == original_herald.key
+            for entry in messages
+        ))
+
+    def test_failed_delayed_remote_subject_rolls_back_step_mutations(self):
+        remote_room = self.room.create_at("east")
+        cases = (
+            ("missing", 0, None),
+            ("ambiguous", 2, None),
+            (
+                "where-mismatch",
+                1,
+                {"eq": ["state.character.on_duty", True]},
+            ),
+        )
+        for label, mob_count, where in cases:
+            with self.subTest(label=label):
+                definition = MobDefinition.objects.create(
+                    world=self.world,
+                    slug=f"remote-{label}-herald",
+                    name=f"a {label} herald",
+                )
+                mobs = [
+                    definition.spawn(remote_room, self.spawn_world)
+                    for _ in range(mob_count)
+                ]
+                if where is not None:
+                    MobState.objects.create(
+                        mob=mobs[0],
+                        data={"on_duty": False},
+                    )
+                subject = {
+                    "type": "mob",
+                    "room": f"room@{remote_room.relative_id}",
+                    "mob": f"mobdefinition.{definition.slug}",
+                }
+                if where is not None:
+                    subject["where"] = where
+                trigger = self._create_trigger(
+                    match=f"remote failure {label}",
+                    conditions="",
+                    steps=[
+                        {
+                            "after_seconds": 1,
+                            "actions": [
+                                {
+                                    "type": "grant_item",
+                                    "actor": "trigger_actor",
+                                    "item": "itemdefinition.harvested-barley",
+                                },
+                                {
+                                    "type": "command",
+                                    "subject": subject,
+                                    "command": "say This must roll back.",
+                                },
+                            ],
+                        },
+                    ],
+                )
+                inventory_count = self.player.inventory.filter(
+                    definition=self.harvested,
+                    is_pending_deletion=False,
+                ).count()
+
+                start_result = start_trigger_steps(
+                    trigger=trigger,
+                    actor=self.player,
+                    room=self.room,
+                )
+                self.assertTrue(start_result.started)
+                run = ScheduledTriggerRun.objects.get(pk=start_result.run_id)
+                with self.captureOnCommitCallbacks(execute=True):
+                    due_result = process_due_trigger_runs(now=run.next_run_ts)
+
+                self.assertEqual(due_result["cancelled"], 1)
+                run.refresh_from_db()
+                self.assertEqual(
+                    run.status,
+                    ScheduledTriggerRun.STATUS_CANCELLED,
+                )
+                self.assertEqual(
+                    self.player.inventory.filter(
+                        definition=self.harvested,
+                        is_pending_deletion=False,
+                    ).count(),
+                    inventory_count,
+                )
+                Mob.objects.filter(pk__in=[mob.id for mob in mobs]).delete()
+
+    def test_remote_mob_prelocks_are_keyed_by_room_and_definition(self):
+        remote_room = self.room.create_at("east")
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="two-room-herald",
+            name="a two-room herald",
+        )
+        local_mob = definition.spawn(self.room, self.spawn_world)
+        remote_mob = definition.spawn(remote_room, self.spawn_world)
+        run = SimpleNamespace(
+            runtime_world_id=self.spawn_world.id,
+            room_id=self.room.id,
+            actor_type="player",
+            actor_id=self.player.id,
+        )
+        actions = [
+            {
+                "type": "command",
+                "subject": {
+                    "type": "mob",
+                    "room": "trigger_room",
+                    "room_id": self.room.id,
+                    "mob_definition_id": definition.id,
+                },
+                "command": "say Local.",
+            },
+            {
+                "type": "command",
+                "subject": {
+                    "type": "mob",
+                    "room": f"room@{remote_room.relative_id}",
+                    "room_id": remote_room.id,
+                    "mob_definition_id": definition.id,
+                },
+                "command": "say Remote.",
+            },
+        ]
+
+        prelocks = _prelock_step_resources(
+            run=run,
+            actions=actions,
+            bindings={},
+        )
+
+        self.assertEqual(
+            prelocks.mob_ids_by_room_and_definition,
+            {
+                (self.room.id, definition.id): (local_mob.id,),
+                (remote_room.id, definition.id): (remote_mob.id,),
+            },
+        )
+
+    def test_remote_mob_command_isolated_to_trigger_runtime_instance(self):
+        instance_config = WorldConfig.objects.create()
+        instance_template = World.objects.new_world(
+            name="Remote Herald Instance",
+            author=self.user,
+            config=instance_config,
+            instance_of=self.world,
+        )
+        trigger_room = instance_template.rooms.first()
+        remote_room = trigger_room.create_at("east")
+        actor_runtime = instance_template.create_spawn_world(
+            instance_ref="remote-herald-actor-runtime",
+        )
+        other_runtime = instance_template.create_spawn_world(
+            instance_ref="remote-herald-other-runtime",
+        )
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="instanced-remote-herald",
+            name="an instanced remote herald",
+        )
+        selected_mob = definition.spawn(remote_room, actor_runtime)
+        other_runtime_mob = definition.spawn(remote_room, other_runtime)
+        observer = self.create_player(
+            "Instance Remote Witness",
+            user=self.create_user("instance-remote-witness@example.com"),
+            world=actor_runtime,
+            room=remote_room,
+        )
+        observer.in_game = True
+        observer.save(update_fields=["in_game"])
+        self.player.world = actor_runtime
+        self.player.room = trigger_room
+        self.player.save(update_fields=["world", "room"])
+        trigger = self._create_trigger(
+            world=instance_template,
+            room=trigger_room,
+            match="instance remote verdict",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.instanced-remote-herald",
+                            },
+                            "command": "say Only this instance hears me.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = start_trigger_steps(
+                    trigger=trigger,
+                    actor=self.player,
+                    room=trigger_room,
+                )
+
+        self.assertTrue(result.started)
+        self.assertTrue(any(
+            entry["player_key"] == observer.key
+            and entry["message"]["type"] == "notification.cmd.say.success"
+            and entry["message"]["data"]["actor"]["key"] == selected_mob.key
+            for entry in messages
+        ))
+        self.assertFalse(any(
+            entry["message"].get("data", {}).get("actor", {}).get("key")
+            == other_runtime_mob.key
+            for entry in messages
+        ))
+
+    def test_remote_mob_forced_door_command_uses_subject_room_context(self):
+        remote_room = self.room.create_at("east")
+        beyond_room = remote_room.create_at("south")
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction=adv_consts.DIRECTION_SOUTH,
+            from_room=remote_room,
+            to_room=beyond_room,
+            name="remote bronze doors",
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction=adv_consts.DIRECTION_NORTH,
+            from_room=beyond_room,
+            to_room=remote_room,
+            name="remote bronze doors",
+        )
+        observer = self.create_player(
+            "Remote Door Witness",
+            user=self.create_user("remote-door-witness@example.com"),
+            room=remote_room,
+        )
+        observer.in_game = True
+        observer.save(update_fields=["in_game"])
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="remote-door-herald",
+            name="a remote door herald",
+        )
+        definition.spawn(remote_room, self.spawn_world)
+        custom_message = "The distant bronze doors lock without a touch."
+        trigger = self._create_trigger(
+            match="seal the distant hall",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.remote-door-herald",
+                            },
+                            "command": f"/lock south {custom_message}",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "seal the distant hall")
+
+        self.assertEqual(
+            DoorState.objects.get(
+                world=self.spawn_world,
+                doorway=doorway,
+            ).state,
+            adv_consts.DOOR_STATE_LOCKED,
+        )
+        door_messages = [
+            entry
+            for entry in messages
+            if entry["message"]["type"] == "door.state_changed"
+            and entry["message"]["text"] == custom_message
+        ]
+        self.assertEqual(
+            {entry["player_key"] for entry in door_messages},
+            {observer.key},
+        )
 
     def test_debit_currency_does_not_reveal_an_invisible_player(self):
         obol = create_currency(

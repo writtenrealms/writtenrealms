@@ -394,8 +394,10 @@ Current required mappings:
   action types for builder review. A deterministic delayed `say`, `emote`,
   social, or room echo may instead export as one typed `command`
   action when its subject maps unambiguously to `trigger_actor`,
-  `trigger_room`, or exactly one portable room-local mob definition. Emit one
-  action per command; do not put WR1 command chains or `/cmd` wrappers inside
+  `trigger_room`, or exactly one portable mob definition in a known authored
+  room. Emit a mob selector whose `room` is `trigger_room` or the converted
+  room's `room@<relative_id>`; never emit a database room id. Emit one action
+  per command; do not put WR1 command chains or `/cmd` wrappers inside
   `command.command`.
 - A deterministic WR1 `/send {{ actor }} <text>` maps to native
   `send` with `actor: trigger_actor`. A deterministic
@@ -995,7 +997,8 @@ Trigger actions identify exactly `actor: trigger_actor`; quest effects remain
 inside their quest reward/effect context.
 
 An audited command can execute as the Trigger room, the Trigger actor
-(including a player), or one exact room-local mob:
+(including a player), or exactly one mob in an authored room of the same
+runtime world:
 
 ```yaml
 steps:
@@ -1014,9 +1017,9 @@ steps:
       - type: command
         subject:
           type: mob
-          room: trigger_room
-          mob: mobdefinition.charon
-        command: say Get on board.
+          room: room@12
+          mob: mobdefinition.minos
+        command: 'say Name.'
       - type: command
         subject: trigger_room
         command: /transfer {{ actor_key }} room@42
@@ -1073,11 +1076,18 @@ substitutions, then is revalidated as non-empty and no longer than 4,000
 characters.
 
 `command.subject` is `trigger_room`, `trigger_actor`, or a mapping with
-`type: mob`, `room: trigger_room`, a portable `mobdefinition.<slug>`, and an
-optional query-free `where`. One action executes one command; command chains,
-history references, and nested `/cmd` dispatch are rejected. The dedicated
-runner accepts only explicitly audited handlers. Current coverage is room-local
-`say`, `emote`, `talk`, authored socials, room-subject, room-scoped `/echo`,
+`type: mob`, `room` set to `trigger_room` or a canonical
+`room@<relative_id>`, a portable `mobdefinition.<slug>`, and an optional
+query-free `where`. The authored room and definition must resolve in the
+Trigger world. At execution, the selector requires exactly one matching live
+mob in that room and the run's exact runtime world. This isolates an instance
+run from the base world and every other run. Delayed steps re-resolve the mob
+rather than pinning a runtime row at Trigger start, so absence, movement,
+despawn, ambiguity, or a failed `where` causes the step to fail atomically.
+One action executes one command; command chains, history references, and nested
+`/cmd` dispatch are rejected. The dedicated runner accepts only explicitly
+audited handlers. Approved handlers include `say`, `emote`, `talk`, authored
+socials, room-subject, room-scoped `/echo`,
 transactional `/open`, `/close`, and `/lock`, player-subject transactional
 `follow` and `unfollow`, transactional `/transfer`, and transactional
 `/exitinstance`.
@@ -2304,7 +2314,13 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   wallet, same-step grants never subsidize them, and every final net balance
   must remain within the same limit.
 - `command` requires exactly one `command` string and a `subject` of
-  `trigger_room`, `trigger_actor`, or an exact-one room-local mob selector.
+  `trigger_room`, `trigger_actor`, or an exact-one same-runtime mob selector.
+  A mob selector uses `room: trigger_room` or a portable
+  `room@<positive-relative-id>`, plus a mob-definition ref and optional
+  query-free `where`. The referenced room and definition must resolve in the
+  authored world. Execution re-resolves exactly one live match in that room
+  and the Trigger run's runtime world, including for delayed steps; selectors
+  cannot reach the base world or another instance run.
   Newlines, `;`/`&&` chains, history references, and nested `/cmd` are rejected;
   the resolved handler must explicitly support Trigger-step execution.
   Transactional `follow <character>` and `unfollow [character]` require

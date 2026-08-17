@@ -1139,6 +1139,140 @@ spec:
             self.trigger.steps,
         )
 
+    def test_apply_trigger_manifest_supports_remote_room_mob_subject(self):
+        charon = MobDefinition.objects.create(
+            world=self.world,
+            slug="remote-charon",
+            name="Charon",
+        )
+        remote_room = self.room.create_at("east")
+        canonical_room_ref = f"room@{remote_room.relative_id}"
+
+        for room_ref in (
+            f"room.{remote_room.id}",
+            f"room@{remote_room.x},{remote_room.y},{remote_room.z}",
+            canonical_room_ref,
+        ):
+            with self.subTest(room_ref=room_ref):
+                manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: command
+          subject:
+            type: mob
+            room: {room_ref}
+            mob: mobdefinition.{charon.slug}
+          command: say The ferry is ready.
+"""
+
+                parsed = builder_manifests.parse_trigger_manifest(
+                    world=self.world,
+                    manifest=yaml.safe_load(manifest),
+                )
+                self.assertEqual(
+                    parsed.steps[0]["actions"][0]["subject"]["room"],
+                    canonical_room_ref,
+                )
+
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 200, resp.data)
+                self.trigger.refresh_from_db()
+                subject = self.trigger.steps[0]["actions"][0]["subject"]
+                self.assertEqual(subject["room"], canonical_room_ref)
+                self.assertEqual(subject["mob"], f"mobdefinition.{charon.slug}")
+                self.assertEqual(
+                    resp.data["trigger"]["manifest"]["spec"]["steps"],
+                    self.trigger.steps,
+                )
+
+    def test_apply_trigger_manifest_rejects_unknown_remote_mob_subject_room(self):
+        charon = MobDefinition.objects.create(
+            world=self.world,
+            slug="isolated-charon",
+            name="Charon",
+        )
+        other_world = World.objects.new_world(
+            name="Foreign Command Subject World",
+            author=self.user,
+            config=WorldConfig.objects.create(),
+        )
+        other_room = other_world.config.starting_room
+
+        for room_ref in (f"room.{other_room.id}", "room@9223372036854775807"):
+            with self.subTest(room_ref=room_ref):
+                manifest = f"""
+kind: trigger
+metadata:
+  world: world.{self.world.id}
+  key: {self.trigger.key}
+spec:
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: command
+          subject:
+            type: mob
+            room: {room_ref}
+            mob: mobdefinition.{charon.slug}
+          command: say This should not run.
+"""
+
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400, resp.data)
+                self.assertIn("does not resolve in this world", str(resp.data))
+
+    def test_generic_trigger_step_normalization_requires_portable_subject_room(self):
+        steps = [{
+            "after_seconds": 0,
+            "actions": [{
+                "type": "command",
+                "subject": {
+                    "type": "mob",
+                    "room": "room@42",
+                    "mob": "mobdefinition.charon",
+                },
+                "command": "say Welcome.",
+            }],
+        }]
+
+        self.assertEqual(
+            normalize_trigger_steps(steps)[0]["actions"][0]["subject"]["room"],
+            "room@42",
+        )
+        for invalid_ref in (
+            "room.42",
+            "room@-1",
+            "room@0",
+            "room@01",
+            "room@9223372036854775808",
+            "world@base/room@42",
+        ):
+            invalid_steps = json.loads(json.dumps(steps))
+            invalid_steps[0]["actions"][0]["subject"]["room"] = invalid_ref
+            with self.subTest(invalid_ref=invalid_ref), self.assertRaisesRegex(
+                TriggerStepSpecError,
+                "canonical positive 'room@<relative_id>'",
+            ):
+                normalize_trigger_steps(invalid_steps)
+
     def test_apply_trigger_manifest_rejects_invalid_currency_steps(self):
         create_currency(
             world=self.world,

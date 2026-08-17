@@ -2582,6 +2582,26 @@ def _normalize_trigger_mob_definition_ref(
     return f"mobdefinition.{mob_definition.slug}"
 
 
+def _normalize_trigger_command_room_ref(
+    *,
+    world: World,
+    value: Any,
+    field_name: str,
+) -> str:
+    if parse_room_reference(value) is None:
+        raise serializers.ValidationError(
+            f"{field_name} must be 'trigger_room' or use "
+            "'room@<relative_id>', legacy 'room@x,y,z', or legacy "
+            "'room.<database_id>'."
+        )
+    room = resolve_room_reference(world, value)
+    if room is None:
+        raise serializers.ValidationError(
+            f"Room reference '{value}' does not resolve in this world."
+        )
+    return format_room_manifest_ref(room)
+
+
 def _normalize_trigger_currency_ref(
     *,
     world: World,
@@ -3689,6 +3709,13 @@ def parse_trigger_manifest(
             ),
             mob_ref_normalizer=lambda value, field_name: (
                 _normalize_trigger_mob_definition_ref(
+                    world=world,
+                    value=value,
+                    field_name=field_name,
+                )
+            ),
+            room_ref_normalizer=lambda value, field_name: (
+                _normalize_trigger_command_room_ref(
                     world=world,
                     value=value,
                     field_name=field_name,

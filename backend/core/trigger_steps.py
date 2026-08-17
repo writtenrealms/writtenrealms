@@ -111,6 +111,7 @@ def is_terminal_instance_exit_step(step: Any) -> bool:
 
 ItemRefNormalizer = Callable[[Any, str], str]
 MobRefNormalizer = Callable[[Any, str], str]
+RoomRefNormalizer = Callable[[Any, str], str]
 CurrencyRefNormalizer = Callable[[Any, str], str]
 ConditionNormalizer = Callable[[Any, str], Any]
 
@@ -174,6 +175,35 @@ def _context_ref(value: Any, *, field_name: str, expected: str) -> str:
     normalized = str(value or "").strip().lower()
     if normalized != expected:
         raise TriggerStepSpecError(f"{field_name} must be '{expected}'.")
+    return normalized
+
+
+def _command_subject_room_ref(
+    value: Any,
+    *,
+    field_name: str,
+    room_ref_normalizer: RoomRefNormalizer | None,
+) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == TRIGGER_ROOM_REF:
+        return normalized
+    if room_ref_normalizer is not None:
+        return room_ref_normalizer(value, field_name)
+
+    match = re.fullmatch(r"room@([1-9][0-9]*)", normalized)
+    relative_id = match.group(1) if match is not None else ""
+    if (
+        not relative_id
+        or len(relative_id) > 19
+        or (
+            len(relative_id) == 19
+            and relative_id > "9223372036854775807"
+        )
+    ):
+        raise TriggerStepSpecError(
+            f"{field_name} must be '{TRIGGER_ROOM_REF}' or use canonical "
+            "positive 'room@<relative_id>' syntax."
+        )
     return normalized
 
 
@@ -335,6 +365,7 @@ def _normalize_command_subject(
     *,
     field_name: str,
     mob_ref_normalizer: MobRefNormalizer | None,
+    room_ref_normalizer: RoomRefNormalizer | None,
     condition_normalizer: ConditionNormalizer | None,
 ) -> str | dict[str, Any]:
     if isinstance(value, str):
@@ -360,10 +391,10 @@ def _normalize_command_subject(
         )
     normalized: dict[str, Any] = {
         "type": "mob",
-        "room": _context_ref(
+        "room": _command_subject_room_ref(
             subject.get("room"),
             field_name=f"{field_name}.room",
-            expected=TRIGGER_ROOM_REF,
+            room_ref_normalizer=room_ref_normalizer,
         ),
         "mob": _mob_ref(
             subject.get("mob"),
@@ -418,6 +449,7 @@ def _normalize_action(
     bindings: set[str],
     item_ref_normalizer: ItemRefNormalizer | None,
     mob_ref_normalizer: MobRefNormalizer | None,
+    room_ref_normalizer: RoomRefNormalizer | None,
     currency_ref_normalizer: CurrencyRefNormalizer | None,
     condition_normalizer: ConditionNormalizer | None,
 ) -> dict[str, Any]:
@@ -470,6 +502,7 @@ def _normalize_action(
                 action.get("subject"),
                 field_name=f"{field_name}.subject",
                 mob_ref_normalizer=mob_ref_normalizer,
+                room_ref_normalizer=room_ref_normalizer,
                 condition_normalizer=condition_normalizer,
             ),
             "command": _normalize_step_command(
@@ -709,6 +742,7 @@ def normalize_trigger_steps(
     *,
     item_ref_normalizer: ItemRefNormalizer | None = None,
     mob_ref_normalizer: MobRefNormalizer | None = None,
+    room_ref_normalizer: RoomRefNormalizer | None = None,
     currency_ref_normalizer: CurrencyRefNormalizer | None = None,
     condition_normalizer: ConditionNormalizer | None = None,
 ) -> list[dict[str, Any]]:
@@ -762,6 +796,7 @@ def normalize_trigger_steps(
                 bindings=bindings,
                 item_ref_normalizer=item_ref_normalizer,
                 mob_ref_normalizer=mob_ref_normalizer,
+                room_ref_normalizer=room_ref_normalizer,
                 currency_ref_normalizer=currency_ref_normalizer,
                 condition_normalizer=condition_normalizer,
             )
