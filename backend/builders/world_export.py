@@ -158,6 +158,8 @@ def _manifest_to_yaml(manifest: dict[str, Any]) -> str:
         Dumper=_WorldExportDumper,
         sort_keys=False,
         default_flow_style=False,
+        allow_unicode=True,
+        width=120,
     )
 
 
@@ -168,6 +170,8 @@ def manifest_stream_to_yaml(manifests: list[dict[str, Any]]) -> str:
         sort_keys=False,
         default_flow_style=False,
         explicit_start=True,
+        allow_unicode=True,
+        width=120,
     ).lstrip()
 
 

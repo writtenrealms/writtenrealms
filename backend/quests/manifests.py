@@ -64,6 +64,8 @@ def manifest_to_yaml(manifest: dict[str, Any]) -> str:
         Dumper=_ManifestDumper,
         sort_keys=False,
         default_flow_style=False,
+        allow_unicode=True,
+        width=120,
     )
 
 

@@ -48,6 +48,24 @@ class TestQuestManifests(AuthenticatedBuilderWorldTestCase):
         self.assertNotIn("lead", template["yaml"])
         self.assertNotIn("stakes", template["yaml"])
 
+    def test_manifest_yaml_keeps_unicode_multiline_prose_readable(self):
+        rendered = quest_manifests.manifest_to_yaml(
+            {
+                "kind": "quest",
+                "spec": {
+                    "description": (
+                        "A traveler’s first account.\n\n"
+                        "A second paragraph follows.\n"
+                    ),
+                },
+            }
+        )
+
+        self.assertIn("  description: |\n", rendered)
+        self.assertIn("traveler’s first account", rendered)
+        self.assertNotIn(r"\u2019", rendered)
+        self.assertNotIn('description: "', rendered)
+
     def test_quest_list_and_detail_canonicalize_room_refs(self):
         legacy_ref = f"room.{self.room.id}"
         canonical_ref = f"room@{self.room.relative_id}"

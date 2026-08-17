@@ -25,6 +25,12 @@ spec:
 `writtenrealms.com/v1alpha3`. The `kind` value is case-insensitive, although
 lowercase is the canonical style.
 
+When a save reloads canonical YAML, multiline text is emitted as a literal
+`|` block and Unicode punctuation remains readable rather than becoming escape
+sequences. Ordinary prose fields also remain on one line when they fit within
+the canonical 120-column width. This keeps descriptions convenient to edit
+while preserving their paragraph breaks.
+
 ## Applying Multiple Documents
 
 Separate documents with `---`. They are applied in source order, so place

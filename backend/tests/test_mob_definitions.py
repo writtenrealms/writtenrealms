@@ -178,6 +178,56 @@ spec:
         self.assertEqual(definition.attributes, {"brawn": 2})
         self.assertEqual(definition.randomization["attributes"][0]["mode"], "favor_high")
 
+    def test_saved_and_exported_yaml_keeps_unicode_multiline_prose_readable(self):
+        manifest = f"""
+kind: mobdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: aeceus
+  name: Aeceus
+spec:
+  description: |
+    Son of Zeus and the Oceanid Aegina, Aeceus ruled the island of his mother’s name.
+
+    After his death, Zeus appointed Aeceus as one of the Judges of the Dead.
+  room_description: Aeceus sits to the right of Minos, a keychain dangling from the arm of his chair.
+"""
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        saved_yaml = response.data["mob_definition"]["yaml"]
+        self.assertIn("  description: |\n", saved_yaml)
+        self.assertIn("mother’s name", saved_yaml)
+        self.assertIn(
+            "\n\n    After his death, Zeus appointed Aeceus",
+            saved_yaml,
+        )
+        self.assertNotIn(r"\u2019", saved_yaml)
+        self.assertNotIn('description: "', saved_yaml)
+        self.assertIn(
+            "  room_description: Aeceus sits to the right of Minos, "
+            "a keychain dangling from the arm of his chair.\n",
+            saved_yaml,
+        )
+
+        export_response = self.client.get(self.export_ep)
+
+        self.assertEqual(export_response.status_code, 200, export_response.data)
+        exported_yaml = export_response.data["yaml"]
+        self.assertIn("  description: |\n", exported_yaml)
+        self.assertIn("mother’s name", exported_yaml)
+        self.assertNotIn(r"\u2019", exported_yaml)
+        self.assertIn(
+            "  room_description: Aeceus sits to the right of Minos, "
+            "a keychain dangling from the arm of his chair.\n",
+            exported_yaml,
+        )
+
     def test_mob_definition_initial_state_round_trips_and_partial_updates_preserve_it(self):
         create_manifest = f"""
 kind: mobdefinition
