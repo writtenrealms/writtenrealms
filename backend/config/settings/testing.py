@@ -33,6 +33,36 @@ PRINT_UNSENT_EMAIL = False
 
 RAVEN_CONFIG = {}
 
+# Keep successful test runs focused on the test runner's own output. Expected
+# warnings and errors are captured explicitly with assertLogs in the tests that
+# exercise those paths. Defining a root handler also prevents imported ASGI
+# modules from installing a process-wide console handler via basicConfig.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'null': {
+            'class': 'logging.NullHandler',
+        },
+    },
+    'root': {
+        'handlers': ['null'],
+        'level': 'WARNING',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['null'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'django.server': {
+            'handlers': ['null'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+    },
+}
+
 # Password hashing strength is irrelevant to test behavior and the production
 # hashers make fixture creation dominate the backend suite runtime.
 PASSWORD_HASHERS = [

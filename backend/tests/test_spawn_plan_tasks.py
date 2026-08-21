@@ -51,7 +51,13 @@ class TestRunWorldSpawnPlansTask(WorldTestCase):
 
         mock_run_spawn_plans.side_effect = side_effect
 
-        run_world_spawn_plans()
+        with self.assertLogs('lifecycle', level='ERROR') as logs:
+            run_world_spawn_plans()
+
+        self.assertIn(
+            'Error running spawn plans for world',
+            '\n'.join(logs.output),
+        )
 
         called_world_ids = {
             call.kwargs['world'].id

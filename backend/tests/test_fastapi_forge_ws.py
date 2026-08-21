@@ -61,15 +61,18 @@ class TestForgeWebSocketAuth(unittest.TestCase):
             "wrong-secret",
             algorithm=JWT_ALGORITHM
         )
-        try:
-            with self.client.websocket_connect(
-                f"/ws/forge/?token={invalid_token}"
-            ) as ws:
-                # Should be closed
+        with self.assertLogs("fastapi_app", level="ERROR") as logs:
+            try:
+                with self.client.websocket_connect(
+                    f"/ws/forge/?token={invalid_token}"
+                ) as ws:
+                    # Should be closed
+                    pass
+            except Exception:
+                # Expected - connection should be rejected
                 pass
-        except Exception:
-            # Expected - connection should be rejected
-            pass
+
+        self.assertIn("JWT decode error", "\n".join(logs.output))
 
     def test_connection_with_valid_token_accepted(self):
         """WebSocket connection with valid token should be accepted."""
@@ -202,7 +205,7 @@ class TestConnectionManager(unittest.TestCase):
             await self.manager.remove_from_group(client_id, "test-group")
             self.assertNotIn("test-group", self.manager.client_groups[client_id])
 
-        asyncio.get_event_loop().run_until_complete(test())
+        asyncio.run(test())
 
     def test_player_client_mapping(self):
         """Manager should track player to client mappings."""

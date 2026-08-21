@@ -90,10 +90,15 @@ class TestStartWorld(WorldTestCase):
             "broken spawn plan")
         spawn_world = self.world.create_spawn_world()
 
-        with self.assertRaises(ServiceError) as error:
-            WorldSmith(spawn_world).start()
+        with self.assertLogs('lifecycle', level='ERROR') as logs:
+            with self.assertRaises(ServiceError) as error:
+                WorldSmith(spawn_world).start()
 
         self.assertIn("broken spawn plan", str(error.exception))
+        self.assertIn(
+            'Error starting world',
+            '\n'.join(logs.output),
+        )
         spawn_world.refresh_from_db()
         self.assertEqual(
             spawn_world.lifecycle,

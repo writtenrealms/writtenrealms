@@ -190,7 +190,10 @@ class TestFollowingMovement(WorldTestCase):
             last_processed_sequence=0,
         )
 
-        with patch(
+        with self.assertLogs(
+            "spawns.following",
+            level="ERROR",
+        ) as logs, patch(
             "spawns.tasks.propagate_follow_movement.apply_async",
             side_effect=RuntimeError("broker unavailable"),
         ):
@@ -200,6 +203,11 @@ class TestFollowingMovement(WorldTestCase):
                     player_id=self.player.id,
                     payload={"direction": adv_consts.DIRECTION_EAST},
                 )
+
+        self.assertIn(
+            "Failed to enqueue durable follow movement",
+            "\n".join(logs.output),
+        )
 
         row = GameEventOutbox.objects.get(
             event_type=FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE,
@@ -423,7 +431,10 @@ class TestFollowingMovement(WorldTestCase):
             last_processed_sequence=0,
         )
 
-        with patch(
+        with self.assertLogs(
+            "django.test",
+            level="ERROR",
+        ) as logs, patch(
             "spawns.events._schedule_follow_event_data",
             side_effect=RuntimeError("process stopped before schedule"),
         ):
@@ -433,6 +444,8 @@ class TestFollowingMovement(WorldTestCase):
                     player_id=self.player.id,
                     payload={"direction": adv_consts.DIRECTION_EAST},
                 )
+
+        self.assertIn("process stopped before schedule", "\n".join(logs.output))
 
         control = GameEventOutbox.objects.get(
             event_type=FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE,
@@ -494,7 +507,10 @@ class TestFollowingMovement(WorldTestCase):
             last_processed_sequence=0,
         )
 
-        with patch(
+        with self.assertLogs(
+            "django.test",
+            level="ERROR",
+        ) as logs, patch(
             "spawns.following._claim_and_enqueue_follow_movement",
             side_effect=RuntimeError("claim database unavailable"),
         ):
@@ -504,6 +520,8 @@ class TestFollowingMovement(WorldTestCase):
                     player_id=self.player.id,
                     payload={"direction": adv_consts.DIRECTION_EAST},
                 )
+
+        self.assertIn("claim database unavailable", "\n".join(logs.output))
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, destination.id)
@@ -569,11 +587,16 @@ class TestFollowingMovement(WorldTestCase):
                 raise RuntimeError("injected follower failure")
             return real_dispatch(*args, **kwargs)
 
-        with patch(
+        with self.assertLogs(
+            "spawns.following",
+            level="ERROR",
+        ) as logs, patch(
             "spawns.handlers.registry.dispatch_command",
             side_effect=dispatch_with_one_failure,
         ):
             result = propagate_follow_movement_batch(edge, batch_size=2)
+
+        self.assertIn("Failed follow movement", "\n".join(logs.output))
 
         self.player.refresh_from_db()
         later_follower.refresh_from_db()
@@ -657,7 +680,10 @@ class TestFollowingMovement(WorldTestCase):
         )
         started_at = timezone.now()
 
-        with patch(
+        with self.assertLogs(
+            "spawns.tasks",
+            level="ERROR",
+        ) as logs, patch(
             "spawns.following.propagate_follow_movement_batch",
             side_effect=RuntimeError("page database unavailable"),
         ), patch(
@@ -672,6 +698,11 @@ class TestFollowingMovement(WorldTestCase):
                 outbox_event_id=str(outbox.event_id),
                 claim_token=str(claim_token),
             )
+
+        self.assertIn(
+            "Follow movement broken-page page failed",
+            "\n".join(logs.output),
+        )
 
         self.assertEqual(processed, 0)
         retry.assert_not_called()
@@ -702,7 +733,10 @@ class TestFollowingMovement(WorldTestCase):
             retry_after_id=None,
         )
 
-        with patch(
+        with self.assertLogs(
+            "spawns.tasks",
+            level="ERROR",
+        ) as logs, patch(
             "spawns.following.propagate_follow_movement_batch",
             return_value=result,
         ), patch(
@@ -720,6 +754,11 @@ class TestFollowingMovement(WorldTestCase):
                 outbox_event_id=str(outbox.event_id),
                 claim_token=str(claim_token),
             )
+
+        self.assertIn(
+            "Failed to continue follow movement broken-continuation",
+            "\n".join(logs.output),
+        )
 
         self.assertEqual(processed, 4)
         retry.assert_not_called()
@@ -852,7 +891,10 @@ class TestFollowingMovement(WorldTestCase):
         self.assertEqual(outbox.last_error, "")
 
     def test_page_failure_backoff_uses_celery_retry_count(self):
-        with patch(
+        with self.assertLogs(
+            "spawns.tasks",
+            level="ERROR",
+        ) as logs, patch(
             "spawns.following.propagate_follow_movement_batch",
             side_effect=RuntimeError("page database unavailable"),
         ), patch(
@@ -871,6 +913,11 @@ class TestFollowingMovement(WorldTestCase):
                     event_data={"movement_id": "retry-backoff"},
                     attempt=0,
                 )
+
+        self.assertIn(
+            "Follow movement retry-backoff page failed",
+            "\n".join(logs.output),
+        )
 
         retry.assert_called_once()
         self.assertEqual(retry.call_args.kwargs["countdown"], 16)

@@ -22,6 +22,7 @@ from quests.models import QuestInstance, QuestTemplate
 from quests.services.discovery import list_opportunities
 from tests.base import WorldTestCase
 from worlds.models import Room
+from worlds.room_refs import format_room_manifest_ref
 from tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
@@ -341,7 +342,7 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
                 "sources": [
                     {
                         "type": "room_prompt",
-                        "room": f"room.{self.room.id}",
+                        "room": format_room_manifest_ref(self.room),
                         "callout": "A weathered placard asks for a shrine survey.",
                     }
                 ],
@@ -521,7 +522,7 @@ class TestRoomPromptCalloutRuntime(QuestRuntimeTestCase):
                 "sources": [
                     {
                         "type": "room_prompt",
-                        "room": f"room.{self.room.id}",
+                        "room": format_room_manifest_ref(self.room),
                         "callout": "A forgotten coat hangs over the back of a chair.",
                     }
                 ],
@@ -593,7 +594,7 @@ class TestPortableRoomRefsQuestRuntime(QuestRuntimeTestCase):
                 "sources": [
                     {
                         "type": "room_prompt",
-                        "room": f"room@{self.room.x},{self.room.y},{self.room.z}",
+                        "room": format_room_manifest_ref(self.room),
                         "callout": "A survey notice hangs here.",
                     }
                 ],
@@ -620,8 +621,8 @@ class TestPortableRoomRefsQuestRuntime(QuestRuntimeTestCase):
                                             "in": [
                                                 "event.target.id",
                                                 [
-                                                    f"room@{self.room_two.x},{self.room_two.y},{self.room_two.z}",
-                                                    f"room@{self.room_three.x},{self.room_three.y},{self.room_three.z}",
+                                                    format_room_manifest_ref(self.room_two),
+                                                    format_room_manifest_ref(self.room_three),
                                                 ],
                                             ]
                                         },
@@ -650,7 +651,7 @@ class TestPortableRoomRefsQuestRuntime(QuestRuntimeTestCase):
             ],
         )
 
-    def test_room_prompt_and_room_objectives_accept_coordinate_refs(self):
+    def test_room_prompt_and_room_objectives_accept_canonical_refs(self):
         with capture_game_messages() as discovery_messages:
             dispatch_text_command(self.player.id, "look")
 
@@ -712,7 +713,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
                 "sources": [
                     {
                         "type": "room_prompt",
-                        "room": f"room.{self.room.id}",
+                        "room": format_room_manifest_ref(self.room),
                         "callout": "A survey route placard hangs here.",
                     }
                 ],
@@ -917,7 +918,7 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
                 "sources": [
                     {
                         "type": "room_prompt",
-                        "room": f"room.{self.room.id}",
+                        "room": format_room_manifest_ref(self.room),
                         "callout": "Gus looks like he needs a hand behind the bar.",
                     }
                 ],
@@ -934,7 +935,7 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
                     "room_items": [
                         {
                             "id": "saloon_keg",
-                            "room": f"room.{self.back_room.id}",
+                            "room": format_room_manifest_ref(self.back_room),
                             "item_definition": self.keg_template.slug,
                             "room_description": "A full saloon keg rests here.",
                         }
@@ -1068,7 +1069,7 @@ class TestQuestRepeatabilityRuntime(QuestRuntimeTestCase):
                 "sources": [
                     {
                         "type": "room_prompt",
-                        "room": f"room.{self.room.id}",
+                        "room": format_room_manifest_ref(self.room),
                         "callout": "A trial marker stands ready here.",
                     }
                 ],
@@ -1132,7 +1133,7 @@ class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):
                 "sources": [
                     {
                         "type": "room_prompt",
-                        "room": f"room.{self.room.id}",
+                        "room": format_room_manifest_ref(self.room),
                         "callout": "A note lies beside the fire.",
                     }
                 ],
@@ -1731,7 +1732,7 @@ class TestQuestScopedState(QuestRuntimeTestCase):
                 "sources": [
                     {
                         "type": "room_prompt",
-                        "room": f"room.{self.room.id}",
+                        "room": format_room_manifest_ref(self.room),
                         "callout": "A weather log waits on the wall.",
                     }
                 ],
@@ -1839,7 +1840,7 @@ class TestQuestCompletionPrerequisites(QuestRuntimeTestCase):
                 "sources": [
                     {
                         "type": "room_prompt",
-                        "room": f"room.{self.room.id}",
+                        "room": format_room_manifest_ref(self.room),
                         "callout": "A veteran task notice hangs here.",
                     }
                 ],
@@ -1871,7 +1872,7 @@ class TestQuestCompletionPrerequisites(QuestRuntimeTestCase):
                 "sources": [
                     {
                         "type": "room_prompt",
-                        "room": f"room.{self.room.id}",
+                        "room": format_room_manifest_ref(self.room),
                         "callout": "A second veteran notice hangs here.",
                     }
                 ],
@@ -1908,7 +1909,7 @@ class TestQuestCompletionPrerequisites(QuestRuntimeTestCase):
                 "sources": [
                     {
                         "type": "room_prompt",
-                        "room": f"room.{self.room.id}",
+                        "room": format_room_manifest_ref(self.room),
                         "callout": "A sealed notice waits here.",
                     }
                 ],

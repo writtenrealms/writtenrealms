@@ -6765,8 +6765,17 @@ class TestScheduledTriggerSteps(WorldTestCase):
         poison_run.save(update_fields=["steps"])
         due_at = max(poison_run.next_run_ts, healthy_run.next_run_ts)
 
-        with self.captureOnCommitCallbacks(execute=True):
-            result = process_due_trigger_runs(limit=10, now=due_at)
+        with self.assertLogs(
+            "spawns.trigger_steps",
+            level="ERROR",
+        ) as logs:
+            with self.captureOnCommitCallbacks(execute=True):
+                result = process_due_trigger_runs(limit=10, now=due_at)
+
+        self.assertIn(
+            "Cancelling malformed scheduled trigger run",
+            "\n".join(logs.output),
+        )
 
         self.assertEqual(result["processed"], 2)
         self.assertEqual(result["cancelled"], 1)

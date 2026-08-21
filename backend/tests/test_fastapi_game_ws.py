@@ -238,7 +238,13 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
             ]
         )
 
-        self._run_socket(websocket, celery_app)
+        with self.assertLogs("game_ws", level="ERROR") as logs:
+            self._run_socket(websocket, celery_app)
+
+        self.assertIn(
+            "Unable to queue text command",
+            "\n".join(logs.output),
+        )
 
         self.assertFalse(
             any(
