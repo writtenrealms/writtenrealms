@@ -136,6 +136,8 @@ world-relative id. Moving the room does not change this URL. Hovering a room
 link in the world, zone, and room breadcrumb navigation therefore exposes the
 relative id a builder should use, while the room screen presents `room@42` as
 the primary manifest identity and keeps its copy action in Technical details.
+That panel also lists the room's relative id and installation-local database
+id.
 While playing in a world, builders also see that same identity after each room
 name, for example `[ room@42 ]`.
 
@@ -176,10 +178,11 @@ For staff troubleshooting, a room can also be opened by database id:
 
 That path is a lookup alias, not a second canonical identity. After resolving
 the room inside the selected world, the builder replaces it with
-`/build/worlds/23/rooms/42`. Staff can see the database id in the room screen's
-less-prominent technical details when diagnosing an installation-specific
-problem. Ordinary builder labels, searches, and room pickers use `room@42`
-instead.
+`/build/worlds/23/rooms/42`. Every builder who can view the room can see the
+database id in the room screen's less-prominent Technical details when
+diagnosing an installation-specific problem; the database-id lookup route
+remains staff-only. Ordinary builder labels, searches, and room pickers use
+`room@42` instead.
 
 Do not interpret a bare room URL segment as either kind of id depending on
 what happens to exist. `/rooms/42` always means relative id 42, and

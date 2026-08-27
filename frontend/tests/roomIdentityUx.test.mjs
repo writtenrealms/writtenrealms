@@ -43,8 +43,17 @@ test("runtime builder location displays use room manifest refs", () => {
   assert.doesNotMatch(exitsSource, /room_data\.id/);
 });
 
-test("builder screens reserve database IDs for staff diagnostics", () => {
-  for (const source of [roomSource, zoneSource, pathSource]) {
+test("room details expose its database ID to builders", () => {
+  assert.match(
+    roomSource,
+    /<div>\s*<dt>Database ID<\/dt>\s*<dd>\{\{ room\.id \}\}<\/dd>\s*<\/div>/,
+  );
+  assert.doesNotMatch(
+    roomSource,
+    /v-if="store\.state\.auth\.user\.is_staff"[^>]*>\s*<dt>Database ID<\/dt>/,
+  );
+
+  for (const source of [zoneSource, pathSource]) {
     assert.match(source, /v-if="store\.state\.auth\.user\.is_staff"[^>]*>\s*(?:\n\s*)?(?:<dt>|Database ID)/);
   }
   assert.doesNotMatch(roomSource, /Deleted \$\{room_ref\} \(database ID/);
