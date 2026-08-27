@@ -603,8 +603,9 @@ spawn plans in the builder's current zone, bypassing their normal wait times
 and `respawn.mode: none` while retaining live placement output and scoped
 runtime state. Doors remain unchanged unless `--doors` is supplied; that option
 resets the zone's runtime doorway overrides to authored defaults without
-consuming the normal zone reset timer. Both forms affect only the current
-instance run.
+consuming or advancing the zone's independent door-reset schedule. Both forms
+affect only the current instance run; another run of the same template keeps
+its own door state and deadline.
 
 ## Group Play
 

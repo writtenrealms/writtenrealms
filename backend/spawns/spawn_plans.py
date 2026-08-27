@@ -1634,12 +1634,20 @@ def _plan_is_due(*, run: SpawnPlanRun, initial: bool, repopulate: bool) -> bool:
         return False
     if mode == RESPAWN_MODE_NONE:
         return False
-    if "seconds" not in policy:
-        seconds = (
-            run.plan.zone.respawn_wait
-            if mode == RESPAWN_MODE_INHERIT_ZONE
-            else 0
+    if mode == RESPAWN_MODE_INHERIT_ZONE and "seconds" not in policy:
+        from worlds.models import (
+            ZONE_POLICY_MODE_FIXED,
+            ZONE_POLICY_MODE_NONE,
         )
+
+        zone_mode = run.plan.zone.respawn_mode
+        if zone_mode == ZONE_POLICY_MODE_NONE:
+            return False
+        if zone_mode != ZONE_POLICY_MODE_FIXED:
+            return False
+        seconds = run.plan.zone.respawn_seconds
+    elif "seconds" not in policy:
+        seconds = 0
     else:
         seconds = policy["seconds"]
         if isinstance(seconds, bool) or not isinstance(seconds, (int, str)):

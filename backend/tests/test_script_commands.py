@@ -165,6 +165,172 @@ class TestScriptCommandRunner(WorldTestCase):
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, destination.id)
 
+    def test_runner_executes_transactional_player_direction_command(self):
+        destination = self.room.create_at("east")
+        self.player.stamina = 10
+        self.player.save(update_fields=["stamina"])
+
+        with transaction.atomic():
+            result = ScriptCommandRunner().execute(
+                issuer=self.room,
+                subject=self.player,
+                command="east",
+                render_actor=self.player,
+                runtime_world=self.spawn_world,
+            )
+
+        self.player.refresh_from_db()
+        self.assertEqual(result.mode, TRIGGER_STEP_MODE_TRANSACTIONAL)
+        self.assertEqual(self.player.room_id, destination.id)
+        self.assertLess(self.player.stamina, 10)
+        self.assertIn("cmd.move.success", {event.type for event in result.events})
+        self.assertIn(
+            "lifecycle.player.room.enter",
+            {event.type for event in result.events},
+        )
+        self.assertTrue(all(
+            event.data[SCRIPT_COMMAND_PROVENANCE_KEY]["subject"]["key"]
+            == self.player.key
+            for event in result.events
+        ))
+
+    def test_runner_rejects_player_direction_for_non_trigger_actor(self):
+        self.room.create_at("east")
+        other_player = self.create_player(
+            "Other Player",
+            user=self.create_user("other-player-move@example.com"),
+        )
+
+        with self.assertRaises(ScriptCommandError) as raised:
+            with transaction.atomic():
+                ScriptCommandRunner().execute(
+                    issuer=self.room,
+                    subject=other_player,
+                    command="east",
+                    render_actor=self.player,
+                    runtime_world=self.spawn_world,
+                )
+
+        self.assertEqual(raised.exception.code, "unsupported_command_subject")
+        other_player.refresh_from_db()
+        self.assertEqual(other_player.room_id, self.room.id)
+
+    def test_runner_executes_transactional_mob_direction_command(self):
+        destination = self.room.create_at("east")
+        origin_observer = self.create_player(
+            "Origin Observer",
+            user=self.create_user("mob-move-origin@example.com"),
+        )
+        destination_observer = self.create_player(
+            "Destination Observer",
+            user=self.create_user("mob-move-destination@example.com"),
+            room=destination,
+        )
+        for observer in (origin_observer, destination_observer):
+            observer.in_game = True
+            observer.save(update_fields=["in_game"])
+        mob = self.create_mob("Scene Guard", follow_move_sequence=7)
+
+        with transaction.atomic():
+            result = ScriptCommandRunner().execute(
+                issuer=self.room,
+                subject=mob,
+                command="east",
+                render_actor=self.player,
+                runtime_world=self.spawn_world,
+            )
+
+        mob.refresh_from_db()
+        self.assertEqual(result.mode, TRIGGER_STEP_MODE_TRANSACTIONAL)
+        self.assertEqual(mob.room_id, destination.id)
+        self.assertEqual(mob.follow_move_sequence, 8)
+        self.assertEqual(
+            [event.type for event in result.events],
+            [
+                "notification.movement.exit",
+                "notification.movement.enter",
+                "private.follow.directional_move",
+            ],
+        )
+        self.assertEqual(
+            set(result.events[0].recipients),
+            {self.player.key, origin_observer.key},
+        )
+        self.assertEqual(result.events[0].data["direction"], "east")
+        self.assertEqual(
+            result.events[1].recipients,
+            (destination_observer.key,),
+        )
+        self.assertEqual(result.events[1].data["direction"], "west")
+        self.assertTrue(all(
+            event.data[SCRIPT_COMMAND_PROVENANCE_KEY]["subject"]["key"]
+            == mob.key
+            for event in result.events
+        ))
+
+    def test_runner_requires_transaction_for_mob_direction_command(self):
+        self.room.create_at("east")
+        mob = self.create_mob("Waiting Guard")
+
+        with patch(
+            "spawns.script_commands.connection.in_atomic_block",
+            False,
+        ):
+            with self.assertRaises(ScriptCommandError) as raised:
+                ScriptCommandRunner().execute(
+                    issuer=self.room,
+                    subject=mob,
+                    command="east",
+                    render_actor=self.player,
+                    runtime_world=self.spawn_world,
+                )
+
+        self.assertEqual(raised.exception.code, "transaction_required")
+        mob.refresh_from_db()
+        self.assertEqual(mob.room_id, self.room.id)
+
+    def test_runner_requires_a_bare_mob_direction_command(self):
+        self.room.create_at("east")
+        mob = self.create_mob("Waiting Guard")
+
+        with self.assertRaises(ScriptCommandError) as raised:
+            with transaction.atomic():
+                ScriptCommandRunner().execute(
+                    issuer=self.room,
+                    subject=mob,
+                    command="east right now",
+                    render_actor=self.player,
+                    runtime_world=self.spawn_world,
+                )
+
+        self.assertEqual(raised.exception.code, "invalid_args")
+        mob.refresh_from_db()
+        self.assertEqual(mob.room_id, self.room.id)
+
+    def test_non_trigger_mob_direction_dispatch_remains_unsupported(self):
+        self.room.create_at("east")
+        mob = self.create_mob("Waiting Guard")
+        messages = []
+
+        dispatch_command(
+            command_type="text",
+            actor_type="mob",
+            actor_id=mob.id,
+            payload={"text": "east"},
+            script_source=True,
+            capture_only=True,
+            published_messages=messages,
+        )
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["type"], "cmd.move.error")
+        self.assertEqual(
+            messages[0]["data"]["code"],
+            "command_not_step_safe",
+        )
+        mob.refresh_from_db()
+        self.assertEqual(mob.room_id, self.room.id)
+
     def test_transactional_door_command_rejects_a_player_subject(self):
         with self.assertRaises(ScriptCommandError) as raised:
             with transaction.atomic():
@@ -334,7 +500,7 @@ class TestScriptCommandRunner(WorldTestCase):
             ScriptCommandRunner().execute(
                 issuer=self.room,
                 subject=self.player,
-                command="north",
+                command="kill nobody",
                 render_actor=self.player,
                 runtime_world=self.spawn_world,
             )

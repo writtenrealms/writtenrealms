@@ -42,6 +42,14 @@ MAX_ALLOCATABLE_ROOM_RELATIVE_ID = BIGINT_MAX - 1
 INSTANCE_SLUG_DB_PATTERN = (
     r'^([a-z0-9]|[a-z0-9][a-z0-9_-]*[a-z0-9])$'
 )
+ZONE_POLICY_MODE_FIXED = 'fixed'
+ZONE_POLICY_MODE_NONE = 'none'
+ZONE_POLICY_MODES = (
+    ZONE_POLICY_MODE_FIXED,
+    ZONE_POLICY_MODE_NONE,
+)
+ZONE_POLICY_MODE_CHOICES = list_to_choice(ZONE_POLICY_MODES)
+ZONE_POLICY_MAX_SECONDS = 2_147_483_647
 
 
 class World(AdventBaseModel):
@@ -1565,11 +1573,64 @@ class Zone(AdventWorldBaseModel):
     # Authored defaults copied into per-runtime ZoneState rows.
     initial_state = models.JSONField(default=dict, blank=True)
 
-    respawn_wait = models.IntegerField(default=300)
-    last_respawn_ts = models.DateTimeField(**optional)
+    # Spawn plans may inherit this authored default. Runtime reconciliation
+    # timestamps remain on SpawnPlanRun so parallel worlds never share a
+    # schedule through the authored Zone row.
+    respawn_mode = models.CharField(
+        max_length=16,
+        choices=ZONE_POLICY_MODE_CHOICES,
+        default=ZONE_POLICY_MODE_FIXED,
+    )
+    respawn_seconds = models.PositiveIntegerField(default=300, **optional)
+
+    # Door reset policy is intentionally independent from mob/item respawn.
+    # Its next due time belongs to each runtime ZoneDoorResetSchedule below.
+    door_reset_mode = models.CharField(
+        max_length=16,
+        choices=ZONE_POLICY_MODE_CHOICES,
+        default=ZONE_POLICY_MODE_FIXED,
+    )
+    door_reset_seconds = models.PositiveIntegerField(default=300, **optional)
+    # Incremented by canonical manifest edits when the door policy changes.
+    # Runtime schedules lazily adopt the version so policy edits remain O(1)
+    # regardless of how many historical runtime worlds exist.
+    door_reset_policy_version = models.PositiveBigIntegerField(
+        default=0,
+        editable=False,
+    )
 
     # Applicable for 'zone' pvp mode
     pvp_zone = models.BooleanField(default=False)
+
+    class Meta(AdventWorldBaseModel.Meta):
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        respawn_mode=ZONE_POLICY_MODE_FIXED,
+                        respawn_seconds__isnull=False,
+                    )
+                    | models.Q(
+                        respawn_mode=ZONE_POLICY_MODE_NONE,
+                        respawn_seconds__isnull=True,
+                    )
+                ),
+                name='worlds_zone_respawn_policy_shape',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        door_reset_mode=ZONE_POLICY_MODE_FIXED,
+                        door_reset_seconds__isnull=False,
+                    )
+                    | models.Q(
+                        door_reset_mode=ZONE_POLICY_MODE_NONE,
+                        door_reset_seconds__isnull=True,
+                    )
+                ),
+                name='worlds_zone_door_reset_policy_shape',
+            ),
+        ]
 
     @property
     def key(self):
@@ -1619,6 +1680,31 @@ class ZoneState(BaseModel):
             models.UniqueConstraint(
                 fields=['world', 'zone'],
                 name='worlds_zone_state_runtime_owner',
+            ),
+        ]
+
+
+class ZoneDoorResetSchedule(BaseModel):
+
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='zone_door_reset_schedules',
+    )
+    zone = models.ForeignKey(
+        'worlds.Zone',
+        on_delete=models.CASCADE,
+        related_name='runtime_door_reset_schedules',
+    )
+    next_reset_ts = models.DateTimeField(db_index=True, **optional)
+    policy_version = models.PositiveBigIntegerField(default=0)
+
+    class Meta(BaseModel.Meta):
+        ordering = ['world_id', 'zone_id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['world', 'zone'],
+                name='worlds_zone_door_reset_schedule_owner',
             ),
         ]
 

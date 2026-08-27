@@ -2525,10 +2525,11 @@ def _execute_current_step(
                 ) from exc
             action_events[action_index] = list(command_result.events)
             if command_result.mode == TRIGGER_STEP_MODE_TRANSACTIONAL:
-                # The initial transactional command contract can move only
-                # the Trigger actor. Refresh it before later command subjects,
+                # Transactional handlers may move the Trigger actor or a
+                # selected mob. Refresh the actor before later subjects,
                 # currency witness snapshots, room echoes, or send-except
-                # audiences are resolved.
+                # audiences are resolved; clearing recipient caches is safe
+                # for either kind of movement.
                 trigger_actor.refresh_from_db()
                 room_recipient_keys_cache.clear()
                 currency_context_cache.clear()

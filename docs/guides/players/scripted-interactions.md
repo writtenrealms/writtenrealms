@@ -69,6 +69,13 @@ also pull that mob's followers; player transfers, other transfer forms,
 instance transitions, death routing, and other non-directional relocations do
 not.
 
+A scripted scene can also have one specific mob walk through an adjacent exit
+from another room. Occupants see the same directional departure and arrival
+messages as ordinary mob movement, and a closed or locked door or active fight
+can prevent the move. The mob's move and every other action in that step still
+commit or roll back together, so a later failed payment or command cannot leave
+the mob halfway into the scene.
+
 A Trigger step may also use the audited `/transfer` command to move the
 character who activated it. The transfer, any same-step currency change, and
 same-step output succeed or fail together. If the step fails, your room and
@@ -92,7 +99,9 @@ new location epoch even when their destination uses the same authored room, so
 arrival behavior may run again for those lifecycle changes. Login, reconnect,
 and offline location repair do not count as room arrivals.
 
-Other movement, combat, inventory changes, and mutating player commands beyond
-the audited following and transfer exceptions are not available through the
-generic step-command path. Builders use explicit typed actions for state
-changes that need transactional guarantees.
+A Trigger may make its original player actor issue one bare movement direction.
+That movement observes the same exits, doors, stamina, combat, policy,
+follower, and arrival behavior as player input. Arbitrary forced player
+commands, combat, and inventory changes remain unavailable through the generic
+step-command path. Builders use explicit typed actions for other state changes
+that need transactional guarantees.

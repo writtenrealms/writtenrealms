@@ -209,14 +209,6 @@ class ScriptCommandRunner:
                 f"The '{command_token}' command is not safe for Trigger steps.",
                 code="command_not_step_safe",
             )
-        if (
-            handler_mode == TRIGGER_STEP_MODE_TRANSACTIONAL
-            and not connection.in_atomic_block
-        ):
-            raise ScriptCommandError(
-                "Transactional Trigger-step commands require an active transaction.",
-                code="transaction_required",
-            )
         if subject_type not in getattr(
             handler,
             "supported_actor_types",
@@ -235,6 +227,14 @@ class ScriptCommandRunner:
         if trigger_step_rejection is not None:
             message, code = trigger_step_rejection
             raise ScriptCommandError(message, code=code)
+        if (
+            handler_mode == TRIGGER_STEP_MODE_TRANSACTIONAL
+            and not connection.in_atomic_block
+        ):
+            raise ScriptCommandError(
+                "Transactional Trigger-step commands require an active transaction.",
+                code="transaction_required",
+            )
 
         payload.update({
             "skip_triggers": True,

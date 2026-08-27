@@ -842,17 +842,41 @@ def _enqueue_game_event_batch(
         if rows:
             GameEventOutbox.objects.bulk_create(rows)
 
-        if rows and control_event_ids:
-            attached = GameEventOutbox.objects.filter(
-                event_id__in=control_event_ids,
-                event_type=FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE,
-                depends_on_batch_id__isnull=True,
-            ).update(depends_on_batch_id=batch_id)
-            if attached != len(control_event_ids):
+        if control_event_ids:
+            control_data = {
+                uuid.UUID(str(event.data[FOLLOW_OUTBOX_EVENT_ID_KEY])):
+                deepcopy(event.data)
+                for event in followed_controls
+            }
+            control_rows = list(
+                GameEventOutbox.objects.select_for_update(of=("self",))
+                .filter(
+                    event_id__in=control_event_ids,
+                    event_type=FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE,
+                    depends_on_batch_id__isnull=True,
+                )
+                .order_by("id")
+            )
+            if len(control_rows) != len(control_event_ids):
                 raise RuntimeError(
                     "Could not attach every follow edge to its visible batch."
                 )
-        elif followed_controls:
+            for control_row in control_rows:
+                # The edge can be prepared before an audited runner adds its
+                # final provenance/depth. Keep the durable control row aligned
+                # with the event that the enclosing batch actually captured.
+                control_row.data = control_data[control_row.event_id]
+                if rows:
+                    control_row.depends_on_batch_id = batch_id
+            GameEventOutbox.objects.bulk_update(
+                control_rows,
+                [
+                    "data",
+                    *(["depends_on_batch_id"] if rows else []),
+                ],
+            )
+
+        if not rows and followed_controls:
             # A standalone private edge has no visible work to gate it. Hand it
             # off immediately after commit instead of waiting for the heartbeat.
             standalone_data = [

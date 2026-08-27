@@ -82,6 +82,22 @@ not yet export WR1 hard-coded core or flex class skills from the Advent Python
 skill modules. Those can be mapped later if we decide they are worth carrying
 forward.
 
+## Legacy Zone Policy Mapping
+
+WR1 stored one authored `respawn_wait` value on a zone. Canonical WR2 zone
+manifests have two independent typed policies, so the converter should preserve
+the old shared behavior by mapping that one value into both:
+
+- A negative wait emits `spec.respawn.mode: none` and
+  `spec.door_reset.mode: none`.
+- A non-negative wait emits `mode: fixed` plus the legacy wait as `seconds` for
+  both `spec.respawn` and `spec.door_reset`.
+
+Do not emit `respawn_wait` in WR2 YAML. Do not export a live last-reset
+timestamp or inspect current mobs, items, or doors to choose the policies.
+Runtime doorway state and its next reset deadline belong to each WR2 runtime
+world, not the authored zone being converted.
+
 ## Legacy Death-Destination Boundary
 
 WR1 `Procession` records linked factions to one or more death rooms and were

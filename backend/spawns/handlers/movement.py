@@ -16,6 +16,7 @@ from spawns.actions.movement import (
     AdjustStaminaAction,
     BuildMoveEventsAction,
     ChangeRoomAction,
+    MoveMobAction,
     ResolveMoveAction,
 )
 from spawns.events import (
@@ -26,7 +27,12 @@ from spawns.events import (
     persist_follow_dependent_game_events,
     publish_events,
 )
-from spawns.handlers.base import CommandContext, CommandHandler
+from spawns.handlers.base import (
+    TRIGGER_STEP_MODE_TRANSACTIONAL,
+    CommandContext,
+    CommandHandler,
+)
+from spawns.handlers.permissions import has_builder_access
 from spawns.handlers.registry import register_handler
 from spawns.models import Player
 from spawns.triggers import evaluate_movement_policies
@@ -38,6 +44,8 @@ logger = logging.getLogger(__name__)
 @register_handler
 class MoveHandler(CommandHandler):
     command_type = "move"
+    supported_actor_types = ("player", "mob")
+    trigger_step_mode = TRIGGER_STEP_MODE_TRANSACTIONAL
     text_commands = ("north", "east", "south", "west", "up", "down")
     text_aliases = {
         "n": adv_consts.DIRECTION_NORTH,
@@ -58,6 +66,91 @@ class MoveHandler(CommandHandler):
         ],
     }
 
+    def validate_trigger_step_command(
+        self,
+        *,
+        command: str,
+        subject_type: str,
+        subject_key: str,
+        render_actor_key: str,
+    ) -> tuple[str, str] | None:
+        if subject_type not in {"player", "mob"}:
+            return (
+                "Only player or mob subjects may execute movement commands "
+                "in Trigger steps.",
+                "command_not_step_safe",
+            )
+        if subject_type == "player" and (
+            not str(render_actor_key or "").lower().startswith("player.")
+            or str(subject_key or "").lower()
+            != str(render_actor_key or "").lower()
+        ):
+            return (
+                "Player movement commands require the player Trigger actor.",
+                "unsupported_command_subject",
+            )
+        if len(str(command or "").split()) != 1:
+            return (
+                "A movement action must contain one bare direction.",
+                "invalid_args",
+            )
+        return None
+
+    def _handle_mob(self, ctx: CommandContext, direction: str) -> None:
+        audited_trigger_step = bool(
+            ctx.trigger_step and ctx.capture_only and ctx.script_source
+        )
+        authorized_builder_force = bool(
+            ctx.builder_force
+            and not ctx.script_source
+            and ctx.issuer_type == "player"
+            and isinstance(ctx.issuer, Player)
+            and has_builder_access(ctx.issuer)
+        )
+        if not (audited_trigger_step or authorized_builder_force):
+            message = (
+                "Mob movement is supported only by audited Trigger steps "
+                "or authorized builder forcing."
+            )
+            ctx.publish(
+                {
+                    "type": "cmd.move.error",
+                    "text": message,
+                    "data": {
+                        "error": message,
+                        "code": "command_not_step_safe",
+                    },
+                }
+            )
+            return
+        try:
+            result = MoveMobAction().execute(
+                mob_id=ctx.mob.id,
+                direction=direction,
+                runtime_world=ctx.world,
+                trigger_step=ctx.trigger_step,
+                connection_id=ctx.connection_id,
+            )
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd.move.error",
+                    "text": err.message,
+                    "data": {
+                        "error": err.message,
+                        "code": err.code,
+                        **err.data,
+                    },
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.mob.key,
+            connection_id=ctx.connection_id,
+        )
+
     def handle(self, ctx: CommandContext) -> None:
         from spawns.following import (
             FOLLOW_MOVEMENT_PAYLOAD_KEY,
@@ -65,6 +158,9 @@ class MoveHandler(CommandHandler):
         )
 
         direction = ctx.payload.get("direction")
+        if ctx.mob is not None:
+            self._handle_mob(ctx, direction)
+            return
         follow_context = ctx.payload.get(FOLLOW_MOVEMENT_PAYLOAD_KEY)
         if not isinstance(follow_context, dict):
             follow_context = None
@@ -335,32 +431,40 @@ class MoveHandler(CommandHandler):
                     )
                 )
                 if requires_durable_publication:
-                    # A follow-context edge may be acknowledged as soon as this
-                    # handler returns. Build and persist its visible movement,
-                    # structural room-entry event, and transactional followups
-                    # before either room state or link progress can commit.
+                    # Build the visible movement and structural room-entry
+                    # events while the room mutation is still transactional.
+                    # Ordinary movement persists them here before a follow
+                    # edge can be acknowledged. An audited Trigger runner must
+                    # capture them instead so the enclosing step owns final
+                    # provenance, ordering, publication, and rollback.
                     events_result = BuildMoveEventsAction().execute(
                         context,
                         follow_event_override=durable_follow_event,
                     )
-                    persisted_events = (
-                        persist_follow_dependent_game_events(
-                            [*events_result.events, *followup_events],
-                            force=follow_context is not None,
-                            actor_key=ctx.player.key,
-                            connection_id=ctx.connection_id,
-                        )
+                    audited_trigger_step = bool(
+                        ctx.trigger_step
+                        and ctx.capture_only
+                        and ctx.script_source
                     )
-                    if persisted_events:
-                        raise RuntimeError(
-                            "Required movement events were not persisted."
+                    if not audited_trigger_step:
+                        persisted_events = (
+                            persist_follow_dependent_game_events(
+                                [*events_result.events, *followup_events],
+                                force=follow_context is not None,
+                                actor_key=ctx.player.key,
+                                connection_id=ctx.connection_id,
+                            )
                         )
-                    followup_events.clear()
-                    move_events_queued = True
-                    # Post-commit duel/tracker callbacks are registered after
-                    # the batch-specific fast path and publish their updates
-                    # after the pre-chase movement snapshot.
-                    move_events_published = True
+                        if persisted_events:
+                            raise RuntimeError(
+                                "Required movement events were not persisted."
+                            )
+                        followup_events.clear()
+                        move_events_queued = True
+                        # Post-commit duel/tracker callbacks are registered after
+                        # the batch-specific fast path and publish their updates
+                        # after the pre-chase movement snapshot.
+                        move_events_published = True
 
                 for callback, robust in post_move_callbacks:
                     if robust:

@@ -483,6 +483,22 @@ class TestZoneEndpoints(BuilderTestCase):
         zone = Zone.objects.get(pk=resp.data['id']) # refresh
         self.assertEqual(zone.name, 'Renamed zone')
 
+    def test_zone_serializer_preserves_concurrent_unsubmitted_fields(self):
+        stale_zone = Zone.objects.get(pk=self.zone.pk)
+        Zone.objects.filter(pk=self.zone.pk).update(pvp_zone=True)
+        serializer = builder_serializers.ZoneBuilderSerializer(
+            stale_zone,
+            data={"name": "Safely renamed zone"},
+            partial=True,
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+        serializer.save()
+
+        self.zone.refresh_from_db()
+        self.assertEqual(self.zone.name, "Safely renamed zone")
+        self.assertTrue(self.zone.pvp_zone)
+
     def test_delete_zone(self):
         zone = Zone.objects.create(world=self.world)
         resp = self.client.delete(

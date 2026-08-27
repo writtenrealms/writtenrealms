@@ -1,9 +1,9 @@
 # YAML Manifest Guide
 
 Use **World > Edit** to paste and apply one or more Written Realms YAML
-manifests. **World > Config** and entity detail screens such as Rooms, Mobs,
-Items, Factions, and Abilities also expose canonical YAML that is safe to copy,
-edit, and apply directly.
+manifests. **World > Config**, **Zone > Config**, and entity detail screens such
+as Rooms, Mobs, Items, Factions, and Abilities also expose canonical YAML that
+is safe to copy, edit, and apply directly.
 
 ## Basic Shape
 
@@ -64,7 +64,7 @@ rolled back. Error messages identify the failing document number and kind.
 | `worldbundle` | A complete base world and instance-family import wrapper | [Instances](instance-builder-guide.md#moving-a-family-from-development-to-production) |
 | `world` | World configuration | [World Config](world-config-builder-guide.md) |
 | `currency` | Currency definitions | [Currencies](currency-builder-guide.md) |
-| `zone` | World zones | [Rooms and Doors](room-builder-guide.md) |
+| `zone` | World zones and their respawn/door-reset policies | [Zones, Rooms, and Doors](room-builder-guide.md#editing-a-zone) |
 | `room` | Rooms, exits, details, flags, and doors | [Rooms and Doors](room-builder-guide.md) |
 | `path` | Ordered movement and patrol paths | [Spawn Plans](spawn-plan-builder-guide.md#path-manifests) |
 | `itemdefinition` | Item definitions | [Items](item-definition-builder-guide.md) |

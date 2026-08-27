@@ -114,12 +114,13 @@ doorway's authored default otherwise. Parallel runtime worlds remain isolated.
 ### Backend flow
 
 1. Text movement commands (`n`, `north`, etc.) resolve to `MoveHandler` (`backend/spawns/handlers/movement.py`).
-2. `MoveHandler` executes transactional state mutation:
+2. For a player subject, `MoveHandler` executes transactional state mutation:
    - `ResolveMoveAction` validates direction/exits/doors/stamina
    - `ChangeRoomAction` sets new room
    - `AdjustStaminaAction` consumes stamina
    - persists player and updates viewed rooms
-3. After mutation, `BuildMoveEventsAction` (`backend/spawns/actions/movement.py`) assembles output payloads:
+3. After player mutation, `BuildMoveEventsAction`
+   (`backend/spawns/actions/movement.py`) assembles output payloads:
    - arrival-time `room` payload for the destination room
    - fresh `map` payload
    - actor payload
@@ -127,13 +128,20 @@ doorway's authored default otherwise. Parallel runtime worlds remain isolated.
    - when a tracker follow-up has already run at transaction commit, the
      tracker action's pre-chase destination snapshot is reused so the room
      display still represents the instant when the player arrived
-4. Returned events include:
+4. A mob subject is accepted only through the audited, captured Trigger-step
+   path. `MoveMobAction` locks and revalidates the selected live mob, traverses
+   one adjacent passable exit in its runtime world, and updates its room and
+   follow sequence. It emits ordinary `notification.movement.exit` and
+   `notification.movement.enter` events plus the private directional-follow
+   control edge. It deliberately does not build the player room/map payload or
+   emit `cmd.move.success`.
+5. Returned player events include:
    - actor event `cmd.move.success`
    - optional room notifications:
      - `notification.movement.exit`
      - `notification.movement.enter`
 
-### Resulting payload shape (actor move)
+### Resulting payload shape (player move)
 
 ```json
 {

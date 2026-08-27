@@ -68,6 +68,10 @@ from worlds.models import (
     World,
     WorldConfig,
     Zone,
+    ZONE_POLICY_MODE_FIXED,
+    ZONE_POLICY_MODE_NONE,
+    ZONE_POLICY_MAX_SECONDS,
+    ZONE_POLICY_MODES,
 )
 from worlds.room_refs import (
     RoomReferenceError,
@@ -468,8 +472,101 @@ def _serialize_currency_manifest(currency: Currency) -> dict[str, Any]:
     }
 
 
+def _serialize_zone_policy(
+    *,
+    mode: str,
+    seconds: int | None,
+    field_name: str,
+) -> dict[str, Any]:
+    if mode == ZONE_POLICY_MODE_NONE:
+        if seconds is not None:
+            raise serializers.ValidationError(
+                f"{field_name} cannot include seconds when mode is none."
+            )
+        return {"mode": ZONE_POLICY_MODE_NONE}
+    if mode == ZONE_POLICY_MODE_FIXED:
+        if (
+            isinstance(seconds, bool)
+            or not isinstance(seconds, int)
+            or not 0 <= seconds <= ZONE_POLICY_MAX_SECONDS
+        ):
+            raise serializers.ValidationError(
+                f"{field_name} requires a non-negative integer seconds value."
+            )
+        return {
+            "mode": ZONE_POLICY_MODE_FIXED,
+            "seconds": seconds,
+        }
+    raise serializers.ValidationError(
+        f"{field_name} has unsupported mode '{mode}'."
+    )
+
+
+def _normalize_zone_policy(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise serializers.ValidationError(f"{field_name} must be a mapping.")
+
+    unsupported = sorted(set(value) - {"mode", "seconds"})
+    if unsupported:
+        raise serializers.ValidationError(
+            f"{field_name} has unsupported field(s): {', '.join(unsupported)}."
+        )
+    if "mode" not in value:
+        raise serializers.ValidationError(f"{field_name}.mode is required.")
+    raw_mode = value.get("mode")
+    if not isinstance(raw_mode, str):
+        raise serializers.ValidationError(f"{field_name}.mode must be a string.")
+    mode = raw_mode.strip().lower()
+    if mode not in ZONE_POLICY_MODES:
+        raise serializers.ValidationError(
+            f"{field_name}.mode must be one of: "
+            f"{', '.join(sorted(ZONE_POLICY_MODES))}."
+        )
+
+    if mode == ZONE_POLICY_MODE_NONE:
+        if "seconds" in value:
+            raise serializers.ValidationError(
+                f"{field_name}.seconds is not supported when mode is none."
+            )
+        return {"mode": ZONE_POLICY_MODE_NONE, "seconds": None}
+
+    if "seconds" not in value:
+        raise serializers.ValidationError(
+            f"{field_name}.seconds is required when mode is fixed."
+        )
+    raw_seconds = value.get("seconds")
+    if isinstance(raw_seconds, bool) or not isinstance(raw_seconds, (int, str)):
+        raise serializers.ValidationError(
+            f"{field_name}.seconds must be a non-negative integer."
+        )
+    if isinstance(raw_seconds, str):
+        normalized_seconds = raw_seconds.strip()
+        if not normalized_seconds.isascii() or not normalized_seconds.isdecimal():
+            raise serializers.ValidationError(
+                f"{field_name}.seconds must be a non-negative integer."
+            )
+        raw_seconds = normalized_seconds
+    try:
+        seconds = int(raw_seconds)
+    except (TypeError, ValueError, OverflowError):
+        raise serializers.ValidationError(
+            f"{field_name}.seconds must be a non-negative integer."
+        )
+    if not 0 <= seconds <= ZONE_POLICY_MAX_SECONDS:
+        raise serializers.ValidationError(
+            f"{field_name}.seconds must be a non-negative integer no greater "
+            f"than {ZONE_POLICY_MAX_SECONDS}."
+        )
+    return {"mode": ZONE_POLICY_MODE_FIXED, "seconds": seconds}
+
+
 def _serialize_zone_manifest(zone: Zone) -> dict[str, Any]:
     return {
+        "apiVersion": CANONICAL_MANIFEST_API_VERSION,
         "kind": ZONE_MANIFEST_KIND,
         "metadata": {
             "ref": _zone_ref(zone),
@@ -479,7 +576,16 @@ def _serialize_zone_manifest(zone: Zone) -> dict[str, Any]:
             "description": zone.description or "",
             "notes": zone.notes or "",
             "initial_state": get_initial_state_snapshot(STATE_SCOPE_ZONE, zone),
-            "respawn_wait": int(zone.respawn_wait),
+            "respawn": _serialize_zone_policy(
+                mode=zone.respawn_mode,
+                seconds=zone.respawn_seconds,
+                field_name=f"Zone '{zone.name}' respawn policy",
+            ),
+            "door_reset": _serialize_zone_policy(
+                mode=zone.door_reset_mode,
+                seconds=zone.door_reset_seconds,
+                field_name=f"Zone '{zone.name}' door reset policy",
+            ),
             "pvp_zone": bool(zone.pvp_zone),
             "center": _room_ref(
                 zone.center,
@@ -525,7 +631,16 @@ def serialize_zone_payload(
         "name": zone.name,
         "description": zone.description or "",
         "notes": zone.notes or "",
-        "respawn_wait": int(zone.respawn_wait),
+        "respawn": _serialize_zone_policy(
+            mode=zone.respawn_mode,
+            seconds=zone.respawn_seconds,
+            field_name=f"Zone '{zone.name}' respawn policy",
+        ),
+        "door_reset": _serialize_zone_policy(
+            mode=zone.door_reset_mode,
+            seconds=zone.door_reset_seconds,
+            field_name=f"Zone '{zone.name}' door reset policy",
+        ),
         "pvp_zone": bool(zone.pvp_zone),
         "center": _room_ref(
             zone.center,
@@ -3489,7 +3604,12 @@ def _find_placeholder_zone(world: World) -> Zone | None:
         return None
     if zone.pvp_zone:
         return None
-    if int(zone.respawn_wait) != 300:
+    if (
+        zone.respawn_mode != ZONE_POLICY_MODE_FIXED
+        or zone.respawn_seconds != 300
+        or zone.door_reset_mode != ZONE_POLICY_MODE_FIXED
+        or zone.door_reset_seconds != 300
+    ):
         return None
     if get_initial_state_snapshot(STATE_SCOPE_ZONE, zone):
         return None
@@ -4352,7 +4472,13 @@ def apply_currency_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[
     return currency, "updated"
 
 
-def apply_zone_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Zone, bool]:
+def apply_zone_manifest(
+    *,
+    world: World,
+    manifest: dict[str, Any],
+    require_existing: bool = False,
+    deferred_center_relative_ids: set[int] | None = None,
+) -> tuple[Zone, bool]:
     if parse_document_kind(manifest) != ZONE_MANIFEST_KIND:
         raise serializers.ValidationError("Unsupported manifest kind. Expected 'zone'.")
     if builder_manifests.parse_manifest_operation(manifest) != builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY:
@@ -4360,29 +4486,139 @@ def apply_zone_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Zone
 
     metadata = _manifest_metadata(manifest)
     spec = _manifest_spec(manifest)
+    unsupported_spec_fields = sorted(
+        set(spec)
+        - {
+            "description",
+            "notes",
+            "initial_state",
+            "state",
+            "zone_data",
+            "respawn",
+            "door_reset",
+            "pvp_zone",
+            "center",
+        }
+    )
+    if unsupported_spec_fields:
+        raise serializers.ValidationError(
+            "spec has unsupported field(s): "
+            f"{', '.join(unsupported_spec_fields)}."
+        )
     ref = str(metadata.get("ref") or "").strip()
     name = str(metadata.get("name") or "").strip()
     if not name:
         raise serializers.ValidationError("metadata.name is required.")
 
+    relative_id = None
     if ref:
         relative_id = _parse_zone_ref(ref, field_name="metadata.ref")
-        existing = Zone.objects.filter(world=world, relative_id=relative_id).first()
-    else:
-        existing = Zone.objects.filter(world=world, name=name).order_by("id").first()
-    created = existing is None
 
+    respawn_policy = (
+        _normalize_zone_policy(spec["respawn"], field_name="spec.respawn")
+        if "respawn" in spec
+        else None
+    )
+    door_reset_policy = (
+        _normalize_zone_policy(
+            spec["door_reset"],
+            field_name="spec.door_reset",
+        )
+        if "door_reset" in spec
+        else None
+    )
+    if "pvp_zone" in spec and not isinstance(spec["pvp_zone"], bool):
+        raise serializers.ValidationError("spec.pvp_zone must be a boolean.")
+
+    center_ref = (
+        str(spec.get("center") or "").strip()
+        if "center" in spec
+        else None
+    )
     with transaction.atomic():
-        zone = existing or _get_or_create_zone(world=world, zone_name=name, zone_ref=ref)
+        center_room = None
+        if center_ref:
+            resolved_center = _resolve_room_reference_or_error(
+                world=world,
+                value=center_ref,
+                field_name="spec.center",
+            )
+            center_room = (
+                Room.objects.select_for_update()
+                .filter(world=world, pk=resolved_center.pk)
+                .first()
+            )
+            if center_room is None:
+                raise serializers.ValidationError(
+                    "spec.center references an unknown room in this world."
+                )
+
+        existing_qs = Zone.objects.select_for_update().filter(world=world)
+        if relative_id is not None:
+            zone = existing_qs.filter(relative_id=relative_id).first()
+        else:
+            zone = existing_qs.filter(name=name).order_by("id").first()
+        created = zone is None
+        if zone is None:
+            if require_existing:
+                raise serializers.ValidationError(
+                    "Zone manifest target does not exist."
+                )
+            created = True
+            candidate = _get_or_create_zone(
+                world=world,
+                zone_name=name,
+                zone_ref=ref,
+            )
+            zone = Zone.objects.select_for_update().get(pk=candidate.pk)
+
+        if center_room is not None:
+            is_deferred_batch_room = (
+                not require_existing
+                and center_room.zone_id is None
+                and deferred_center_relative_ids is not None
+                and center_room.relative_id in deferred_center_relative_ids
+            )
+            if (
+                center_room.zone_id != zone.id
+                and not is_deferred_batch_room
+            ):
+                raise serializers.ValidationError(
+                    "spec.center must reference a room already assigned "
+                    "to this zone."
+                )
+
+        previous_door_reset_policy = (
+            zone.door_reset_mode,
+            zone.door_reset_seconds,
+        )
         zone.name = name
         if "description" in spec or created:
             zone.description = str(spec.get("description", zone.description or ""))
         if "notes" in spec or created:
             zone.notes = str(spec.get("notes", zone.notes or ""))
-        if "respawn_wait" in spec or created:
-            zone.respawn_wait = int(spec.get("respawn_wait", zone.respawn_wait if existing else 300))
+        if respawn_policy is not None:
+            zone.respawn_mode = respawn_policy["mode"]
+            zone.respawn_seconds = respawn_policy["seconds"]
+        if door_reset_policy is not None:
+            zone.door_reset_mode = door_reset_policy["mode"]
+            zone.door_reset_seconds = door_reset_policy["seconds"]
         if "pvp_zone" in spec or created:
-            zone.pvp_zone = bool(spec.get("pvp_zone", zone.pvp_zone if existing else False))
+            zone.pvp_zone = spec.get(
+                "pvp_zone",
+                zone.pvp_zone if not created else False,
+            )
+
+        current_door_reset_policy = (
+            zone.door_reset_mode,
+            zone.door_reset_seconds,
+        )
+        if current_door_reset_policy != previous_door_reset_policy:
+            if zone.door_reset_policy_version >= BIGINT_MAX:
+                raise serializers.ValidationError(
+                    "Zone door reset policy version is exhausted."
+                )
+            zone.door_reset_policy_version += 1
         zone.save()
 
         if (
@@ -4402,7 +4638,7 @@ def apply_zone_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Zone
                             spec.get(
                                 "zone_data",
                                 get_initial_state_snapshot(STATE_SCOPE_ZONE, zone)
-                                if existing else {},
+                                if not created else {},
                             ),
                         ),
                     ),
@@ -4411,11 +4647,43 @@ def apply_zone_manifest(*, world: World, manifest: dict[str, Any]) -> tuple[Zone
             )
 
         if "center" in spec:
-            center_ref = str(spec.get("center") or "").strip()
-            zone.center = _get_or_create_room(world=world, room_ref=center_ref, zone=zone) if center_ref else None
+            zone.center = center_room
             zone.save(update_fields=["center"])
 
     return zone, created
+
+
+def validate_deferred_zone_center_membership(
+    *,
+    world: World,
+    room_relative_ids: set[int],
+) -> None:
+    """Validate only centers deferred for rooms reserved by this import."""
+
+    if not room_relative_ids:
+        return
+    deferred_center_zones = (
+        Zone.objects.filter(
+            world=world,
+            center__relative_id__in=room_relative_ids,
+        )
+        .select_related("center")
+        .only(
+            "id",
+            "relative_id",
+            "center_id",
+            "center__id",
+            "center__relative_id",
+            "center__zone_id",
+        )
+        .order_by("relative_id", "id")
+    )
+    for zone in deferred_center_zones:
+        if zone.center.zone_id != zone.id:
+            raise serializers.ValidationError(
+                f"Zone {_zone_ref(zone)} center {_room_ref(zone.center)} "
+                "is not assigned to that zone after manifest import."
+            )
 
 
 def delete_zone_manifest(*, world: World, manifest: dict[str, Any]) -> Zone:

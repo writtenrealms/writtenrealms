@@ -106,10 +106,12 @@ Every action in one step shares a transaction:
   same-step grants never subsidize those charges. It also rejects a final net
   balance above `9,007,199,254,740,991`. Ordered balance rows are written last.
 - `command` resolves `trigger_room`, the current `trigger_actor`, or exactly one
-  live mob from a portable definition in the original runtime room. The
-  Trigger room is the issuer and an embodied player/mob is the subject.
-  Only explicitly audited handlers are accepted. Most are event-only;
-  transactional `/transfer` is the initial mutating exception.
+  live mob from a portable definition in `trigger_room` or an authored
+  `room@<relative_id>` of the same exact runtime world. The Trigger room is the
+  issuer and an embodied player/mob is the subject. Only explicitly audited
+  handlers are accepted. Most are event-only; player-Trigger-actor and
+  mob-subject adjacent movement, `/transfer`, `/exitinstance`, following, and
+  door commands are transactional exceptions.
 - `echo` selects players currently in the original runtime world and room.
 - `send` emits one private actor-templated event to the connected player
   Trigger actor.
@@ -157,9 +159,29 @@ Trigger actor and dispatches it with an explicit room issuer and the chosen
 room, player, or mob execution subject. Newlines, `;`/`&&` chains, history
 references, nested `/cmd`, aliases, and fallback Trigger matching are disabled.
 Approved handlers publish output only as `GameEvent` objects. The audited
-`/transfer` handler may also change the Trigger actor's room inside the
-transaction. Any supported subject may issue it, but no other transfer target
-is step-safe. The canonical forms are `subject: trigger_room` with
+movement handler permits either the player Trigger actor or a selected mob to
+issue one bare direction. Player movement uses the ordinary handler, including
+exit, door, stamina, terrain, combat, policy, follower, room-arrival, reaction,
+and aggro behavior. Mob movement locks and revalidates the mob in the run's
+runtime world, resolves the exit from its live room, checks door state and
+active combat, updates the room and follow sequence, and captures ordinary
+directional departure/arrival output without applying autonomous roam or
+player-only behavior.
+
+Follower presence is snapshotted at the movement action's authored position,
+so a later same-step `follow` does not retroactively attach to the earlier
+edge. For both player and mob subjects, follower-dependent output remains
+captured until the enclosing Trigger step has applied final command provenance
+and persisted its ordered outbox batch. Eligible relationships are resolved
+from the committed graph during propagation, so a later same-step `unfollow`
+or leader switch can cancel a pending follow attempt. A later failure therefore
+rolls back the character row, movement output, and follow control together.
+Because command-subject candidates are prelocked before actions run, reselect
+a moved mob in a following zero-delay step rather than later in the same step.
+
+The audited `/transfer` handler may also change the Trigger actor's room inside
+the transaction. Any supported subject may issue it, but no other transfer
+target is step-safe. The canonical forms are `subject: trigger_room` with
 `/transfer {{ actor_key }} room@<relative_id>` and `subject: trigger_actor`
 with `/transfer self room@<relative_id>`; an exact-one selected mob may instead
 use the explicit `{{ actor_key }}` target. `self` or `me` is accepted only when
@@ -261,14 +283,14 @@ Expected semantic failures—missing actor inventory, missing room items, a
 harvested/moved bound item, a missing actor for an item grant, a non-player
 currency actor, insufficient starting funds for gross debits, an excessive
 final balance, a missing/ambiguous command subject, an unsafe or rejected
-command, an invalid transfer target or destination, an active player PvP
-target, a non-player or disconnected send actor, a roomless `send_except`
-actor, invalid rendered send text, or a deleted definition/currency—roll back
-the current step. A
-transfer that ran earlier in the authored action list is rolled back with the
-rest of that step. With `on_step_error: cancel`, the run records the error and
-becomes `cancelled`. Earlier committed steps remain intact; later steps do not
-run.
+command, a missing/blocked mob exit, an unavailable or actively fighting mob,
+an invalid transfer target or destination, an active player PvP target, a
+non-player or disconnected send actor, a roomless `send_except` actor, invalid
+rendered send text, or a deleted definition/currency—roll back the current
+step. Mob movement or a transfer that ran earlier in the authored action list
+is rolled back with the rest of that step. With `on_step_error: cancel`, the
+run records the error and becomes `cancelled`. Earlier committed steps remain
+intact; later steps do not run.
 
 After the last successful step, the run becomes `completed`. Completed and
 cancelled rows are retained briefly for diagnosis and pruned after seven days.

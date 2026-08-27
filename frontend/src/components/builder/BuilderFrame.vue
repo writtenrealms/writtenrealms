@@ -100,6 +100,11 @@
           <router-link
             :to="{name: 'builder_zone_config', params: { world_id: $route.params.world_id, zone_relative_id: route.params.zone_relative_id}}" :class="{ 'router-link-active': isZoneConfigRoute }"
           >Config</router-link>
+
+          <router-link
+            v-if="world?.builder_info?.builder_rank > 2"
+            :to="{name: 'builder_zone_utils', params: { world_id: $route.params.world_id, zone_relative_id: route.params.zone_relative_id}}" :class="{ 'router-link-active': isZoneUtilsRoute }"
+          >Utils</router-link>
         </template>
 
         <!-- Room nav -->
@@ -553,6 +558,9 @@ const isZoneSpawnPlanRoute = computed(() => {
 });
 const isZoneConfigRoute = computed(() => {
   return route.name === 'builder_zone_config';
+});
+const isZoneUtilsRoute = computed(() => {
+  return route.name === 'builder_zone_utils';
 });
 </script>
 

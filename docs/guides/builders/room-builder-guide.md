@@ -1,9 +1,13 @@
-# WR2 Room Builder Guide
+# WR2 Zones, Rooms, And Doors Builder Guide
 
 Rooms are authored as `kind: room` YAML manifests. Use **Rooms > Edit** to
 edit the currently selected room in place. The page loads canonical YAML only
 when opened, saves it through the shared world manifest endpoint, and then
 refreshes both the room and the YAML shown in the editor.
+
+Zones use the same workflow in **Zone > Config**. The Config page edits one
+canonical `kind: zone` manifest; the separate **Zone > Utils** page contains
+the operational **Move Zone** tool.
 
 Room movement rules and interactions are separate triggers. Use
 **Rooms > Triggers** for command triggers, movement policies, and
@@ -21,6 +25,68 @@ post-movement events. WR2 has no Room Checks screen or room-check model.
 The editor accepts one room manifest. Use **World > Edit World** when applying
 multiple related documents, such as a room plus a zone, neighboring rooms,
 triggers, and spawn plans.
+
+## Editing A Zone
+
+1. Select a zone in the world editor.
+2. Open **Zone > Config**.
+3. Edit the loaded YAML, keeping `metadata.ref` unchanged.
+4. Select **Save YAML**.
+5. Review the refreshed canonical YAML.
+
+The Config page accepts one zone manifest. Use **World > Edit World** for a
+batch containing a zone and related room or spawn-plan documents. Use
+**Zone > Utils** when moving every room in a zone by a coordinate offset; that
+operation is not part of the zone manifest.
+
+```yaml
+apiVersion: writtenrealms.com/v1alpha3
+kind: zone
+metadata:
+  ref: zone@2
+  name: North Harbor
+spec:
+  description: Warehouses crowd the edge of the northern quay.
+  notes: Builder-only encounter notes.
+  initial_state:
+    curfew_active: false
+  respawn:
+    mode: fixed
+    seconds: 300
+  door_reset:
+    mode: none
+  pvp_zone: false
+  center: room@42
+```
+
+| Field | Purpose |
+| --- | --- |
+| `metadata.ref` | Stable zone identity as `zone@<relative_id>`. |
+| `metadata.name` | Player-facing zone name. |
+| `spec.description` | Zone description. |
+| `spec.notes` | Builder-only notes. |
+| `spec.initial_state` | State defaults copied into the zone for each new runtime world. |
+| `spec.respawn` | Default replacement policy for `inherit_zone` spawn plans that omit their own `seconds`. |
+| `spec.door_reset` | Independent automatic door-reset policy. |
+| `spec.pvp_zone` | Whether the zone permits PvP when the world uses zone-gated PvP. |
+| `spec.center` | Optional portable room ref used as the zone's map center. The room must already belong to this zone. |
+
+Both zone policy objects use `mode: fixed` with an explicit non-negative
+integer `seconds`, or `mode: none` with no `seconds` field. New zones default
+both to `fixed` with `seconds: 300`. `respawn` is only the default for spawn
+plans that explicitly inherit it without a plan-level `seconds` override.
+`door_reset` affects only materialized runtime doorway state; `none` means
+doors do not reset automatically.
+
+Changing `spec.center` never moves a room between zones. Assign the room to
+the zone first, then select it as the center.
+
+Door-reset schedules are isolated per runtime world. Parallel instances using
+the same authored zone do not share door state or timers. `/repop --doors` is
+an explicit reset of the current runtime zone and does not consume or advance
+the automatic schedule. A doorway between zones belongs to both endpoint
+policies: either endpoint's due fixed schedule can reset it, but it resets at
+most once during one world reconciliation pass.
 
 ## Navigating Builder Maps
 
@@ -195,11 +261,11 @@ compatibility aliases because an ambiguous fallback could open the wrong room.
 Zones follow the same rule. A zone whose manifest reference is `zone@5` uses
 the canonical builder route `/build/worlds/23/zones/5`, where `23` is the
 installation-local world database id and `5` is the zone's world-relative id.
-The zone's Rooms, Paths, Spawns, and Config routes retain that same relative-id
-segment. Staff can use `/build/worlds/23/zones/db/38` to look up database zone
-38; the builder immediately replaces that alias with the canonical relative-id
-route. The zone screen exposes the database id only to staff in its collapsed
-technical details.
+The zone's Rooms, Paths, Spawns, Config, and Utils routes retain that same
+relative-id segment. Staff can use `/build/worlds/23/zones/db/38` to look up
+database zone 38; the builder immediately replaces that alias with the
+canonical relative-id route. The zone screen exposes the database id only to
+staff in its collapsed technical details.
 
 As with rooms, `/zones/5` never falls back to database zone 5. Keeping the
 relative and database namespaces explicit prevents a valid number in one

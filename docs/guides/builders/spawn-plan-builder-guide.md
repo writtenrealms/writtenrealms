@@ -394,7 +394,8 @@ Supported modes:
 
 - `fixed`: use the non-negative integer in `seconds`; an omitted value is
   normalized to `0`.
-- `inherit_zone`: use the zone respawn time when `seconds` is omitted.
+- `inherit_zone`: use the containing zone's typed `spec.respawn` policy when
+  `seconds` is omitted.
 - `none`: do not refill missing copies during ordinary spawn-plan reconciliation.
 
 `seconds: 0` means a missing copy can be replaced on every reconciliation. Use
@@ -404,6 +405,30 @@ that only for content that should always be present. `none` must not include a
 These mode names are strict. `never` is not an alias for `none`, and malformed
 policies, unknown modes, unsupported fields, non-integer seconds, and negative
 seconds are rejected when the manifest is saved.
+
+Edit the zone default in **Zone > Config**:
+
+```yaml
+kind: zone
+metadata:
+  ref: zone@1
+  name: Training Grounds
+spec:
+  respawn:
+    mode: fixed
+    seconds: 300
+  door_reset:
+    mode: none
+```
+
+For an `inherit_zone` plan that omits its own `seconds`, zone
+`respawn.mode: fixed` supplies the zone interval and zone `respawn.mode: none`
+disables ordinary replacement. An explicit plan-level `seconds` remains an
+override even when the zone uses `none`. The zone's `door_reset` object is
+independent: it controls only automatic return of runtime doorways to their
+authored defaults and never refills or removes a spawn placement. Each runtime
+world keeps its own door-reset schedule, so one instance run cannot reset or
+consume another run's doors.
 
 Builders can run `/repop` to force immediate reconciliation of every active
 spawn plan in their current zone. A trusted room script can do the same for its
@@ -422,9 +447,10 @@ and active-instance snapshot protection still apply.
 Doors are unchanged by default. `/repop --doors` also resets materialized
 runtime doorway states in the selected zone to their authored defaults. The
 room-script form is `/cmd room -- /repop --doors`. This explicit reset still
-does not consume the zone's independent door-reset timer and affects only the
-issuer's exact runtime world. Reserve `/repop` for builder testing or an
-intentional room interaction rather than routine high-frequency scheduling.
+does not consume or advance the zone's independent door-reset schedule and
+affects only the issuer's exact runtime world. Reserve `/repop` for builder
+testing or an intentional room interaction rather than routine high-frequency
+scheduling.
 
 ### Editing A Running World
 

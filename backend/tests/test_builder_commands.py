@@ -41,7 +41,15 @@ from spawns.models import (
 from spawns.loading import run_spawn_plans_for_world
 from spawns.wallet import balance_map
 from tests.base import WorldTestCase
-from worlds.models import Door, Doorway, Room, World, WorldConfig, Zone
+from worlds.models import (
+    Door,
+    Doorway,
+    Room,
+    World,
+    WorldConfig,
+    Zone,
+    ZoneDoorResetSchedule,
+)
 from tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
@@ -2104,8 +2112,11 @@ class TestBuilderRepop(BuilderCommandTestCase):
             0,
         )
         self.assertFalse(Mob.objects.filter(world=self.spawn_world).exists())
-        self.zone.last_respawn_ts = None
-        self.zone.save(update_fields=["last_respawn_ts"])
+        door_schedule = ZoneDoorResetSchedule.objects.get(
+            world=self.spawn_world,
+            zone=self.zone,
+        )
+        scheduled_door_reset = door_schedule.next_reset_ts
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "/repop")
@@ -2146,8 +2157,11 @@ class TestBuilderRepop(BuilderCommandTestCase):
         door_state.refresh_from_db()
         self.assertEqual(door_state.state, api_consts.DOOR_STATE_CLOSED)
         self.assertEqual(door_state.revision, 7)
-        self.zone.refresh_from_db()
-        self.assertIsNone(self.zone.last_respawn_ts)
+        door_schedule.refresh_from_db()
+        self.assertEqual(
+            door_schedule.next_reset_ts,
+            scheduled_door_reset,
+        )
 
         with capture_game_messages() as second_messages:
             dispatch_text_command(self.player.id, "/repop")
@@ -2174,9 +2188,17 @@ class TestBuilderRepop(BuilderCommandTestCase):
             from_room=self.room,
             to_room=self.other_room,
         )
+        other_zone_inner_room = Room.objects.create(
+            world=self.world,
+            zone=self.other_zone,
+            name="Far Annex Interior",
+            x=2,
+            y=0,
+            z=0,
+        )
         _, other_zone_state = self._create_runtime_door_state(
             from_room=self.other_room,
-            to_room=self.room,
+            to_room=other_zone_inner_room,
             direction="south",
         )
         sparse_doorway = self._create_doorway(
@@ -2191,8 +2213,11 @@ class TestBuilderRepop(BuilderCommandTestCase):
             state=api_consts.DOOR_STATE_LOCKED,
             revision=3,
         )
-        self.zone.last_respawn_ts = None
-        self.zone.save(update_fields=["last_respawn_ts"])
+        door_schedule = ZoneDoorResetSchedule.objects.get(
+            world=self.spawn_world,
+            zone=self.zone,
+        )
+        scheduled_door_reset = door_schedule.next_reset_ts
 
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "/repop --doors")
@@ -2212,8 +2237,11 @@ class TestBuilderRepop(BuilderCommandTestCase):
                 doorway=sparse_doorway,
             ).exists()
         )
-        self.zone.refresh_from_db()
-        self.assertIsNone(self.zone.last_respawn_ts)
+        door_schedule.refresh_from_db()
+        self.assertEqual(
+            door_schedule.next_reset_ts,
+            scheduled_door_reset,
+        )
 
         message = self._message_by_type(messages, "cmd./repop.success")
         self.assertIsNotNone(message)
@@ -2226,6 +2254,33 @@ class TestBuilderRepop(BuilderCommandTestCase):
             },
         )
         self.assertIn("Reset 1 runtime door state", message["text"])
+
+    def test_repop_doors_resets_one_sided_destination_boundary(self):
+        _, destination_boundary_state = self._create_runtime_door_state(
+            from_room=self.other_room,
+            to_room=self.room,
+            direction="west",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/repop --doors")
+
+        destination_boundary_state.refresh_from_db()
+        self.assertEqual(
+            destination_boundary_state.state,
+            api_consts.DOOR_STATE_OPEN,
+        )
+        self.assertEqual(destination_boundary_state.revision, 8)
+        message = self._message_by_type(messages, "cmd./repop.success")
+        self.assertIsNotNone(message)
+        self.assertEqual(
+            message["data"]["doors"],
+            {
+                "requested": True,
+                "doorways_checked": 1,
+                "door_states_reset": 1,
+            },
+        )
 
     def test_repop_rejects_unknown_or_duplicate_options(self):
         for command in (
@@ -5133,3 +5188,87 @@ class TestBuilderCmd(BuilderCommandTestCase):
         cmd_success = self._messages_for_key_and_type(messages, self.player.key, "cmd./cmd.success")
         self.assertEqual(len(cmd_success), 1)
         self.assertIn("unknown command", cmd_success[0]["message"].get("text", "").lower())
+
+    def test_force_builder_can_move_mob_through_adjacent_exit(self):
+        destination = self.room.create_at("west")
+        target = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Hermes",
+            keywords="hermes",
+        )
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "/force hermes west")
+
+        target.refresh_from_db()
+        self.assertEqual(target.room_id, destination.id)
+        cmd_success = self._messages_for_key_and_type(
+            messages,
+            self.player.key,
+            "cmd./cmd.success",
+        )
+        self.assertEqual(len(cmd_success), 1)
+        self.assertFalse(cmd_success[0]["message"].get("text"))
+        self.assertEqual(
+            cmd_success[0]["message"]["data"]["target"]["type"],
+            "mob",
+        )
+
+    def test_force_builder_can_move_player_through_adjacent_exit(self):
+        destination = self.room.create_at("west")
+        target = self.create_player("Traveler", room=self.room)
+        target.in_game = True
+        target.stamina = 10
+        target.save(update_fields=["in_game", "stamina"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, f"/force {target.key} west")
+
+        target.refresh_from_db()
+        self.assertEqual(target.room_id, destination.id)
+        self.assertLess(target.stamina, 10)
+        self.assertEqual(target.command_history, [])
+        move_success = self._messages_for_key_and_type(
+            messages,
+            target.key,
+            "cmd.move.success",
+        )
+        self.assertEqual(len(move_success), 1)
+        cmd_success = self._messages_for_key_and_type(
+            messages,
+            self.player.key,
+            "cmd./cmd.success",
+        )
+        self.assertEqual(len(cmd_success), 1)
+        self.assertFalse(cmd_success[0]["message"].get("text"))
+        self.assertEqual(
+            cmd_success[0]["message"]["data"]["target"]["type"],
+            "player",
+        )
+
+    def test_force_player_target_rejects_non_movement_commands(self):
+        target = self.create_player("Traveler", room=self.room)
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(
+                self.player.id,
+                f"/force {target.key} say I did not say this",
+            )
+
+        cmd_success = self._messages_for_key_and_type(
+            messages,
+            self.player.key,
+            "cmd./cmd.success",
+        )
+        self.assertEqual(len(cmd_success), 1)
+        self.assertIn(
+            "players may be forced only to move",
+            cmd_success[0]["message"].get("text", "").lower(),
+        )
+        say_messages = self._messages_for_key_and_type(
+            messages,
+            target.key,
+            "cmd.say.success",
+        )
+        self.assertEqual(say_messages, [])

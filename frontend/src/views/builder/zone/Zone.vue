@@ -50,26 +50,24 @@
         <div v-else class="emptymap">Loading...</div>
 
         <div class="zone-side-data">
-          <div class="hlist respawn-frequency">
-            <div class="hlist-header">
-              <h3>RESPAWN FREQUENCY</h3>
-            </div>
-            <div class="hlist-item">
-              <label>
-                <input type="checkbox" :checked="respawns" @input="onChangeRespawns" />
-                Respawns
-              </label>
-
-              <div class="respawn-wait mt-2" v-if="respawns">
-                <div>
-                  <span
-                    v-if="zone.respawn_wait"
-                  >Wait {{ zone.respawn_wait }} seconds before respawning.</span>
-                  <span v-else>Respawns immediately.</span>
-                </div>
-                <button class="btn-thin" @click="editRespawns">EDIT</button>
-              </div>
-            </div>
+          <div class="zone-policies">
+            <h3>ZONE POLICIES</h3>
+            <dl>
+              <dt>Spawn plan default</dt>
+              <dd>{{ formatPolicy(zone.respawn) }}</dd>
+              <dt>Door reset</dt>
+              <dd>{{ formatPolicy(zone.door_reset) }}</dd>
+            </dl>
+            <router-link
+              class="btn-thin policy-config-link"
+              :to="{
+                name: 'builder_zone_config',
+                params: {
+                  world_id: route.params.world_id,
+                  zone_relative_id: route.params.zone_relative_id,
+                },
+              }"
+            >EDIT YAML</router-link>
           </div>
 
           <div class="zone-spawn-plans">
@@ -145,7 +143,6 @@ const zone_rooms = ref<Room[]>([]);
 const zone_spawn_plans = ref<any[]>([]);
 const loaded = ref(false);
 const zoneDataError = ref("");
-const respawns = computed(() => store.state.builder.zone.respawn_wait >= 0);
 const zone = computed(() => store.state.builder.zone);
 const isReady = computed(() => {
   return Boolean(
@@ -393,8 +390,11 @@ const buildZoneYaml = (zoneValue: any): string => {
   if (zoneValue.zone_data && Object.keys(zoneValue.zone_data).length) {
     spec.state = zoneValue.zone_data;
   }
-  if (zoneValue.respawn_wait !== undefined && zoneValue.respawn_wait !== null) {
-    spec.respawn_wait = Number(zoneValue.respawn_wait);
+  if (zoneValue.respawn && typeof zoneValue.respawn === "object") {
+    spec.respawn = zoneValue.respawn;
+  }
+  if (zoneValue.door_reset && typeof zoneValue.door_reset === "object") {
+    spec.door_reset = zoneValue.door_reset;
   }
   if (zoneValue.pvp_zone !== undefined && zoneValue.pvp_zone !== null) {
     spec.pvp_zone = Boolean(zoneValue.pvp_zone);
@@ -414,6 +414,16 @@ const buildZoneYaml = (zoneValue: any): string => {
   ].join("\n");
 };
 
+const formatPolicy = (policy: any): string => {
+  if (!policy || typeof policy !== "object") return "Not configured";
+  if (policy.mode === "none") return "Never";
+  if (policy.mode === "fixed") {
+    const seconds = Number(policy.seconds);
+    return Number.isFinite(seconds) ? `Every ${seconds} seconds` : "Fixed interval";
+  }
+  return String(policy.mode || "Not configured");
+};
+
 const buildZoneDeleteYaml = (zoneValue: any): string => {
   if (!zoneValue?.manifest_ref || !zoneValue?.name) return "";
   return [
@@ -424,31 +434,6 @@ const buildZoneDeleteYaml = (zoneValue: any): string => {
     `  name: ${yamlScalar(zoneValue.name)}`,
     "",
   ].join("\n");
-};
-
-const onChangeRespawns = (event: Event) => {
-  const checked = (event.target as HTMLInputElement).checked;
-  let respawn_wait = -1;
-  if (checked) respawn_wait = 300;
-  store.dispatch("builder/zone_save", {
-    respawn_wait: respawn_wait,
-  });
-};
-
-const editRespawns = () => {
-  const entity = store.state.builder.zone;
-  const modal = {
-    data: entity,
-    schema: [
-      {
-        attr: "respawn_wait",
-        label: "Respawn Wait",
-        help: "How long to wait before re-running spawn plans, in seconds.",
-      },
-    ],
-    action: "builder/zone_save",
-  };
-  store.commit('ui/modal/open_form', modal);
 };
 
 </script>
@@ -549,9 +534,32 @@ const editRespawns = () => {
     }
   }
 
-  .respawn-frequency {
-    max-width: 100%;
+  .zone-policies {
+    border: 1px solid #444;
+    box-sizing: border-box;
+    padding: 0.75rem;
     width: 100%;
+
+    dl {
+      display: grid;
+      gap: 0.4rem 0.75rem;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      margin-bottom: 0.75rem;
+    }
+
+    dt {
+      color: $color-text-hex-70;
+    }
+
+    dd {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .policy-config-link {
+      display: inline-block;
+      text-decoration: none;
+    }
   }
 
   .technical-details {

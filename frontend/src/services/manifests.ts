@@ -5,6 +5,7 @@ export type BuilderEntityId = string | number;
 export type ManifestDocument = Record<string, unknown>;
 export type ManifestResourceKind =
   | "world"
+  | "zone"
   | "craftmaterial"
   | "craftingrecipe"
   | "craftingprofile"
@@ -16,6 +17,7 @@ export type ManifestResourceResponseField =
   | "crafting_profile"
   | "merchant_profile"
   | "trainer_profile";
+export type ManifestOperation = "apply" | "delete";
 
 export interface ManifestBackedDetail {
   manifest: ManifestDocument;
@@ -38,9 +40,21 @@ export const applyWorldManifest = async <
   worldId: BuilderWorldId,
   manifest: string,
   expectedKind?: ManifestResourceKind,
+  expectedRef?: string,
+  expectedOperation?: ManifestOperation,
+  expectedResult?: "updated",
 ): Promise<ResponsePayload> => {
-  const payload: { manifest: string; expected_kind?: ManifestResourceKind } = { manifest };
+  const payload: {
+    manifest: string;
+    expected_kind?: ManifestResourceKind;
+    expected_ref?: string;
+    expected_operation?: ManifestOperation;
+    expected_result?: "updated";
+  } = { manifest };
   if (expectedKind) payload.expected_kind = expectedKind;
+  if (expectedRef) payload.expected_ref = expectedRef;
+  if (expectedOperation) payload.expected_operation = expectedOperation;
+  if (expectedResult) payload.expected_result = expectedResult;
   const response = await axios.post<ResponsePayload>(
     `${worldEndpoint(worldId)}/manifests/apply/`,
     payload,

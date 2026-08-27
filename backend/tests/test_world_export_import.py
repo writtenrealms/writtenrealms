@@ -189,7 +189,10 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             name="Harbor District",
             description="Docks and trade routes.",
             notes="Primary arrival zone.",
-            respawn_wait=120,
+            respawn_mode="fixed",
+            respawn_seconds=120,
+            door_reset_mode="fixed",
+            door_reset_seconds=120,
             pvp_zone=False,
         )
         replace_initial_state_snapshot(
@@ -969,6 +972,108 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
         self.harbor_zone.refresh_from_db()
         self.assertEqual(self.harbor_zone.center_id, original_center_id)
 
+    def test_batch_zone_center_accepts_newly_reserved_room_before_room_apply(self):
+        new_zone_relative_id = (
+            max(self.world.zones.values_list("relative_id", flat=True)) + 100
+        )
+        new_room_relative_id = (
+            max(self.world.rooms.values_list("relative_id", flat=True)) + 100
+        )
+        new_x = max(self.world.rooms.values_list("x", flat=True)) + 100
+        manifest = yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "zone",
+                    "metadata": {
+                        "ref": f"zone@{new_zone_relative_id}",
+                        "name": "Forward Center Zone",
+                    },
+                    "spec": {
+                        "center": f"room@{new_room_relative_id}",
+                    },
+                },
+                {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "room",
+                    "metadata": {
+                        "ref": f"room@{new_room_relative_id}",
+                        "name": "Forward Center Room",
+                    },
+                    "spec": {
+                        "coordinates": {"x": new_x, "y": 0, "z": 0},
+                        "zone": f"zone@{new_zone_relative_id}",
+                    },
+                },
+            ],
+            sort_keys=False,
+        )
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        imported_zone = self.world.zones.get(
+            relative_id=new_zone_relative_id,
+        )
+        imported_room = self.world.rooms.get(
+            relative_id=new_room_relative_id,
+        )
+        self.assertEqual(imported_zone.center_id, imported_room.id)
+        self.assertEqual(imported_room.zone_id, imported_zone.id)
+
+    def test_batch_rolls_back_deferred_center_assigned_to_another_zone(self):
+        new_room_relative_id = (
+            max(self.world.rooms.values_list("relative_id", flat=True)) + 100
+        )
+        new_x = max(self.world.rooms.values_list("x", flat=True)) + 100
+        original_center_id = self.harbor_zone.center_id
+        manifest = yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "zone",
+                    "metadata": {
+                        "ref": f"zone@{self.harbor_zone.relative_id}",
+                        "name": self.harbor_zone.name,
+                    },
+                    "spec": {
+                        "center": f"room@{new_room_relative_id}",
+                    },
+                },
+                {
+                    "apiVersion": "writtenrealms.com/v1alpha3",
+                    "kind": "room",
+                    "metadata": {
+                        "ref": f"room@{new_room_relative_id}",
+                        "name": "Mismatched Deferred Center",
+                    },
+                    "spec": {
+                        "coordinates": {"x": new_x, "y": 0, "z": 0},
+                        "zone": f"zone@{self.start_zone.relative_id}",
+                    },
+                },
+            ],
+            sort_keys=False,
+        )
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("is not assigned to that zone", str(response.data))
+        self.assertFalse(
+            self.world.rooms.filter(relative_id=new_room_relative_id).exists()
+        )
+        self.harbor_zone.refresh_from_db()
+        self.assertEqual(self.harbor_zone.center_id, original_center_id)
+
     def test_import_stages_moved_placeholder_before_reusing_origin(self):
         self.start_room.x = 20
         self.start_room.save(update_fields=["x"])
@@ -1645,7 +1750,13 @@ spec: {}
 
         apply_resp = self.client.post(
             self.apply_ep,
-            {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+            {
+                "manifest": yaml.safe_dump(manifest, sort_keys=False),
+                "expected_kind": "zone",
+                "expected_ref": f"zone@{self.harbor_zone.relative_id}",
+                "expected_operation": "apply",
+                "expected_result": "updated",
+            },
             format="json",
         )
 
@@ -1654,6 +1765,258 @@ spec: {}
         self.assertEqual(apply_resp.data["operation"], "updated")
         self.harbor_zone.refresh_from_db()
         self.assertEqual(self.harbor_zone.name, "Renamed Harbor")
+
+    def test_zone_center_apply_locks_room_before_zone(self):
+        manifest = {
+            "apiVersion": "writtenrealms.com/v1alpha3",
+            "kind": "zone",
+            "metadata": {
+                "ref": f"zone@{self.harbor_zone.relative_id}",
+                "name": self.harbor_zone.name,
+            },
+            "spec": {
+                "center": f"room@{self.harbor_room.relative_id}",
+            },
+        }
+
+        with CaptureQueriesContext(connection) as queries:
+            builder_world_export.apply_zone_manifest(
+                world=self.world,
+                manifest=manifest,
+                require_existing=True,
+            )
+
+        lock_target_order = []
+        for query in queries.captured_queries:
+            sql = query["sql"].lower()
+            if 'from "worlds_room"' in sql:
+                lock_target_order.append("room")
+            elif 'from "worlds_zone"' in sql:
+                lock_target_order.append("zone")
+        first_zone_index = lock_target_order.index("zone")
+        self.assertGreaterEqual(first_zone_index, 2)
+        self.assertEqual(
+            lock_target_order[:first_zone_index],
+            ["room"] * first_zone_index,
+        )
+
+    def test_zone_apply_without_center_does_not_query_rooms(self):
+        manifest = {
+            "apiVersion": "writtenrealms.com/v1alpha3",
+            "kind": "zone",
+            "metadata": {
+                "ref": f"zone@{self.harbor_zone.relative_id}",
+                "name": self.harbor_zone.name,
+            },
+            "spec": {
+                "notes": self.harbor_zone.notes,
+            },
+        }
+
+        with CaptureQueriesContext(connection) as queries:
+            builder_world_export.apply_zone_manifest(
+                world=self.world,
+                manifest=manifest,
+                require_existing=True,
+            )
+
+        selected_tables = [
+            "room" if 'from "worlds_room"' in query["sql"].lower()
+            else "zone" if 'from "worlds_zone"' in query["sql"].lower()
+            else None
+            for query in queries.captured_queries
+        ]
+        self.assertIn("zone", selected_tables)
+        self.assertNotIn("room", selected_tables)
+
+    def test_assigned_zone_builder_cannot_reassign_room_with_center_update(self):
+        builder_user = self.create_user("zone-center-assignee@example.com")
+        builder = WorldBuilder.objects.create(
+            world=self.world,
+            user=builder_user,
+            builder_rank=2,
+        )
+        BuilderAssignment.objects.create(
+            builder=builder,
+            assignment=self.harbor_zone,
+        )
+        self.client.force_authenticate(builder_user)
+        original_center_id = self.harbor_zone.center_id
+        original_name = self.harbor_zone.name
+        manifest = {
+            "apiVersion": "writtenrealms.com/v1alpha3",
+            "kind": "zone",
+            "metadata": {
+                "ref": f"zone@{self.harbor_zone.relative_id}",
+                "name": "Illicit Assigned-Zone Update",
+            },
+            "spec": {
+                "center": f"room@{self.start_room.relative_id}",
+            },
+        }
+
+        response = self.client.post(
+            self.apply_ep,
+            {
+                "manifest": yaml.safe_dump(manifest, sort_keys=False),
+                "expected_result": "updated",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("already assigned to this zone", str(response.data))
+        self.start_room.refresh_from_db()
+        self.harbor_zone.refresh_from_db()
+        self.assertEqual(self.start_room.zone_id, self.start_zone.id)
+        self.assertEqual(self.harbor_zone.center_id, original_center_id)
+        self.assertEqual(self.harbor_zone.name, original_name)
+
+    def test_rank_three_builder_cannot_reassign_room_with_center_apply(self):
+        builder_user = self.create_user("zone-center-rank-three@example.com")
+        WorldBuilder.objects.create(
+            world=self.world,
+            user=builder_user,
+            builder_rank=3,
+        )
+        self.client.force_authenticate(builder_user)
+        original_center_id = self.harbor_zone.center_id
+        original_name = self.harbor_zone.name
+        manifest = {
+            "apiVersion": "writtenrealms.com/v1alpha3",
+            "kind": "zone",
+            "metadata": {
+                "ref": f"zone@{self.harbor_zone.relative_id}",
+                "name": "Illicit Rank-Three Update",
+            },
+            "spec": {
+                "center": f"room@{self.start_room.relative_id}",
+            },
+        }
+
+        response = self.client.post(
+            self.apply_ep,
+            {"manifest": yaml.safe_dump(manifest, sort_keys=False)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("already assigned to this zone", str(response.data))
+        self.start_room.refresh_from_db()
+        self.harbor_zone.refresh_from_db()
+        self.assertEqual(self.start_room.zone_id, self.start_zone.id)
+        self.assertEqual(self.harbor_zone.center_id, original_center_id)
+        self.assertEqual(self.harbor_zone.name, original_name)
+
+    def test_expected_zone_ref_rejects_other_or_unused_ref_before_mutation(self):
+        detail_resp = self.client.get(reverse(
+            "builder-zone-detail",
+            args=[self.world.pk, self.harbor_zone.pk],
+        ))
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.data)
+        original_start_name = self.start_zone.name
+        original_harbor_name = self.harbor_zone.name
+        unused_relative_id = max(
+            Zone.objects.filter(world=self.world).values_list(
+                "relative_id",
+                flat=True,
+            )
+        ) + 100
+
+        for unexpected_ref in (
+            f"zone@{self.start_zone.relative_id}",
+            f"zone@{unused_relative_id}",
+        ):
+            with self.subTest(unexpected_ref=unexpected_ref):
+                manifest = yaml.safe_load(detail_resp.data["yaml"])
+                manifest["metadata"]["ref"] = unexpected_ref
+                manifest["metadata"]["name"] = "Wrong Route Zone"
+
+                response = self.client.post(
+                    self.apply_ep,
+                    {
+                        "manifest": yaml.safe_dump(manifest, sort_keys=False),
+                        "expected_kind": "zone",
+                        "expected_ref": (
+                            f"zone@{self.harbor_zone.relative_id}"
+                        ),
+                        "expected_operation": "apply",
+                        "expected_result": "updated",
+                    },
+                    format="json",
+                )
+
+                self.assertEqual(response.status_code, 400, response.data)
+                self.assertIn("Expected ref", str(response.data))
+                self.start_zone.refresh_from_db()
+                self.harbor_zone.refresh_from_db()
+                self.assertEqual(self.start_zone.name, original_start_name)
+                self.assertEqual(self.harbor_zone.name, original_harbor_name)
+                self.assertFalse(Zone.objects.filter(
+                    world=self.world,
+                    relative_id=unused_relative_id,
+                ).exists())
+
+    def test_expected_updated_result_rejects_missing_zone_before_create(self):
+        detail_resp = self.client.get(reverse(
+            "builder-zone-detail",
+            args=[self.world.pk, self.harbor_zone.pk],
+        ))
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.data)
+        unused_relative_id = max(
+            Zone.objects.filter(world=self.world).values_list(
+                "relative_id",
+                flat=True,
+            )
+        ) + 100
+        manifest = yaml.safe_load(detail_resp.data["yaml"])
+        manifest["metadata"]["ref"] = f"zone@{unused_relative_id}"
+        manifest["metadata"]["name"] = "Missing Route Zone"
+
+        response = self.client.post(
+            self.apply_ep,
+            {
+                "manifest": yaml.safe_dump(manifest, sort_keys=False),
+                "expected_kind": "zone",
+                "expected_ref": f"zone@{unused_relative_id}",
+                "expected_operation": "apply",
+                "expected_result": "updated",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertFalse(Zone.objects.filter(
+            world=self.world,
+            relative_id=unused_relative_id,
+        ).exists())
+
+    def test_expected_apply_operation_rejects_zone_delete_before_mutation(self):
+        empty_zone = Zone.objects.create(
+            world=self.world,
+            name="Protected Empty District",
+        )
+        detail_resp = self.client.get(reverse(
+            "builder-zone-detail",
+            args=[self.world.pk, empty_zone.pk],
+        ))
+        self.assertEqual(detail_resp.status_code, 200, detail_resp.data)
+
+        response = self.client.post(
+            self.apply_ep,
+            {
+                "manifest": detail_resp.data["delete_yaml"],
+                "expected_kind": "zone",
+                "expected_ref": f"zone@{empty_zone.relative_id}",
+                "expected_operation": "apply",
+                "expected_result": "updated",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("Expected operation apply", str(response.data))
+        self.assertTrue(Zone.objects.filter(pk=empty_zone.pk).exists())
 
     def test_zone_delete_manifest_removes_empty_zone(self):
         empty_zone = Zone.objects.create(

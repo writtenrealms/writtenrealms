@@ -1279,6 +1279,8 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
     manifest_ref = serializers.SerializerMethodField()
     yaml = serializers.SerializerMethodField()
     delete_yaml = serializers.SerializerMethodField()
+    respawn = serializers.SerializerMethodField()
+    door_reset = serializers.SerializerMethodField()
 
     class Meta:
         model = Zone
@@ -1293,7 +1295,8 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
             'center',
             'zone_data',
             'initial_state',
-            'respawn_wait',
+            'respawn',
+            'door_reset',
             'pvp_zone',
             'has_assignment',
             'yaml',
@@ -1303,12 +1306,29 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
             'relative_id',
             'manifest_ref',
             'initial_state',
+            'respawn',
+            'door_reset',
             'yaml',
             'delete_yaml',
         )
 
     def get_num_rooms(self, zone):
         return zone.rooms.count()
+
+    def update(self, instance, validated_data):
+        mutable_fields = {"name", "pvp_zone"}
+        changes = {
+            field_name: value
+            for field_name, value in validated_data.items()
+            if field_name in mutable_fields
+        }
+        with transaction.atomic():
+            zone = Zone.objects.select_for_update().get(pk=instance.pk)
+            for field_name, value in changes.items():
+                setattr(zone, field_name, value)
+            if changes:
+                zone.save(update_fields=[*changes, "modified_ts"])
+        return zone
 
     def get_center(self, zone):
         if zone.center:
@@ -1320,6 +1340,19 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
 
     def get_zone_data(self, zone):
         return get_state_snapshot(STATE_SCOPE_ZONE, zone)
+
+    @staticmethod
+    def _policy(mode, seconds):
+        policy = {"mode": mode}
+        if mode == "fixed":
+            policy["seconds"] = seconds
+        return policy
+
+    def get_respawn(self, zone):
+        return self._policy(zone.respawn_mode, zone.respawn_seconds)
+
+    def get_door_reset(self, zone):
+        return self._policy(zone.door_reset_mode, zone.door_reset_seconds)
 
     def get_manifest_ref(self, zone):
         return f"zone@{zone.relative_id or zone.id}"

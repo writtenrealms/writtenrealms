@@ -34,6 +34,7 @@ from spawns.models import (
     Item,
     Mob,
     MobState,
+    MovementFollow,
     Player,
     PlayerCurrencyBalance,
     ScheduledTriggerRun,
@@ -57,7 +58,7 @@ from spawns.triggers import execute_command_fallback_trigger
 from spawns.script_commands import MAX_SCRIPT_COMMAND_DEPTH
 from spawns.wallet import mutate_balances
 from tests.base import WorldTestCase
-from worlds.models import Door, Doorway, Room, World, WorldConfig
+from worlds.models import Door, Doorway, Room, RoomFlag, World, WorldConfig
 from tests.utils import capture_game_messages, dispatch_text_command
 
 
@@ -850,7 +851,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
                         {
                             "type": "command",
                             "subject": "trigger_actor",
-                            "command": "north",
+                            "command": "kill nobody",
                         },
                     ],
                 },
@@ -3564,7 +3565,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
                         {
                             "type": "command",
                             "subject": "trigger_actor",
-                            "command": "north",
+                            "command": "kill nobody",
                         },
                     ],
                 },
@@ -3605,7 +3606,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
                         {
                             "type": "command",
                             "subject": "trigger_actor",
-                            "command": "north",
+                            "command": "kill nobody",
                         },
                     ],
                 },
@@ -3806,6 +3807,668 @@ class TestScheduledTriggerSteps(WorldTestCase):
             self.player.key,
             {entry["player_key"] for entry in say_messages},
         )
+
+    def test_delayed_player_direction_command_moves_trigger_actor(self):
+        destination = self.room.create_at("down")
+        destination_observer = self.create_player(
+            "Below Observer",
+            user=self.create_user("below-observer@example.com"),
+            room=destination,
+        )
+        destination_observer.in_game = True
+        destination_observer.save(update_fields=["in_game"])
+        self.player.stamina = 10
+        self.player.save(update_fields=["stamina"])
+        trigger = self._create_trigger(
+            match="descend after the warning",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "echo",
+                            "room": "trigger_room",
+                            "text": "The warning ends.",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 4,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "down",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with patch("spawns.tasks.continue_scheduled_trigger_run.apply_async"):
+            with self.captureOnCommitCallbacks(execute=True):
+                start = start_trigger_steps(
+                    trigger=trigger,
+                    actor=self.player,
+                    room=self.room,
+                )
+        run = ScheduledTriggerRun.objects.get(pk=start.run_id)
+
+        with capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                status = advance_due_trigger_run(
+                    run_id=run.id,
+                    expected_step_index=1,
+                    now=run.next_run_ts,
+                )
+
+        self.assertEqual(status, ScheduledTriggerRun.STATUS_COMPLETED)
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+        self.assertLess(self.player.stamina, 10)
+        self.assertTrue(any(
+            entry["player_key"] == self.player.key
+            and entry["message"]["type"] == "cmd.move.success"
+            and entry["message"]["data"]["direction"] == "down"
+            for entry in messages
+        ))
+        self.assertTrue(any(
+            entry["player_key"] == destination_observer.key
+            and entry["message"]["type"] == "notification.movement.enter"
+            for entry in messages
+        ))
+
+    def test_player_direction_control_keeps_trigger_provenance(self):
+        destination = self.room.create_at("east")
+        follower = self.create_player(
+            "Waiting Player Follower",
+            user=self.create_user("waiting-player-follower@example.com"),
+        )
+        follower.in_game = True
+        follower.save(update_fields=["in_game"])
+        self.player.stamina = 10
+        self.player.save(update_fields=["stamina"])
+        MovementFollow.objects.create(
+            follower=follower,
+            leader_player=self.player,
+            last_processed_sequence=self.player.follow_move_sequence,
+        )
+        trigger = self._create_trigger(
+            match="lead the player east",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "east",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertTrue(result.started, (result.code, result.feedback))
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.id)
+        control = GameEventOutbox.objects.get(
+            event_type="private.follow.directional_move",
+        )
+        self.assertIsNotNone(control.depends_on_batch_id)
+        self.assertEqual(
+            control.data[SCRIPT_COMMAND_PROVENANCE_KEY]["subject"],
+            {
+                "type": "player",
+                "id": self.player.id,
+                "key": self.player.key,
+            },
+        )
+
+    def test_player_direction_rolls_back_with_later_action_failure(self):
+        self.room.create_at("east")
+        self.player.stamina = 10
+        self.player.save(update_fields=["stamina"])
+        trigger = self._create_trigger(
+            match="fail after moving the player",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "east",
+                        },
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "kill nobody",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "command_not_step_safe")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.id)
+        self.assertEqual(self.player.stamina, 10)
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+        self.assertFalse(GameEventOutbox.objects.exists())
+
+    def test_remote_mob_direction_command_enters_trigger_room(self):
+        remote_room = self.room.create_at("west")
+        origin_observer = self.create_player(
+            "West Room Witness",
+            user=self.create_user("remote-move-origin@example.com"),
+            room=remote_room,
+        )
+        origin_observer.in_game = True
+        origin_observer.save(update_fields=["in_game"])
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="scene-guard",
+            name="a scene guard",
+        )
+        local_decoy = definition.spawn(self.room, self.spawn_world)
+        scene_guard = definition.spawn(remote_room, self.spawn_world)
+        sequence_before = scene_guard.follow_move_sequence
+        trigger = self._create_trigger(
+            match="call the guard",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.scene-guard",
+                            },
+                            "command": "east",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with capture_game_messages() as messages:
+            self._dispatch(self.player.id, "call the guard")
+
+        scene_guard.refresh_from_db()
+        local_decoy.refresh_from_db()
+        self.assertEqual(scene_guard.room_id, self.room.id)
+        self.assertEqual(
+            scene_guard.follow_move_sequence,
+            sequence_before + 1,
+        )
+        self.assertEqual(local_decoy.room_id, self.room.id)
+        self.assertEqual(
+            ScheduledTriggerRun.objects.get(trigger=trigger).status,
+            ScheduledTriggerRun.STATUS_COMPLETED,
+        )
+        exit_messages = [
+            entry
+            for entry in messages
+            if entry["message"]["type"] == "notification.movement.exit"
+            and entry["message"]["data"]["actor"]["key"] == scene_guard.key
+        ]
+        enter_messages = [
+            entry
+            for entry in messages
+            if entry["message"]["type"] == "notification.movement.enter"
+            and entry["message"]["data"]["actor"]["key"] == scene_guard.key
+        ]
+        self.assertEqual(
+            {entry["player_key"] for entry in exit_messages},
+            {origin_observer.key},
+        )
+        self.assertTrue(all(
+            entry["message"]["data"]["direction"] == "east"
+            for entry in exit_messages
+        ))
+        self.assertEqual(
+            {entry["player_key"] for entry in enter_messages},
+            {self.player.key},
+        )
+        self.assertTrue(all(
+            entry["message"]["data"]["direction"] == "west"
+            for entry in enter_messages
+        ))
+
+    def test_remote_mob_direction_can_reselect_in_zero_delay_followup_step(self):
+        remote_room = self.room.create_at("west")
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="two-step-scene-guard",
+            name="a scene guard",
+        )
+        scene_guard = definition.spawn(remote_room, self.spawn_world)
+        trigger = self._create_trigger(
+            match="summon the speaking guard",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.two-step-scene-guard",
+                            },
+                            "command": "east",
+                        },
+                    ],
+                },
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{self.room.relative_id}",
+                                "mob": "mobdefinition.two-step-scene-guard",
+                            },
+                            "command": "say I have arrived.",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with patch(
+            "spawns.tasks.continue_scheduled_trigger_run.apply_async"
+        ):
+            with capture_game_messages() as messages:
+                with self.captureOnCommitCallbacks(execute=True):
+                    result = start_trigger_steps(
+                        trigger=trigger,
+                        actor=self.player,
+                        room=self.room,
+                    )
+                run = ScheduledTriggerRun.objects.get(pk=result.run_id)
+                with self.captureOnCommitCallbacks(execute=True):
+                    status = advance_due_trigger_run(
+                        run_id=run.id,
+                        expected_step_index=1,
+                        now=run.next_run_ts,
+                    )
+
+        self.assertTrue(result.started)
+        self.assertEqual(status, ScheduledTriggerRun.STATUS_COMPLETED)
+        scene_guard.refresh_from_db()
+        self.assertEqual(scene_guard.room_id, self.room.id)
+        self.assertTrue(any(
+            entry["player_key"] == self.player.key
+            and entry["message"]["type"] == "notification.cmd.say.success"
+            and entry["message"]["data"]["actor"]["key"] == scene_guard.key
+            and "I have arrived." in entry["message"]["text"]
+            for entry in messages
+        ))
+
+    def test_remote_mob_direction_ignores_roam_and_player_movement_rules(self):
+        remote_room = self.room.create_at("west")
+        RoomFlag.objects.create(room=remote_room, code="no_roam")
+        RoomFlag.objects.create(room=self.room, code="no_roam")
+        self.room.type = adv_consts.ROOM_TYPE_WATER
+        self.room.save(update_fields=["type"])
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_POLICY,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=remote_room.id,
+            event=adv_consts.TRIGGER_EVENT_BEFORE_MOVE_EXIT,
+            conditions=json.dumps({"always": False}),
+            failure_message="Nothing may leave this room.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="explicit-scene-guard",
+            name="an explicit scene guard",
+        )
+        scene_guard = definition.spawn(remote_room, self.spawn_world)
+        trigger = self._create_trigger(
+            match="call the explicit guard",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.explicit-scene-guard",
+                            },
+                            "command": "east",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertTrue(result.started, (result.code, result.feedback))
+        self.assertEqual(
+            ScheduledTriggerRun.objects.get(trigger=trigger).status,
+            ScheduledTriggerRun.STATUS_COMPLETED,
+        )
+        scene_guard.refresh_from_db()
+        self.assertEqual(scene_guard.room_id, self.room.id)
+
+    def test_remote_mob_direction_rolls_back_with_later_action_failure(self):
+        remote_room = self.room.create_at("west")
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="rollback-scene-guard",
+            name="a scene guard",
+        )
+        scene_guard = definition.spawn(remote_room, self.spawn_world)
+        sequence_before = scene_guard.follow_move_sequence
+        trigger = self._create_trigger(
+            match="fail to call the guard",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.rollback-scene-guard",
+                            },
+                            "command": "east",
+                        },
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": "kill nobody",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "command_not_step_safe")
+        scene_guard.refresh_from_db()
+        self.assertEqual(scene_guard.room_id, remote_room.id)
+        self.assertEqual(scene_guard.follow_move_sequence, sequence_before)
+        self.assertFalse(
+            ScheduledTriggerRun.objects.filter(trigger=trigger).exists()
+        )
+        self.assertFalse(GameEventOutbox.objects.exists())
+
+    def test_remote_mob_direction_snapshots_followers_before_later_follow(self):
+        remote_room = self.room.create_at("west")
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="followed-scene-guard",
+            name="Scene Guard",
+            keywords="scene guard",
+        )
+        scene_guard = definition.spawn(remote_room, self.spawn_world)
+        trigger = self._create_trigger(
+            match="follow the arriving guard",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.followed-scene-guard",
+                            },
+                            "command": "east",
+                        },
+                        {
+                            "type": "command",
+                            "subject": "trigger_actor",
+                            "command": f"follow {scene_guard.key}",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertTrue(result.started, (result.code, result.feedback))
+        scene_guard.refresh_from_db()
+        self.assertEqual(scene_guard.room_id, self.room.id)
+        self.assertEqual(
+            MovementFollow.objects.get(follower=self.player).leader_mob_id,
+            scene_guard.id,
+        )
+        self.assertFalse(
+            GameEventOutbox.objects.filter(
+                event_type="private.follow.directional_move",
+            ).exists()
+        )
+
+    def test_remote_mob_direction_control_keeps_trigger_provenance(self):
+        remote_room = self.room.create_at("west")
+        follower = self.create_player(
+            "Waiting Follower",
+            user=self.create_user("remote-move-follower@example.com"),
+            room=remote_room,
+        )
+        follower.in_game = True
+        follower.save(update_fields=["in_game"])
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="leading-scene-guard",
+            name="a leading scene guard",
+        )
+        scene_guard = definition.spawn(remote_room, self.spawn_world)
+        MovementFollow.objects.create(
+            follower=follower,
+            leader_mob=scene_guard,
+            last_processed_sequence=scene_guard.follow_move_sequence,
+        )
+        trigger = self._create_trigger(
+            match="lead in the guard",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.leading-scene-guard",
+                            },
+                            "command": "east",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertTrue(result.started)
+        control = GameEventOutbox.objects.get(
+            event_type="private.follow.directional_move",
+        )
+        self.assertIsNotNone(control.depends_on_batch_id)
+        self.assertEqual(
+            control.data[SCRIPT_COMMAND_PROVENANCE_KEY]["subject"],
+            {
+                "type": "mob",
+                "id": scene_guard.id,
+                "key": scene_guard.key,
+            },
+        )
+
+    def test_remote_mob_direction_rejects_a_closed_door(self):
+        remote_room = self.room.create_at("west")
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_CLOSED,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction=adv_consts.DIRECTION_EAST,
+            from_room=remote_room,
+            to_room=self.room,
+            name="scene door",
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction=adv_consts.DIRECTION_WEST,
+            from_room=self.room,
+            to_room=remote_room,
+            name="scene door",
+        )
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="door-blocked-scene-guard",
+            name="a blocked scene guard",
+        )
+        scene_guard = definition.spawn(remote_room, self.spawn_world)
+        trigger = self._create_trigger(
+            match="call the blocked guard",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.door-blocked-scene-guard",
+                            },
+                            "command": "east",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "closed_door")
+        scene_guard.refresh_from_db()
+        self.assertEqual(scene_guard.room_id, remote_room.id)
+        self.assertFalse(GameEventOutbox.objects.exists())
+
+    def test_remote_mob_direction_rejects_active_combat(self):
+        remote_room = self.room.create_at("west")
+        fighter = self.create_player(
+            "Remote Fighter",
+            user=self.create_user("remote-move-fighter@example.com"),
+            room=remote_room,
+        )
+        fighter.in_game = True
+        fighter.save(update_fields=["in_game"])
+        definition = MobDefinition.objects.create(
+            world=self.world,
+            slug="fighting-scene-guard",
+            name="a fighting scene guard",
+        )
+        scene_guard = definition.spawn(remote_room, self.spawn_world)
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=remote_room,
+            player=fighter,
+            mob=scene_guard,
+        )
+        trigger = self._create_trigger(
+            match="call the fighting guard",
+            conditions="",
+            steps=[
+                {
+                    "after_seconds": 0,
+                    "actions": [
+                        {
+                            "type": "command",
+                            "subject": {
+                                "type": "mob",
+                                "room": f"room@{remote_room.relative_id}",
+                                "mob": "mobdefinition.fighting-scene-guard",
+                            },
+                            "command": "east",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        result = start_trigger_steps(
+            trigger=trigger,
+            actor=self.player,
+            room=self.room,
+        )
+
+        self.assertFalse(result.started)
+        self.assertEqual(result.code, "in_combat")
+        scene_guard.refresh_from_db()
+        encounter.refresh_from_db()
+        self.assertEqual(scene_guard.room_id, remote_room.id)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
+        self.assertFalse(GameEventOutbox.objects.exists())
 
     def test_delayed_remote_mob_command_resolves_current_room_candidate(self):
         remote_room = self.room.create_at("east")

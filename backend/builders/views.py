@@ -2909,7 +2909,7 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if operation == "created" else status.HTTP_200_OK,
         )
 
-    def _apply_zone_manifest(self, manifest):
+    def _apply_zone_manifest(self, manifest, *, require_existing=False):
         self._assert_can_edit_zone_manifest(manifest)
         operation = builder_manifests.parse_manifest_operation(manifest)
         if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
@@ -2935,6 +2935,12 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         zone, is_create = builder_world_export.apply_zone_manifest(
             world=self.world,
             manifest=manifest,
+            require_existing=require_existing,
+            deferred_center_relative_ids=getattr(
+                self,
+                "_batch_created_room_relative_ids",
+                None,
+            ),
         )
         return Response(
             {
@@ -3102,7 +3108,7 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             status=status.HTTP_201_CREATED if is_create else status.HTTP_200_OK,
         )
 
-    def _dispatch_manifest(self, manifest):
+    def _dispatch_manifest(self, manifest, *, expected_result=None):
         manifest = (
             builder_world_export.normalize_manifest_room_references_for_import(
                 world=self.world,
@@ -3121,7 +3127,10 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         if manifest_kind == builder_world_export.CURRENCY_MANIFEST_KIND:
             return self._apply_currency_manifest(manifest)
         if manifest_kind == builder_world_export.ZONE_MANIFEST_KIND:
-            return self._apply_zone_manifest(manifest)
+            return self._apply_zone_manifest(
+                manifest,
+                require_existing=expected_result == "updated",
+            )
         if manifest_kind == builder_world_export.ROOM_MANIFEST_KIND:
             return self._apply_room_manifest(manifest)
         if manifest_kind == builder_world_export.PATH_MANIFEST_KIND:
@@ -3385,6 +3394,12 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                                     **response.data,
                                 }
                             )
+                        builder_world_export.validate_deferred_zone_center_membership(
+                            world=self.world,
+                            room_relative_ids=(
+                                self._batch_created_room_relative_ids
+                            ),
+                        )
 
                     builder_world_export.apply_world_bundle_links(
                         scope_worlds=scope_worlds,
@@ -3459,6 +3474,129 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                 ],
             })
 
+    def _assert_expected_manifest_ref(self, manifests, expected_ref):
+        if expected_ref is None:
+            return
+        if not isinstance(expected_ref, str) or not expected_ref.strip():
+            raise serializers.ValidationError({
+                "expected_ref": ["Expected ref must be a non-empty string."],
+            })
+        if len(manifests) != 1:
+            raise serializers.ValidationError({
+                "manifest": [
+                    "Expected exactly one YAML document when expected_ref is set."
+                ],
+            })
+
+        expected_ref = expected_ref.strip()
+        metadata = manifests[0].get("metadata")
+        actual_ref = (
+            str(metadata.get("ref") or "").strip()
+            if isinstance(metadata, dict)
+            else ""
+        )
+        if actual_ref != expected_ref:
+            raise serializers.ValidationError({
+                "manifest": [
+                    f"Expected ref {expected_ref}, got {actual_ref or '(missing)'}."
+                ],
+            })
+
+    def _assert_expected_manifest_operation(
+        self,
+        manifests,
+        expected_operation,
+    ):
+        if expected_operation is None:
+            return
+        if (
+            not isinstance(expected_operation, str)
+            or not expected_operation.strip()
+        ):
+            raise serializers.ValidationError({
+                "expected_operation": [
+                    "Expected operation must be a non-empty string."
+                ],
+            })
+
+        expected_operation = expected_operation.strip().lower()
+        allowed_operations = {
+            builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY,
+            builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE,
+        }
+        if expected_operation not in allowed_operations:
+            raise serializers.ValidationError({
+                "expected_operation": [
+                    "Expected operation must be one of: "
+                    f"{', '.join(sorted(allowed_operations))}."
+                ],
+            })
+        if len(manifests) != 1:
+            raise serializers.ValidationError({
+                "manifest": [
+                    "Expected exactly one YAML document when "
+                    "expected_operation is set."
+                ],
+            })
+
+        actual_operation = builder_manifests.parse_manifest_operation(
+            manifests[0]
+        )
+        if actual_operation != expected_operation:
+            raise serializers.ValidationError({
+                "manifest": [
+                    f"Expected operation {expected_operation}, got "
+                    f"{actual_operation}."
+                ],
+            })
+
+    def _assert_expected_manifest_result(self, manifests, expected_result):
+        if expected_result is None:
+            return
+        if not isinstance(expected_result, str) or not expected_result.strip():
+            raise serializers.ValidationError({
+                "expected_result": [
+                    "Expected result must be a non-empty string."
+                ],
+            })
+
+        expected_result = expected_result.strip().lower()
+        if expected_result != "updated":
+            raise serializers.ValidationError({
+                "expected_result": [
+                    "Only expected_result 'updated' is currently supported."
+                ],
+            })
+        if len(manifests) != 1:
+            raise serializers.ValidationError({
+                "manifest": [
+                    "Expected exactly one YAML document when "
+                    "expected_result is set."
+                ],
+            })
+
+        manifest = manifests[0]
+        actual_kind = builder_world_export.parse_document_kind(manifest)
+        if actual_kind != builder_world_export.ZONE_MANIFEST_KIND:
+            raise serializers.ValidationError({
+                "expected_result": [
+                    "Expected result 'updated' is currently supported only "
+                    "for zone manifests."
+                ],
+            })
+        actual_operation = builder_manifests.parse_manifest_operation(
+            manifest
+        )
+        if (
+            actual_operation
+            != builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY
+        ):
+            raise serializers.ValidationError({
+                "manifest": [
+                    "Expected result updated requires operation apply."
+                ],
+            })
+
     def post(self, request, world_pk, format=None):
         manifest_text = request.data.get("manifest")
         if manifest_text is None:
@@ -3469,6 +3607,21 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             manifests,
             request.data.get("expected_kind"),
         )
+        self._assert_expected_manifest_ref(
+            manifests,
+            request.data.get("expected_ref"),
+        )
+        self._assert_expected_manifest_operation(
+            manifests,
+            request.data.get("expected_operation"),
+        )
+        expected_result = request.data.get("expected_result")
+        self._assert_expected_manifest_result(
+            manifests,
+            expected_result,
+        )
+        if isinstance(expected_result, str):
+            expected_result = expected_result.strip().lower()
         if (
             manifests
             and builder_world_export.parse_document_kind(manifests[0])
@@ -3476,7 +3629,10 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         ):
             return self._apply_world_bundle(manifests)
         if len(manifests) == 1:
-            return self._dispatch_manifest(manifests[0])
+            return self._dispatch_manifest(
+                manifests[0],
+                expected_result=expected_result,
+            )
 
         builder_world_export.validate_room_door_stream_consistency(manifests)
         results = []
@@ -3542,6 +3698,10 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                             f"{_manifest_error_message(exc.detail)}"
                         )
                     results.append(response.data)
+                builder_world_export.validate_deferred_zone_center_membership(
+                    world=self.world,
+                    room_relative_ids=self._batch_created_room_relative_ids,
+                )
         self._batch_created_room_relative_ids = set()
         self._batch_room_ref_cache = None
         self._batch_room_object_cache = None

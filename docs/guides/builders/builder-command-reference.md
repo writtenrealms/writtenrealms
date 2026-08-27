@@ -697,7 +697,7 @@ Formats:
 /wcmd -- <command>
 ```
 
-Runs a nested command as another issuer.
+Runs a nested command through a selected ambient scope or character subject.
 
 Scope targets:
 
@@ -706,10 +706,25 @@ Scope targets:
 - `/cmd world -- ...`: run the nested command as the current world
 - `/rcmd`, `/zcmd`, and `/wcmd` are scope aliases
 
-Mob target:
+Character targets:
 
 - `/cmd guard -- say Halt!`: run the nested command as the matching mob
 - `/force guard -- say Halt!`: same target-driven behavior
+- `/force aria west`: make a player in the builder's room issue one ordinary
+  movement direction
+
+Interactive builders may target either a mob or player in their current live
+runtime room. Use `mob:<selector>` or `player:<selector>` when a name is
+ambiguous. Mob targets may issue any otherwise supported command. Player
+targets are limited to the six ordinary movement directions; forced player
+input does not expand that player's aliases or enter their command history.
+Movement still observes the usual exits, doors, stamina, combat restrictions,
+movement-policy Triggers, follower behavior, and arrival lifecycle.
+
+The builder remains the authenticated command issuer while the selected
+character is the command subject. This interactive authority is separate from
+Trigger command actions, where only the original player `trigger_actor` may
+issue a bare movement direction.
 
 Examples:
 
@@ -718,6 +733,7 @@ Examples:
 /cmd room -- /grantitem {{ actor_key }} starter-blade
 /cmd mob:guard -- say Halt!
 /force guard -- emote salutes.
+/force player:aria west
 /zcmd -- /echo -- The zone grows quiet.
 ```
 
@@ -726,6 +742,12 @@ Use `&&` to chain nested commands on one line:
 ```text
 /cmd room -- /state set room lever_pulled true && /echo -- The lever clicks.
 ```
+
+Typed Trigger `command` actions do not allow nested `/cmd` or command chains.
+They select `trigger_room`, `trigger_actor`, or one exact mob directly. For the
+WR1 `/at` pattern, select the mob in a portable `room@<relative_id>` and give
+that subject one command; a bare direction can bring the selected mob through
+an adjacent exit. See [Running Commands From Steps](trigger-builder-guide.md#running-commands-from-steps).
 
 ### `/edit`
 
@@ -1075,7 +1097,7 @@ instance snapshot safeguards continue to apply.
 
 Doors are unchanged by default. Add `--doors` to also reset materialized
 runtime doorway states in the selected zone to their authored defaults,
-regardless of the normal door-reset schedule:
+regardless of its typed `spec.door_reset` policy:
 
 ```text
 /repop --doors
@@ -1090,10 +1112,10 @@ script: /cmd room -- /repop --doors
 Only the issuer's exact runtime world is affected. Inside an instance, `/repop`
 refills missing placements in that run's current zone; it does not change the
 template or another active run. Even with `--doors`, it does not clear combat,
-reset scoped state, consume the zone's door-reset timer, or rebuild the
-instance. Doorways already at their authored default remain sparse rather than
-gaining unnecessary runtime state. Use `/reset` when the entire current
-instance run should be rebuilt.
+reset scoped state, consume or advance the zone's door-reset schedule, or
+rebuild the instance. Doorways already at their authored default remain sparse
+rather than gaining unnecessary runtime state. Use `/reset` when the entire
+current instance run should be rebuilt.
 
 This command is intended for builder testing and deliberate room interactions,
 not as a replacement for ordinary spawn-plan scheduling. High-frequency room

@@ -212,6 +212,12 @@ Current required mappings:
   no `spec.reset` key: world/instance lifecycle services perform initial
   population, while `spec.respawn` controls replacement of missing placements
   in a running world.
+- Convert the single authored WR1 zone `respawn_wait` value into both typed WR2
+  zone policies. A negative wait becomes `spec.respawn.mode: none` and
+  `spec.door_reset.mode: none`. A non-negative wait becomes `mode: fixed` for
+  both policies, with that wait emitted as each policy's `seconds`. This is a
+  deterministic authored-content conversion only; never export a live zone
+  reset timestamp or infer either policy from current mobs, items, or doors.
 - WR1 `Zone.is_warzone` does not export. WR2 zones no longer have an
   `is_warzone` model field or zone manifest key.
 - Runtime spawn reconciliation is now named spawn-plan processing in WR2:
@@ -399,6 +405,16 @@ Current required mappings:
   room's `room@<relative_id>`; never emit a database room id. Emit one action
   per command; do not put WR1 command chains or `/cmd` wrappers inside
   `command.command`.
+- A deterministic WR1 `/at` scene action may use that same typed shape only
+  when the exporter can resolve one authored room, an unambiguous nested mob
+  subject (one portable definition plus deterministic `where` when needed),
+  one bare movement direction, and that room's authored adjacent exit in the
+  named direction. Emit the selected room as `room@<relative_id>`, the mob as
+  `mobdefinition.<slug>`, and the normalized direction (for example `east`)
+  in the action's `command` field. Dynamic rooms or subjects, multiple possible
+  placements, a missing exit, ambiguous mob selection, chained commands, and
+  unknown or non-direction movement remain explicit exporter diagnostics for
+  builder review; do not import `/at` itself as a WR2 command wrapper.
 - A deterministic WR1 `/send {{ actor }} <text>` maps to native
   `send` with `actor: trigger_actor`. A deterministic
   `/sendexcept {{ actor }} <text>` maps to native `send_except` with the same
@@ -468,7 +484,19 @@ In **World > Config**, configuration is manifest-oriented:
 - saves require exactly one `kind: world` document and reload the canonical YAML
 - **World > Edit World** remains the general editor for other kinds and batches
 
-### 2. Room Triggers Screen
+### 2. Zone Config And Utils Screens
+
+In **Zone > Config**, the selected zone's canonical `kind: zone` document is
+loaded into the shared YAML editor. Builders can edit, copy, and save that one
+document directly; a successful save reloads the canonical YAML. Zone Config
+owns authored zone fields such as its name, description, initial state,
+population default, door-reset policy, PvP setting, and center room.
+
+The operational **Move Zone** tool is in **Zone > Utils**. It changes room
+coordinates and is intentionally separate from the manifest-backed Config
+screen.
+
+### 3. Room Triggers Screen
 
 In room navigation, **Triggers** now replaces **Actions**.
 
@@ -478,7 +506,7 @@ In room navigation, **Triggers** now replaces **Actions**.
 - Each trigger includes **Copy YAML** and **Copy Delete YAML** actions.
 - Recommended workflow: copy template YAML, tweak it, ingest in **Edit World**.
 
-### 3. Room Edit Screen
+### 4. Room Edit Screen
 
 The former room **Checks** navigation slot is now **Edit**. In **Rooms > Edit**,
 the selected room's current `kind: room` manifest is loaded into the shared YAML
@@ -494,7 +522,7 @@ room-selection payloads lean.
   **Rooms > Triggers**; they are not nested inside the room manifest.
 - Room checks are not exposed because they are not part of WR2.
 
-### 4. Item Definition Details Screen
+### 5. Item Definition Details Screen
 
 In **World > Items**, the item definition detail screen can expose the current
 item definition as YAML.
@@ -504,7 +532,7 @@ item definition as YAML.
 - Recommended workflow: copy the YAML, edit it, then ingest it in
   **World > Edit World**.
 
-### 5. Spawn Plan Screens
+### 6. Spawn Plan Screens
 
 Spawn plans are authored through `kind: spawnplan` YAML in **World > Edit World**.
 Room **Spawn Plans** is a read-only view of spawn plans targeting that room.
@@ -513,12 +541,12 @@ Room **Spawn Plans** is a read-only view of spawn plans targeting that room.
 - Zone API responses expose both `relative_id` and `manifest_ref`; manifests
   should use the `manifest_ref` value, such as `zone@1`.
 - Zone detail screens expose copy actions for the zone apply YAML and delete
-  YAML. Use the apply YAML to edit fields such as `metadata.name` and
-  `spec.initial_state`, then paste it into **World > Edit World**.
+  YAML. Use **Zone > Config** to edit and save one selected zone directly, or
+  use **World > Edit World** when applying a multi-document change.
 - Path API responses also expose `relative_id` and `manifest_ref`; spawn-plan
   path targets should use `path@<relative_id>`, not path names.
 
-### 6. World Edit Screen
+### 7. World Edit Screen
 
 The world-level **Edit World** view uses the same YAML editor layout as the
 entity detail screens. It tells builders that they can paste one or more YAML
@@ -563,10 +591,11 @@ the supported-kind catalog and examples rather than duplicating them inline.
   - **delete** (`operation: delete` with `metadata.id` or `metadata.key`)
 - Zone manifests support **apply** for create/update and **delete**
   (`operation: delete` with `metadata.ref`). Zone manifests no longer include
-  legacy `spec.is_warzone`; use `spec.pvp_zone` only for authored PvP zone
-  behavior.
+  legacy `spec.respawn_wait` or `spec.is_warzone`; use the typed
+  `spec.respawn` and `spec.door_reset` policies for scheduling and
+  `spec.pvp_zone` for authored PvP zone behavior.
 
-### 7. Currency Screen
+### 8. Currency Screen
 
 **World > Currencies** reads the base world's inherited catalog. Root-world
 builders can create currencies, edit display fields and starting amounts,
@@ -575,7 +604,7 @@ or delete YAML. Instance currency views are inherited/read-only. The same
 builder services enforce identity, lifecycle, default, starting-balance, and
 deletion rules for REST and manifests.
 
-### 8. Socials Screen
+### 9. Socials Screen
 
 **World > Socials** reads the base world's social catalog. Rank 3+ base-world
 builders can create, edit, and delete definitions there; instance views inherit
@@ -650,6 +679,66 @@ Builder-facing attack routine and dual-wielding authoring guidance lives in:
 Builder-facing mob trait authoring guidance lives in:
 
 - [docs/guides/builders/mob-trait-builder-guide.md](../guides/builders/mob-trait-builder-guide.md)
+
+## Zone Manifest Shape
+
+Zones own independent population-default and door-reset policies:
+
+```yaml
+apiVersion: writtenrealms.com/v1alpha3
+kind: zone
+metadata:
+  ref: zone@1
+  name: Harbor District
+spec:
+  description: Warehouses and wharves crowd the waterfront.
+  notes: Builder-only notes about the harbor encounter flow.
+  initial_state:
+    curfew_active: false
+  respawn:
+    mode: fixed
+    seconds: 300
+  door_reset:
+    mode: none
+  pvp_zone: false
+  center: room@1
+```
+
+Both policy objects accept the strict modes `fixed` and `none`. `fixed`
+requires an explicit non-negative integer `seconds`; `none` forbids a
+`seconds` field. Newly created zones default both policies to `fixed` with
+`seconds: 300`, and canonical YAML always emits the normalized policies.
+`never` is not an alias for `none`.
+
+`spec.respawn` is the zone's default missing-placement interval. It affects
+only spawn plans whose own `spec.respawn.mode` is `inherit_zone` and which omit
+plan-level `seconds`. An `inherit_zone` plan with explicit `seconds` uses that
+interval as an override, while a plan with `fixed` or `none` keeps its own
+policy. The zone default does not itself create, despawn, or reset population.
+
+`spec.door_reset` independently controls when materialized runtime doorways in
+the zone return to the `default_state` authored by their room manifests.
+`mode: none` means no automatic door reset. Door schedules and doorway state
+belong to the exact runtime world, so parallel instance runs never share or
+consume one another's timers. The schedule is stored independently from
+mutable zone scoped-state data, so clearing an empty zone-state row cannot
+erase or postpone it. Door-policy edits increment an authored version token;
+runtime schedules adopt it lazily and restart their interval, avoiding an
+update fan-out across historical or stopped runtimes. A doorway connecting two
+zones participates in both endpoint zones: either endpoint's due fixed policy
+can reset it, while one world reconciliation coalesces the doorway to at most
+one reset. A scheduled door reset does not reset spawn plans, combat, scoped
+state, rooms, or players.
+
+`spec.center` is a non-owning map-center reference. An ordinary zone apply
+requires the referenced room to already belong to that zone and never changes
+room membership. A batch import may defer this check only for a newly reserved,
+currently unassigned room declared in the same stream; the transaction validates
+its final zone assignment before commit.
+
+`/repop` remains an explicit missing-placement reconciliation command, and
+`/repop --doors` additionally performs an explicit door reset. Neither form
+consumes or advances the zone's automatic door-reset schedule.
 
 ## Initial State Manifest Shape
 
@@ -1020,6 +1109,13 @@ steps:
           room: room@12
           mob: mobdefinition.minos
         command: 'say Name.'
+      # Given room@3 --east--> room@2, the Trigger's target room.
+      - type: command
+        subject:
+          type: mob
+          room: room@3
+          mob: mobdefinition.scene-guard
+        command: east
       - type: command
         subject: trigger_room
         command: /transfer {{ actor_key }} room@42
@@ -1089,8 +1185,23 @@ One action executes one command; command chains, history references, and nested
 audited handlers. Approved handlers include `say`, `emote`, `talk`, authored
 socials, room-subject, room-scoped `/echo`,
 transactional `/open`, `/close`, and `/lock`, player-subject transactional
-`follow` and `unfollow`, transactional `/transfer`, and transactional
-`/exitinstance`.
+`follow` and `unfollow`, player-Trigger-actor and mob-subject adjacent
+directions, transactional `/transfer`, and transactional `/exitinstance`.
+
+A bare direction is accepted for the player `trigger_actor` or a selected mob
+command subject. Player movement uses the ordinary movement handler and keeps
+its exit, door, stamina, terrain, combat, policy, follower, arrival, reaction,
+and aggro behavior. It is transactional with the whole step and cannot target
+another player. Mob movement resolves from that mob's live selected room,
+requires an adjacent exit and a passable door, and rejects a dead, pending,
+roomless, or actively fighting mob. Explicit mob movement is not autonomous
+roaming, so roam chance, roam zone/path, and `no_roam` constraints do not
+apply; neither do player stamina, water, or movement-policy checks. The mob
+move emits normal departure/arrival output and a directional follow edge, but
+not player-only arrival hooks, destination reactions, or automatic aggro. To
+address the moved mob again in its destination, use a following step (which
+may have `after_seconds: 0`) because same-step mob candidates were snapshotted
+before the move.
 
 `follow <character>` and `unfollow [character]` require the player
 `trigger_actor` as their subject. They execute directly as that player; a
@@ -1098,7 +1209,9 @@ Trigger must not wrap them in `/force` or `/cmd`. The relationship affects
 directional locomotion through an adjacent exit. Every follower's move retains
 its normal combat, stamina, policy, exit, and door checks. A chain is capped at
 16 following links, and relationship creation fails if it would exceed that
-propagation depth.
+propagation depth. A relationship created after a movement edge begins at the
+leader's new sequence and does not catch that edge; a relationship removed or
+switched before asynchronous propagation no longer participates in it.
 A direction-based `/transfer` of a mob through an adjacent exit also emits a
 directional follow edge. Player transfers, mob transfers using `here` or a
 room reference, instance transitions, death routing, resets, and other
@@ -1409,9 +1522,10 @@ foreign keys, or structural events.
 Zones use the same builder-facing identity contract. The canonical zone route
 is `/build/worlds/<world_pk>/zones/<relative_id>`, so `zone@5` in database
 world 23 appears at `/build/worlds/23/zones/5`. Every route nested beneath the
-zone keeps that relative-id segment. Builder navigation must therefore be
-generated from `Zone.relative_id`, while API calls resolve the zone once and
-continue using `Zone.id` for relational database operations.
+zone, including **Config** and **Utils**, keeps that relative-id segment.
+Builder navigation must therefore be generated from `Zone.relative_id`, while
+API calls resolve the zone once and continue using `Zone.id` for relational
+database operations.
 
 The troubleshooting route
 `/build/worlds/<world_pk>/zones/db/<database_pk>` resolves the database row
@@ -2323,6 +2437,12 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   cannot reach the base world or another instance run.
   Newlines, `;`/`&&` chains, history references, and nested `/cmd` are rejected;
   the resolved handler must explicitly support Trigger-step execution.
+  Bare movement directions accept either the player `trigger_actor` or a mob
+  subject. Player movement follows ordinary movement, arrival, reaction,
+  aggro, and follower behavior. Mob movement traverses one adjacent passable
+  exit from the selected room, rejects unavailable or actively fighting mobs,
+  emits ordinary directional movement plus a follow edge, and ignores
+  autonomous roam constraints.
   Transactional `follow <character>` and `unfollow [character]` require
   exactly the player `trigger_actor` as subject. They establish or clear only
   adjacent directional locomotion; normal movement blockers still apply, and

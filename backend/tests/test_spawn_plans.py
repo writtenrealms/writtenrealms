@@ -1,17 +1,23 @@
 import random
+from datetime import timedelta
+from unittest import mock
 
 import yaml
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import serializers
 
 from builders import world_export as builder_world_export
 from builders.models import ItemDefinition, MobDefinition, Path, PathRoom, SpawnEntry, SpawnPlan, SpawnPlacement, SpawnPlanRun
 from config import constants as adv_consts
-from spawns.loading import run_spawn_plans_for_world
-from spawns.models import Item, Mob
+from spawns.loading import (
+    _initialize_door_reset_schedules,
+    run_spawn_plans_for_world,
+)
+from spawns.models import DoorState, Item, Mob
 from spawns.spawn_plans import (
     SpawnReconcileContext,
     _choose_room_for_entry,
@@ -20,7 +26,15 @@ from spawns.spawn_plans import (
 )
 from spawns.tasks import run_mob_roaming
 from tests.base import WorldTestCase
-from worlds.models import Room, RoomFlag, World, WorldConfig
+from worlds.models import (
+    Door,
+    Doorway,
+    Room,
+    RoomFlag,
+    World,
+    WorldConfig,
+    ZoneDoorResetSchedule,
+)
 from worlds.services import WorldSmith
 
 
@@ -44,6 +58,290 @@ class TestSpawnPlanManifests(WorldTestCase):
         self.assertEqual(resp.status_code, 200, resp.data)
         self.assertEqual(resp.data["relative_id"], self.zone.relative_id)
         self.assertEqual(resp.data["manifest_ref"], f"zone@{self.zone.relative_id}")
+        self.assertEqual(
+            resp.data["respawn"],
+            {"mode": "fixed", "seconds": 300},
+        )
+        self.assertEqual(
+            resp.data["door_reset"],
+            {"mode": "fixed", "seconds": 300},
+        )
+        self.assertNotIn("respawn_wait", resp.data)
+
+    def test_apply_zone_manifest_updates_typed_policies(self):
+        manifest = f"""
+kind: zone
+metadata:
+  ref: zone@{self.zone.relative_id}
+  name: Starting Zone
+spec:
+  respawn:
+    mode: none
+  door_reset:
+    mode: fixed
+    seconds: 90
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.zone.refresh_from_db()
+        self.assertEqual(self.zone.respawn_mode, "none")
+        self.assertIsNone(self.zone.respawn_seconds)
+        self.assertEqual(self.zone.door_reset_mode, "fixed")
+        self.assertEqual(self.zone.door_reset_seconds, 90)
+        self.assertEqual(resp.data["zone"]["respawn"], {"mode": "none"})
+        self.assertEqual(
+            resp.data["zone"]["door_reset"],
+            {"mode": "fixed", "seconds": 90},
+        )
+        exported = yaml.safe_load(resp.data["zone"]["yaml"])
+        self.assertEqual(
+            exported["apiVersion"],
+            builder_world_export.CANONICAL_MANIFEST_API_VERSION,
+        )
+        self.assertEqual(exported["spec"]["respawn"], {"mode": "none"})
+        self.assertEqual(
+            exported["spec"]["door_reset"],
+            {"mode": "fixed", "seconds": 90},
+        )
+
+    def test_apply_zone_manifest_rejects_invalid_policy_shapes(self):
+        invalid_specs = (
+            ("respawn: fixed", "spec.respawn must be a mapping"),
+            (
+                "respawn:\n    mode: fixed",
+                "spec.respawn.seconds is required",
+            ),
+            (
+                "respawn:\n    mode: fixed\n    seconds: -1",
+                "spec.respawn.seconds must be a non-negative integer",
+            ),
+            (
+                "respawn:\n    mode: fixed\n    seconds: 1.5",
+                "spec.respawn.seconds must be a non-negative integer",
+            ),
+            (
+                "respawn:\n    mode: fixed\n    seconds: 2147483648",
+                "spec.respawn.seconds must be a non-negative integer",
+            ),
+            (
+                "door_reset:\n    mode: fixed\n    seconds: true",
+                "spec.door_reset.seconds must be a non-negative integer",
+            ),
+            (
+                "door_reset:\n    mode: none\n    seconds: 60",
+                "spec.door_reset.seconds is not supported",
+            ),
+            (
+                "door_reset:\n    mode: someday",
+                "spec.door_reset.mode must be one of",
+            ),
+            (
+                "respawn:\n    mode: fixed\n    seconds: 60\n    delay: 60",
+                "spec.respawn has unsupported field(s): delay",
+            ),
+            ("pvp_zone: 'false'", "spec.pvp_zone must be a boolean"),
+            ("respawn_wait: 60", "spec has unsupported field(s): respawn_wait"),
+        )
+
+        for spec, expected_error in invalid_specs:
+            with self.subTest(spec=spec):
+                manifest = f"""
+kind: zone
+metadata:
+  ref: zone@{self.zone.relative_id}
+  name: Starting Zone
+spec:
+  {spec}
+"""
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400, resp.data)
+                self.assertIn(expected_error, str(resp.data))
+
+    def test_door_policy_edit_lazily_reschedules_runtime_without_stale_reset(self):
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        door_schedule = ZoneDoorResetSchedule.objects.get(
+            world=spawn_world,
+            zone=self.zone,
+        )
+        original_deadline = door_schedule.next_reset_ts
+        original_policy_version = door_schedule.policy_version
+        self.assertIsNotNone(original_deadline)
+
+        destination = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Policy Edit Annex",
+            x=99,
+            y=1,
+            z=0,
+        )
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction="east",
+            from_room=self.room,
+            to_room=destination,
+            name="policy gate",
+        )
+        door_state = DoorState.objects.create(
+            world=spawn_world,
+            doorway=doorway,
+            state=adv_consts.DOOR_STATE_CLOSED,
+            revision=7,
+        )
+
+        disable_manifest = f"""
+kind: zone
+metadata:
+  ref: zone@{self.zone.relative_id}
+  name: Starting Zone
+spec:
+  door_reset:
+    mode: none
+"""
+        disable_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": disable_manifest},
+            format="json",
+        )
+
+        self.assertEqual(disable_resp.status_code, 200, disable_resp.data)
+        self.zone.refresh_from_db()
+        door_schedule.refresh_from_db()
+        disabled_policy_version = self.zone.door_reset_policy_version
+        self.assertEqual(disabled_policy_version, original_policy_version + 1)
+        self.assertEqual(door_schedule.next_reset_ts, original_deadline)
+        self.assertEqual(door_schedule.policy_version, original_policy_version)
+
+        door_schedule.next_reset_ts = timezone.now() - timedelta(seconds=1)
+        door_schedule.save(update_fields=["next_reset_ts"])
+
+        before_enable = timezone.now()
+        enable_manifest = f"""
+kind: zone
+metadata:
+  ref: zone@{self.zone.relative_id}
+  name: Starting Zone
+spec:
+  door_reset:
+    mode: fixed
+    seconds: 90
+"""
+        enable_resp = self.client.post(
+            self.apply_ep,
+            {"manifest": enable_manifest},
+            format="json",
+        )
+
+        self.assertEqual(enable_resp.status_code, 200, enable_resp.data)
+        self.zone.refresh_from_db()
+        door_schedule.refresh_from_db()
+        self.assertEqual(
+            self.zone.door_reset_policy_version,
+            disabled_policy_version + 1,
+        )
+        self.assertLess(door_schedule.next_reset_ts, before_enable)
+        self.assertEqual(door_schedule.policy_version, original_policy_version)
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        door_schedule.refresh_from_db()
+        door_state.refresh_from_db()
+        self.assertGreaterEqual(
+            door_schedule.next_reset_ts,
+            before_enable + timedelta(seconds=90),
+        )
+        self.assertEqual(
+            door_schedule.policy_version,
+            self.zone.door_reset_policy_version,
+        )
+        self.assertEqual(door_state.state, adv_consts.DOOR_STATE_CLOSED)
+        self.assertEqual(door_state.revision, 7)
+        self.assertEqual(output["doors"], [])
+
+    def test_apply_zone_manifest_refetches_locked_zone_before_saving(self):
+        normalize_policy = builder_world_export._normalize_zone_policy
+        updated_concurrently = False
+
+        def update_then_normalize(*args, **kwargs):
+            nonlocal updated_concurrently
+            if not updated_concurrently:
+                updated_concurrently = True
+                self.world.zones.filter(pk=self.zone.pk).update(
+                    description="A concurrent description edit.",
+                )
+            return normalize_policy(*args, **kwargs)
+
+        manifest = f"""
+kind: zone
+metadata:
+  ref: zone@{self.zone.relative_id}
+  name: Starting Zone
+spec:
+  notes: Applied notes.
+  respawn:
+    mode: fixed
+    seconds: 75
+"""
+        with mock.patch.object(
+            builder_world_export,
+            "_normalize_zone_policy",
+            side_effect=update_then_normalize,
+        ):
+            resp = self.client.post(
+                self.apply_ep,
+                {"manifest": manifest},
+                format="json",
+            )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.zone.refresh_from_db()
+        self.assertEqual(
+            self.zone.description,
+            "A concurrent description edit.",
+        )
+        self.assertEqual(self.zone.notes, "Applied notes.")
+        self.assertEqual(self.zone.respawn_seconds, 75)
+
+    def test_apply_zone_manifest_can_require_an_existing_target(self):
+        manifest = {
+            "kind": "zone",
+            "metadata": {
+                "ref": "zone@999999",
+                "name": "Missing Zone",
+            },
+            "spec": {
+                "door_reset": {"mode": "none"},
+            },
+        }
+        original_zone_count = self.world.zones.count()
+
+        with self.assertRaisesRegex(
+            serializers.ValidationError,
+            "target does not exist",
+        ):
+            builder_world_export.apply_zone_manifest(
+                world=self.world,
+                manifest=manifest,
+                require_existing=True,
+            )
+
+        self.assertEqual(self.world.zones.count(), original_zone_count)
 
     def test_world_export_canonicalizes_legacy_numeric_spawn_source(self):
         plan = SpawnPlan.objects.create(
@@ -1192,6 +1490,529 @@ class TestSpawnPlanRuntime(WorldTestCase):
             [trait["key"] for trait in placement.traits],
             ["sturdy", "armored"],
         )
+
+    def _create_test_doorway(self):
+        destination = Room.objects.create(
+            world=self.world,
+            zone=self.zone,
+            name="Door Reset Annex",
+            x=99,
+            y=0,
+            z=0,
+        )
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction="east",
+            from_room=self.room,
+            to_room=destination,
+            name="test gate",
+        )
+        return doorway
+
+    def test_inherit_zone_without_seconds_honors_zone_none_policy(self):
+        self.plan.respawn_policy = {"mode": "inherit_zone"}
+        self.plan.save(update_fields=["respawn_policy"])
+        self.zone.respawn_mode = "none"
+        self.zone.respawn_seconds = None
+        self.zone.save(update_fields=["respawn_mode", "respawn_seconds"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        Mob.objects.get(world=spawn_world, definition=self.mob_definition).delete()
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 0)
+        self.assertFalse(
+            Mob.objects.filter(
+                world=spawn_world,
+                definition=self.mob_definition,
+            ).exists()
+        )
+
+    def test_inherit_zone_explicit_seconds_overrides_zone_none_policy(self):
+        self.plan.respawn_policy = {
+            "mode": "inherit_zone",
+            "seconds": 0,
+        }
+        self.plan.save(update_fields=["respawn_policy"])
+        self.zone.respawn_mode = "none"
+        self.zone.respawn_seconds = None
+        self.zone.save(update_fields=["respawn_mode", "respawn_seconds"])
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        Mob.objects.get(world=spawn_world, definition=self.mob_definition).delete()
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        self.assertEqual(output["spawn_plans"][0]["spawned"], 1)
+        self.assertTrue(
+            Mob.objects.filter(
+                world=spawn_world,
+                definition=self.mob_definition,
+            ).exists()
+        )
+
+    def test_door_reset_none_preserves_runtime_override(self):
+        self.zone.door_reset_mode = "none"
+        self.zone.door_reset_seconds = None
+        self.zone.save(
+            update_fields=["door_reset_mode", "door_reset_seconds"],
+        )
+        doorway = self._create_test_doorway()
+        spawn_world = self.world.create_spawn_world()
+        WorldSmith(spawn_world).start()
+        door_state = DoorState.objects.create(
+            world=spawn_world,
+            doorway=doorway,
+            state=adv_consts.DOOR_STATE_CLOSED,
+            revision=4,
+        )
+
+        with CaptureQueriesContext(connection) as captured:
+            first_output = run_spawn_plans_for_world(world=spawn_world)
+            second_output = run_spawn_plans_for_world(world=spawn_world)
+
+        door_state.refresh_from_db()
+        self.assertEqual(door_state.state, adv_consts.DOOR_STATE_CLOSED)
+        self.assertEqual(door_state.revision, 4)
+        self.assertEqual(first_output["doors"], [])
+        self.assertEqual(second_output["doors"], [])
+        schedule_writes = [
+            query["sql"]
+            for query in captured.captured_queries
+            if "worlds_zonedoorresetschedule" in query["sql"].lower()
+            and query["sql"].lstrip().upper().startswith(
+                ("INSERT", "UPDATE", "DELETE")
+            )
+        ]
+        self.assertEqual(schedule_writes, [])
+        self.assertFalse(
+            ZoneDoorResetSchedule.objects.filter(
+                world=spawn_world,
+                zone=self.zone,
+                next_reset_ts__isnull=False,
+            ).exists()
+        )
+
+    def test_due_poll_rechecks_locked_zone_policy_before_resetting(self):
+        doorway = self._create_test_doorway()
+        spawn_world = self.world.create_spawn_world()
+        run_spawn_plans_for_world(world=spawn_world, initial=True)
+        door_state = DoorState.objects.create(
+            world=spawn_world,
+            doorway=doorway,
+            state=adv_consts.DOOR_STATE_CLOSED,
+            revision=6,
+        )
+        schedule = ZoneDoorResetSchedule.objects.get(
+            world=spawn_world,
+            zone=self.zone,
+        )
+        schedule.next_reset_ts = timezone.now() - timedelta(seconds=1)
+        schedule.save(update_fields=["next_reset_ts"])
+        real_now = timezone.now
+        first_now = True
+
+        def change_policy_before_lock():
+            nonlocal first_now
+            if first_now:
+                first_now = False
+                self.world.zones.filter(pk=self.zone.pk).update(
+                    door_reset_mode="none",
+                    door_reset_seconds=None,
+                    door_reset_policy_version=(
+                        self.zone.door_reset_policy_version + 1
+                    ),
+                )
+            return real_now()
+
+        with mock.patch(
+            "spawns.loading.timezone.now",
+            side_effect=change_policy_before_lock,
+        ):
+            output = run_spawn_plans_for_world(world=spawn_world)
+
+        door_state.refresh_from_db()
+        schedule.refresh_from_db()
+        self.zone.refresh_from_db()
+        self.assertEqual(self.zone.door_reset_mode, "none")
+        self.assertEqual(door_state.state, adv_consts.DOOR_STATE_CLOSED)
+        self.assertEqual(door_state.revision, 6)
+        self.assertLess(schedule.next_reset_ts, timezone.now())
+        self.assertEqual(output["doors"], [])
+
+    def test_fixed_door_reset_schedule_is_isolated_per_runtime_world(self):
+        self.zone.door_reset_mode = "fixed"
+        self.zone.door_reset_seconds = 60
+        self.zone.save(
+            update_fields=["door_reset_mode", "door_reset_seconds"],
+        )
+        doorway = self._create_test_doorway()
+        first_world = self.world.create_spawn_world()
+        second_world = self.world.create_spawn_world()
+        WorldSmith(first_world).start()
+        WorldSmith(second_world).start()
+        first_door_state = DoorState.objects.create(
+            world=first_world,
+            doorway=doorway,
+            state=adv_consts.DOOR_STATE_CLOSED,
+            revision=4,
+        )
+        second_door_state = DoorState.objects.create(
+            world=second_world,
+            doorway=doorway,
+            state=adv_consts.DOOR_STATE_CLOSED,
+            revision=9,
+        )
+        first_schedule = ZoneDoorResetSchedule.objects.get(
+            world=first_world,
+            zone=self.zone,
+        )
+        second_schedule = ZoneDoorResetSchedule.objects.get(
+            world=second_world,
+            zone=self.zone,
+        )
+        first_schedule.next_reset_ts = timezone.now() - timedelta(
+            seconds=1,
+        )
+        first_schedule.save(update_fields=["next_reset_ts"])
+        second_deadline = timezone.now() + timedelta(hours=1)
+        second_schedule.next_reset_ts = second_deadline
+        second_schedule.save(update_fields=["next_reset_ts"])
+
+        output = run_spawn_plans_for_world(world=first_world)
+
+        first_door_state.refresh_from_db()
+        second_door_state.refresh_from_db()
+        first_schedule.refresh_from_db()
+        second_schedule.refresh_from_db()
+        self.assertEqual(first_door_state.state, adv_consts.DOOR_STATE_OPEN)
+        self.assertEqual(first_door_state.revision, 5)
+        self.assertEqual(second_door_state.state, adv_consts.DOOR_STATE_CLOSED)
+        self.assertEqual(second_door_state.revision, 9)
+        self.assertEqual(len(output["doors"]), 1)
+        self.assertGreater(first_schedule.next_reset_ts, timezone.now())
+        self.assertEqual(second_schedule.next_reset_ts, second_deadline)
+
+    def test_cross_zone_doorway_resets_once_when_both_zones_are_due(self):
+        other_zone = self.world.zones.create(name="Boundary Zone")
+        other_room = Room.objects.create(
+            world=self.world,
+            zone=other_zone,
+            name="Boundary Room",
+            x=1,
+            y=0,
+            z=0,
+        )
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction="east",
+            from_room=self.room,
+            to_room=other_room,
+            name="boundary gate",
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction="west",
+            from_room=other_room,
+            to_room=self.room,
+            name="boundary gate",
+        )
+        spawn_world = self.world.create_spawn_world()
+        run_spawn_plans_for_world(world=spawn_world, initial=True)
+        door_state = DoorState.objects.create(
+            world=spawn_world,
+            doorway=doorway,
+            state=adv_consts.DOOR_STATE_CLOSED,
+            revision=11,
+        )
+        schedules = ZoneDoorResetSchedule.objects.filter(
+            world=spawn_world,
+            zone__in=[self.zone, other_zone],
+        )
+        self.assertEqual(schedules.count(), 2)
+        schedules.update(next_reset_ts=timezone.now() - timedelta(seconds=1))
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        door_state.refresh_from_db()
+        self.assertEqual(door_state.state, adv_consts.DOOR_STATE_OPEN)
+        self.assertEqual(door_state.revision, 12)
+        self.assertEqual(len(output["doors"]), 1)
+        self.assertTrue(
+            all(
+                deadline > timezone.now()
+                for deadline in schedules.values_list(
+                    "next_reset_ts",
+                    flat=True,
+                )
+            )
+        )
+
+    def test_one_sided_cross_zone_doorway_resets_when_destination_zone_is_due(self):
+        other_zone = self.world.zones.create(name="One-Sided Boundary Zone")
+        other_room = Room.objects.create(
+            world=self.world,
+            zone=other_zone,
+            name="One-Sided Boundary Room",
+            x=2,
+            y=0,
+            z=0,
+        )
+        doorway = Doorway.objects.create(
+            world=self.world,
+            default_state=adv_consts.DOOR_STATE_OPEN,
+        )
+        Door.objects.create(
+            doorway=doorway,
+            direction="east",
+            from_room=self.room,
+            to_room=other_room,
+            name="one-sided boundary gate",
+        )
+        spawn_world = self.world.create_spawn_world()
+        run_spawn_plans_for_world(world=spawn_world, initial=True)
+        door_state = DoorState.objects.create(
+            world=spawn_world,
+            doorway=doorway,
+            state=adv_consts.DOOR_STATE_CLOSED,
+            revision=14,
+        )
+        now = timezone.now()
+        ZoneDoorResetSchedule.objects.filter(
+            world=spawn_world,
+            zone=self.zone,
+        ).update(next_reset_ts=now + timedelta(hours=1))
+        ZoneDoorResetSchedule.objects.filter(
+            world=spawn_world,
+            zone=other_zone,
+        ).update(next_reset_ts=now - timedelta(seconds=1))
+
+        output = run_spawn_plans_for_world(world=spawn_world)
+
+        door_state.refresh_from_db()
+        self.assertEqual(door_state.state, adv_consts.DOOR_STATE_OPEN)
+        self.assertEqual(door_state.revision, 15)
+        self.assertEqual(len(output["doors"]), 1)
+        self.assertEqual(output["doors"][0]["name"], "one-sided boundary gate")
+
+    def test_fixed_door_schedules_use_one_steady_state_batch_read(self):
+        for index in range(8):
+            self.world.zones.create(name=f"Schedule Zone {index}")
+        spawn_world = self.world.create_spawn_world()
+        run_spawn_plans_for_world(world=spawn_world, initial=True)
+
+        with CaptureQueriesContext(connection) as captured:
+            run_spawn_plans_for_world(world=spawn_world)
+
+        schedule_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if "worlds_zonedoorresetschedule" in query["sql"].lower()
+        ]
+        self.assertEqual(
+            len(schedule_queries),
+            1,
+            "\n".join(schedule_queries),
+        )
+        self.assertTrue(
+            schedule_queries[0].lstrip().upper().startswith("SELECT"),
+            schedule_queries[0],
+        )
+        self.assertNotIn("FOR UPDATE", schedule_queries[0].upper())
+
+    def test_initial_door_schedules_are_batched_in_one_transaction(self):
+        for index in range(8):
+            self.world.zones.create(name=f"Initial Schedule Zone {index}")
+        spawn_world = self.world.create_spawn_world()
+
+        with CaptureQueriesContext(connection) as captured:
+            run_spawn_plans_for_world(world=spawn_world, initial=True)
+
+        schedule_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if "worlds_zonedoorresetschedule" in query["sql"].lower()
+        ]
+        self.assertEqual(
+            len(schedule_queries),
+            2,
+            "\n".join(schedule_queries),
+        )
+        self.assertEqual(
+            sum("FOR UPDATE" in query.upper() for query in schedule_queries),
+            1,
+            "\n".join(schedule_queries),
+        )
+        zone_lock_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if 'FROM "worlds_zone"' in query["sql"]
+            and "FOR UPDATE" in query["sql"].upper()
+        ]
+        self.assertEqual(
+            len(zone_lock_queries),
+            1,
+            "\n".join(zone_lock_queries),
+        )
+
+    def test_initial_door_schedules_use_bounded_transactions(self):
+        for index in range(8):
+            self.world.zones.create(name=f"Bounded Initial Zone {index}")
+        spawn_world = self.world.create_spawn_world()
+
+        with (
+            mock.patch(
+                "spawns.loading.DOOR_RESET_SCHEDULE_BATCH_SIZE",
+                4,
+            ),
+            mock.patch(
+                "spawns.spawn_plans.run_spawn_plans",
+                return_value=[],
+            ),
+            CaptureQueriesContext(connection) as captured,
+        ):
+            run_spawn_plans_for_world(world=spawn_world, initial=True)
+
+        zone_lock_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if 'FROM "worlds_zone"' in query["sql"]
+            and "FOR UPDATE" in query["sql"].upper()
+        ]
+        schedule_lock_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if 'FROM "worlds_zonedoorresetschedule"' in query["sql"]
+            and "FOR UPDATE" in query["sql"].upper()
+        ]
+        transaction_starts = [
+            query["sql"]
+            for query in captured.captured_queries
+            if query["sql"].lstrip().upper().startswith(
+                ("BEGIN", "SAVEPOINT")
+            )
+        ]
+        self.assertEqual(len(zone_lock_queries), 3, "\n".join(zone_lock_queries))
+        self.assertEqual(
+            len(schedule_lock_queries),
+            3,
+            "\n".join(schedule_lock_queries),
+        )
+        self.assertEqual(
+            len(transaction_starts),
+            3,
+            "\n".join(transaction_starts),
+        )
+        self.assertEqual(
+            ZoneDoorResetSchedule.objects.filter(world=spawn_world).count(),
+            9,
+        )
+
+    def test_initial_batches_start_intervals_after_each_batch_locks(self):
+        other_zone = self.world.zones.create(name="Later Initial Zone")
+        spawn_world = self.world.create_spawn_world()
+        base_time = timezone.now()
+        call_count = 0
+
+        def advancing_now():
+            nonlocal call_count
+            current = base_time + timedelta(seconds=call_count)
+            call_count += 1
+            return current
+
+        with (
+            mock.patch(
+                "spawns.loading.DOOR_RESET_SCHEDULE_BATCH_SIZE",
+                1,
+            ),
+            mock.patch(
+                "spawns.loading.timezone.now",
+                side_effect=advancing_now,
+            ),
+        ):
+            _initialize_door_reset_schedules(
+                world=spawn_world,
+                zones=[self.zone, other_zone],
+            )
+
+        first_deadline = ZoneDoorResetSchedule.objects.get(
+            world=spawn_world,
+            zone=self.zone,
+        ).next_reset_ts
+        second_deadline = ZoneDoorResetSchedule.objects.get(
+            world=spawn_world,
+            zone=other_zone,
+        ).next_reset_ts
+        self.assertGreater(second_deadline, first_deadline)
+
+    def test_simultaneously_due_door_schedules_use_bounded_transactions(self):
+        for index in range(8):
+            self.world.zones.create(name=f"Due Schedule Zone {index}")
+        spawn_world = self.world.create_spawn_world()
+        run_spawn_plans_for_world(world=spawn_world, initial=True)
+        ZoneDoorResetSchedule.objects.filter(world=spawn_world).update(
+            next_reset_ts=timezone.now() - timedelta(seconds=1),
+        )
+
+        with (
+            mock.patch(
+                "spawns.loading.DOOR_RESET_SCHEDULE_BATCH_SIZE",
+                4,
+            ),
+            mock.patch(
+                "spawns.spawn_plans.run_spawn_plans",
+                return_value=[],
+            ),
+            CaptureQueriesContext(connection) as captured,
+        ):
+            output = run_spawn_plans_for_world(world=spawn_world)
+
+        zone_lock_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if 'FROM "worlds_zone"' in query["sql"]
+            and "FOR UPDATE" in query["sql"].upper()
+        ]
+        schedule_lock_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if 'FROM "worlds_zonedoorresetschedule"' in query["sql"]
+            and "FOR UPDATE" in query["sql"].upper()
+        ]
+        transaction_starts = [
+            query["sql"]
+            for query in captured.captured_queries
+            if query["sql"].lstrip().upper().startswith(
+                ("BEGIN", "SAVEPOINT")
+            )
+        ]
+        door_face_queries = [
+            query["sql"]
+            for query in captured.captured_queries
+            if 'FROM "worlds_door"' in query["sql"]
+        ]
+        self.assertEqual(len(zone_lock_queries), 3, "\n".join(zone_lock_queries))
+        self.assertEqual(
+            len(schedule_lock_queries),
+            3,
+            "\n".join(schedule_lock_queries),
+        )
+        self.assertEqual(
+            len(transaction_starts),
+            3,
+            "\n".join(transaction_starts),
+        )
+        self.assertEqual(len(door_face_queries), 3, "\n".join(door_face_queries))
+        self.assertEqual(output["doors"], [])
 
     def test_runtime_rejects_cross_plan_entry_target(self):
         other_plan = SpawnPlan.objects.create(

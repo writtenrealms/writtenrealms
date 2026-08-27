@@ -582,6 +582,74 @@ def _actor_zone(actor: BuilderCommandActor) -> Zone | None:
     return getattr(room, "zone", None)
 
 
+def _resolve_cmd_character_target(
+    *,
+    actor: BuilderCommandActor,
+    target_selector: str,
+    runtime_world: World | None = None,
+    allow_players: bool = False,
+) -> Player | Mob:
+    room = _actor_room(actor)
+    if not room:
+        raise ActionError("There is no current room for target commands.", code="no_room")
+
+    normalized = str(target_selector or "").strip().lower()
+    if not normalized:
+        raise ActionError("Target is required.", code="invalid_target")
+    if normalized in {"self", "me"}:
+        if allow_players and isinstance(actor, (Player, Mob)):
+            return actor
+        raise ActionError("Target not found in this room.", code="invalid_target")
+
+    target_type = None
+    if normalized.startswith("mob:"):
+        target_type = "mob"
+        normalized = normalized.split(":", 1)[1].strip()
+    elif normalized.startswith("player:"):
+        target_type = "player"
+        normalized = normalized.split(":", 1)[1].strip()
+    elif normalized.startswith("mob."):
+        target_type = "mob"
+    elif normalized.startswith("player."):
+        target_type = "player"
+
+    if target_type == "player" and not allow_players:
+        raise ActionError(
+            "Player command targets require an interactive builder.",
+            code="permission_denied",
+        )
+
+    world = _actor_world(actor, runtime_world=runtime_world)
+    if target_type == "mob":
+        targets: list[Player | Mob] = _collect_room_mob_targets(
+            room,
+            normalized,
+            world=world,
+        )
+    elif target_type == "player":
+        targets = _collect_room_player_targets(
+            room,
+            normalized,
+            world=world,
+        )
+    else:
+        player_targets = (
+            _collect_room_player_targets(room, normalized, world=world)
+            if allow_players
+            else []
+        )
+        targets = [
+            *player_targets,
+            *_collect_room_mob_targets(room, normalized, world=world),
+        ]
+
+    if not targets:
+        raise ActionError("Target not found in this room.", code="invalid_target")
+    if len(targets) > 1:
+        raise ActionError("Target is ambiguous.", code="ambiguous_target")
+    return targets[0]
+
+
 def _render_command_segment(
     segment: str,
     *,
@@ -2710,10 +2778,12 @@ class CmdAction:
         *,
         dispatch_actor: BuilderCommandActor,
         segment: str,
+        command_issuer: BuilderCommandActor | None = None,
         issuer_scope: str | None = None,
         runtime_world: World | None = None,
         skip_triggers: bool = False,
         script_source: bool = False,
+        builder_force: bool = False,
     ) -> str | None:
         rendered_segment = _render_command_segment(segment, actor=dispatch_actor)
         command_token = _first_token(rendered_segment)
@@ -2737,6 +2807,15 @@ class CmdAction:
             resolved_command, handler = resolved
             if dispatch_actor_type not in getattr(handler, "supported_actor_types", ("player",)):
                 return f"{dispatch_actor_type.capitalize()}s cannot execute {resolved_command}."
+        if (
+            builder_force
+            and dispatch_actor_type == "player"
+            and (
+                resolved_social is not None
+                or getattr(handler, "command_type", None) != "move"
+            )
+        ):
+            return "Players may be forced only to move."
 
         dispatched_messages: list[dict] = []
         command_type = "text"
@@ -2749,12 +2828,25 @@ class CmdAction:
             }
         else:
             payload = {"text": rendered_segment}
+        if builder_force:
+            payload["suppress_aliases"] = True
+            payload["suppress_history"] = True
         if issuer_scope:
             payload["issuer_scope"] = issuer_scope
         if runtime_world:
             payload["world_id"] = runtime_world.id
         if skip_triggers:
             payload["skip_triggers"] = True
+
+        issuer_kwargs = {}
+        if command_issuer is not None:
+            issuer_type, issuer_id = self._dispatch_actor_ref(command_issuer)
+            issuer_kwargs = {
+                "issuer_type": issuer_type,
+                "issuer_id": issuer_id,
+                "resolved_issuer": command_issuer,
+                "resolved_runtime_world": runtime_world,
+            }
 
         try:
             dispatch_command(
@@ -2763,7 +2855,9 @@ class CmdAction:
                 actor_id=dispatch_actor_id,
                 payload=payload,
                 script_source=script_source,
+                builder_force=builder_force,
                 published_messages=dispatched_messages,
+                **issuer_kwargs,
             )
         except (ActorNotFoundError, HandlerNotFoundError, ValueError) as err:
             return str(err)
@@ -2778,6 +2872,7 @@ class CmdAction:
         runtime_world: World | None = None,
         skip_triggers: bool = False,
         script_source: bool = False,
+        builder_force: bool = False,
     ) -> ActionResult:
         normalized_target = str(target_selector or "").strip().lower()
         if not normalized_target:
@@ -2794,6 +2889,7 @@ class CmdAction:
             )
 
         dispatch_actor: BuilderCommandActor = actor
+        command_issuer: BuilderCommandActor | None = None
         issuer_scope: str | None = None
         target_data: dict[str, object]
 
@@ -2811,35 +2907,35 @@ class CmdAction:
                 "name": getattr(dispatch_actor, "name", normalized_target),
             }
         else:
-            room = _actor_room(actor)
-            if not room:
-                raise ActionError("There is no current room for target commands.", code="no_room")
-            if normalized_target.startswith("mob:"):
-                normalized_target = normalized_target.split(":", 1)[1].strip().lower()
-            targets = _collect_room_mob_targets(
-                room,
-                normalized_target,
-                world=_actor_world(actor, runtime_world=runtime_world),
+            target = _resolve_cmd_character_target(
+                actor=actor,
+                target_selector=normalized_target,
+                runtime_world=runtime_world,
+                allow_players=builder_force,
             )
-            if not targets:
-                raise ActionError("Target not found.", code="invalid_target")
-            target_mob = targets[0]
-            dispatch_actor = target_mob
+            dispatch_actor = target
+            if builder_force:
+                command_issuer = actor
             target_data = {
-                "type": "mob",
-                "key": target_mob.key,
-                "name": _entity_name(target_mob),
+                "type": _actor_kind(target),
+                "key": target.key,
+                "name": getattr(target, "name", None) or "target",
             }
 
         errors: list[str] = []
         for segment in chained_segments:
+            authorized_character_force = bool(
+                builder_force and command_issuer is not None
+            )
             dispatched_error = self._dispatch_segment(
                 dispatch_actor=dispatch_actor,
                 segment=segment,
+                command_issuer=command_issuer,
                 issuer_scope=issuer_scope,
                 runtime_world=_actor_world(actor, runtime_world=runtime_world),
                 skip_triggers=skip_triggers,
                 script_source=script_source,
+                builder_force=authorized_character_force,
             )
             if dispatched_error:
                 errors.append(dispatched_error)

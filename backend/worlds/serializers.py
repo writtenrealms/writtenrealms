@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db import transaction
 
 from rest_framework import serializers
 
@@ -179,9 +180,23 @@ class ZoneSerializer(serializers.ModelSerializer):
             'world',
         )
 
+    def update(self, instance, validated_data):
+        mutable_fields = {"name", "description", "world"}
+        changes = {
+            field_name: value
+            for field_name, value in validated_data.items()
+            if field_name in mutable_fields
+        }
+        with transaction.atomic():
+            zone = Zone.objects.select_for_update().get(pk=instance.pk)
+            for field_name, value in changes.items():
+                setattr(zone, field_name, value)
+            if changes:
+                zone.save(update_fields=[*changes, "modified_ts"])
+        return zone
+
 
 class RoomSerializer(serializers.ModelSerializer):
     class Meta:
         model = Room
         fields = ('id', 'key', 'name', 'description', 'x', 'y', 'z', 'zone')
-

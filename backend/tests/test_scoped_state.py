@@ -20,7 +20,12 @@ from spawns.models import CharacterState, Mob, MobState
 from spawns.loading import run_spawn_plans_for_world
 from spawns.actions.abilities import execute_state_component
 from tests.base import WorldTestCase
-from worlds.models import RoomState, WorldState, ZoneState
+from worlds.models import (
+    RoomState,
+    WorldState,
+    ZoneDoorResetSchedule,
+    ZoneState,
+)
 
 
 class TestScopedRuntimeState(WorldTestCase):
@@ -302,6 +307,47 @@ class TestScopedRuntimeState(WorldTestCase):
             clear_state_value(STATE_SCOPE_CHARACTER, mob, "missing")
         )
         self.assertFalse(MobState.objects.filter(mob=mob).exists())
+
+    def test_clearing_sparse_zone_state_preserves_door_reset_schedule(self):
+        run_spawn_plans_for_world(world=self.spawn_world, initial=True)
+        schedule = ZoneDoorResetSchedule.objects.get(
+            world=self.spawn_world,
+            zone=self.zone,
+        )
+        deadline = schedule.next_reset_ts
+        policy_version = schedule.policy_version
+        set_state_value(
+            STATE_SCOPE_ZONE,
+            self.zone,
+            "temporary",
+            True,
+            runtime_world=self.spawn_world,
+        )
+        self.assertTrue(
+            ZoneState.objects.filter(
+                world=self.spawn_world,
+                zone=self.zone,
+            ).exists()
+        )
+
+        self.assertTrue(
+            clear_state_value(
+                STATE_SCOPE_ZONE,
+                self.zone,
+                "temporary",
+                runtime_world=self.spawn_world,
+            )
+        )
+
+        self.assertFalse(
+            ZoneState.objects.filter(
+                world=self.spawn_world,
+                zone=self.zone,
+            ).exists()
+        )
+        schedule.refresh_from_db()
+        self.assertEqual(schedule.next_reset_ts, deadline)
+        self.assertEqual(schedule.policy_version, policy_version)
 
     def test_deleting_runtime_world_cascades_all_runtime_scope_rows(self):
         self._author_defaults()

@@ -7,6 +7,7 @@ from rest_framework.test import APITestCase
 from tests.base import WorldTestCase
 from spawns.models import Player
 from worlds.models import Room, World, Zone, WorldConfig
+from worlds.serializers import ZoneSerializer
 
 
 class WorldBasicTestCase(WorldTestCase):
@@ -68,6 +69,28 @@ class ZoneTestCase(APITestCase):
         self.assertEqual(world1zone2.relative_id, 2)
         self.assertEqual(world2zone1.relative_id, 1)
         self.assertEqual(world2zone2.relative_id, 2)
+
+    def test_zone_serializer_preserves_concurrent_unsubmitted_fields(self):
+        world = World.objects.create(name='Serializer World')
+        zone = Zone.objects.create(
+            name='Original Zone',
+            description='Original description',
+            world=world,
+        )
+        stale_zone = Zone.objects.get(pk=zone.pk)
+        Zone.objects.filter(pk=zone.pk).update(name='Concurrent name')
+        serializer = ZoneSerializer(
+            stale_zone,
+            data={'description': 'Updated description'},
+            partial=True,
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+        serializer.save()
+
+        zone.refresh_from_db()
+        self.assertEqual(zone.name, 'Concurrent name')
+        self.assertEqual(zone.description, 'Updated description')
 
 
 class RoomTestCase(APITestCase):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from django.db import transaction
 from django.utils import timezone
 
 from config import constants as adv_consts
@@ -12,9 +13,10 @@ from spawns.events import (
     GameEvent,
     durable_follow_directional_move_event,
     follow_directional_move_event,
+    persist_follow_dependent_game_events,
     player_room_enter_event,
 )
-from spawns.models import Player
+from spawns.models import CombatEncounter, Mob, Player
 from spawns.state_payloads import (
     build_map_payload,
     collect_map_room_ids,
@@ -22,6 +24,7 @@ from spawns.state_payloads import (
     get_player_with_related,
     safe_capitalize,
     serialize_actor,
+    serialize_char_from_mob,
     serialize_char_from_player,
     serialize_room,
 )
@@ -147,6 +150,231 @@ class AdjustStaminaAction:
     def execute(self, player: Player, delta: int) -> ActionResult:
         player.stamina = max(player.stamina + delta, 0)
         return ActionResult(data={"stamina_delta": delta})
+
+
+def _mob_arrival_source_text(reverse_direction: str) -> str:
+    if reverse_direction == adv_consts.DIRECTION_UP:
+        return "above"
+    if reverse_direction == adv_consts.DIRECTION_DOWN:
+        return "below"
+    return f"the {reverse_direction}"
+
+
+def _mob_directional_move_events(
+    *,
+    mob: Mob,
+    origin_room_id: int,
+    destination_room_id: int,
+    direction: str,
+) -> list[GameEvent]:
+    events: list[GameEvent] = []
+    if not mob.is_invisible:
+        actor_payload = serialize_char_from_mob(mob).model_dump()
+        actor_name = safe_capitalize(actor_payload.get("name") or "Someone")
+        recipient_ids_by_room = {
+            origin_room_id: [],
+            destination_room_id: [],
+        }
+        for room_id, player_id in Player.objects.filter(
+            world_id=mob.world_id,
+            room_id__in=recipient_ids_by_room,
+            in_game=True,
+        ).values_list("room_id", "id"):
+            recipient_ids_by_room[room_id].append(player_id)
+        origin_recipients = tuple(
+            f"player.{player_id}"
+            for player_id in recipient_ids_by_room[origin_room_id]
+        )
+        if origin_recipients:
+            events.append(
+                GameEvent(
+                    type="notification.movement.exit",
+                    recipients=origin_recipients,
+                    data={"actor": actor_payload, "direction": direction},
+                    text=f"{actor_name} leaves {direction}.",
+                )
+            )
+
+        destination_recipients = tuple(
+            f"player.{player_id}"
+            for player_id in recipient_ids_by_room[destination_room_id]
+        )
+        if destination_recipients:
+            reverse_direction = adv_consts.REVERSE_DIRECTIONS[direction]
+            events.append(
+                GameEvent(
+                    type="notification.movement.enter",
+                    recipients=destination_recipients,
+                    data={
+                        "actor": actor_payload,
+                        "direction": reverse_direction,
+                    },
+                    text=(
+                        f"{actor_name} has arrived from "
+                        f"{_mob_arrival_source_text(reverse_direction)}."
+                    ),
+                )
+            )
+
+    events.append(
+        follow_directional_move_event(
+            actor=mob,
+            origin_room_id=origin_room_id,
+            destination_room_id=destination_room_id,
+            direction=direction,
+            source="move",
+        )
+    )
+    return events
+
+
+class MoveMobAction:
+    """Move one live mob through an adjacent exit as an embodied command."""
+
+    @staticmethod
+    def _authored_world_id(runtime_world) -> int:
+        return runtime_world.context_id or runtime_world.id
+
+    def execute(
+        self,
+        *,
+        mob_id: int,
+        direction: str,
+        runtime_world,
+        trigger_step: bool = False,
+        connection_id: str | None = None,
+    ) -> ActionResult:
+        normalized_direction = str(direction or "").strip().lower()
+        if normalized_direction not in adv_consts.DIRECTIONS:
+            raise ActionError("Unknown direction.", code="invalid_direction")
+        if runtime_world is None:
+            raise ActionError(
+                "No runtime world is available for movement.",
+                code="no_world",
+            )
+
+        with transaction.atomic():
+            mob = (
+                Mob.objects.select_for_update(of=("self",))
+                .select_related("definition", "room", "world")
+                .filter(
+                    pk=mob_id,
+                    world_id=runtime_world.id,
+                    is_pending_deletion=False,
+                )
+                .first()
+            )
+            if mob is None:
+                raise ActionError(
+                    "The mob is no longer available.",
+                    code="actor_missing",
+                )
+            if int(mob.health or 0) <= 0:
+                raise ActionError(
+                    "The mob is unable to move.",
+                    code="actor_unavailable",
+                )
+            if not mob.room_id:
+                raise ActionError(
+                    "The mob is nowhere and cannot move.",
+                    code="no_room",
+                )
+
+            authored_world_id = self._authored_world_id(runtime_world)
+            try:
+                current_room = _room_with_exits(mob.room_id)
+            except Room.DoesNotExist as exc:
+                raise ActionError(
+                    "The mob's current room is invalid.",
+                    code="invalid_room",
+                ) from exc
+            if current_room.world_id != authored_world_id:
+                raise ActionError(
+                    "The mob is outside this runtime world's authored rooms.",
+                    code="invalid_world_context",
+                )
+            destination = getattr(current_room, normalized_direction, None)
+            if destination is None:
+                raise ActionError(
+                    "You cannot go that way.",
+                    code="no_exit",
+                )
+            if destination.world_id != authored_world_id:
+                raise ActionError(
+                    "The destination is outside this runtime world.",
+                    code="invalid_world_context",
+                )
+            if CombatEncounter.objects.filter(
+                mob_id=mob.id,
+                status=CombatEncounter.STATUS_ACTIVE,
+            ).exists():
+                raise ActionError(
+                    "The mob is in combat and cannot move.",
+                    code="in_combat",
+                )
+
+            from spawns.actions.doors import lock_door_state_for_movement
+
+            door_state = lock_door_state_for_movement(
+                runtime_world=runtime_world,
+                room_id=current_room.id,
+                direction=normalized_direction,
+            )
+            if door_state and door_state.state in (
+                adv_consts.DOOR_STATE_CLOSED,
+                adv_consts.DOOR_STATE_LOCKED,
+            ):
+                door_name = door_state.face.name or "door"
+                raise ActionError(
+                    f"The {door_name} is {door_state.state}.",
+                    code="closed_door",
+                    data={
+                        "door": {
+                            "key": f"door.{door_state.face.id}",
+                            "name": door_name,
+                            "direction": door_state.face.direction,
+                            "state": door_state.state,
+                        },
+                    },
+                )
+
+            origin_room_id = current_room.id
+            mob.room = destination
+            mob.follow_move_sequence = int(mob.follow_move_sequence or 0) + 1
+            mob.save(
+                update_fields=[
+                    "room",
+                    "follow_move_sequence",
+                    "modified_ts",
+                ]
+            )
+            events = _mob_directional_move_events(
+                mob=mob,
+                origin_room_id=origin_room_id,
+                destination_room_id=destination.id,
+                direction=normalized_direction,
+            )
+            # Snapshot follower presence at this action's authored position.
+            # A later same-step ``follow`` must not retroactively join an edge
+            # that already happened. The surrounding Trigger transaction still
+            # owns rollback and final visible-event ordering.
+            events[-1] = durable_follow_directional_move_event(events[-1])
+            if not trigger_step:
+                events = persist_follow_dependent_game_events(
+                    events,
+                    actor_key=mob.key,
+                    connection_id=connection_id,
+                )
+
+        return ActionResult(
+            events=events,
+            data={
+                "mob_id": mob.id,
+                "origin_room_id": origin_room_id,
+                "destination_room_id": destination.id,
+                "direction": normalized_direction,
+            },
+        )
 
 
 def _room_ref_payload(room: Room | None, fallback_id: int) -> dict:

@@ -719,6 +719,7 @@ There are three subject forms:
     room: room@12
     mob: mobdefinition.minos
   command: 'say Name.'
+
 ```
 
 `trigger_actor` explicitly supports players. A delayed player command follows
@@ -737,7 +738,67 @@ indistinguishable from Minos using `say Name.` normally. A player in the
 Trigger room sees it only if they are also in room 12 when the command runs.
 Other local commands behave from the selected mob's perspective too: `emote`
 and socials address that mob's room, and directions for door commands or
-directional `/transfer` resolve from that room.
+directional `/transfer` resolve from that room. A bare direction such as
+`east` is also approved for a mob subject, so an adjacent-room mob can walk
+into a scene with the ordinary departure and arrival messages.
+
+For example, given an authored east exit from `room@3` to `room@2`, this
+complete room Trigger makes the guard enter and then speak in a separate
+zero-delay step:
+
+```yaml
+kind: trigger
+metadata:
+  world: world.1
+  name: Call Scene Guard
+spec:
+  scope: room
+  kind: command
+  target: room@2
+  match: call guard
+  script: ""
+  steps:
+    - after_seconds: 0
+      actions:
+        - type: command
+          subject:
+            type: mob
+            room: room@3
+            mob: mobdefinition.scene-guard
+          command: east
+    - after_seconds: 0
+      actions:
+        - type: command
+          subject:
+            type: mob
+            room: room@2
+            mob: mobdefinition.scene-guard
+          command: say I have arrived.
+  on_step_error: cancel
+  conditions: ""
+  show_details_on_failure: false
+  failure_message: ""
+  display_action_in_room: true
+  gate_delay: 0
+  order: 0
+  is_active: true
+```
+
+Mob direction commands resolve one adjacent exit from the selected mob's live
+room. They honor closed and locked doors and fail while the mob is dead,
+pending deletion, roomless, or in active combat. Because this is an explicit
+authored command rather than autonomous roaming, the mob's roam chance,
+zone/path roaming boundary, and `no_roam` room flags do not apply. Player-only
+stamina, water, and movement-policy checks do not apply to mobs, and this
+initial slice does not start player-arrival room hooks, destination reactions,
+or automatic aggro. A successful directional move does emit the normal
+directional follow edge.
+
+If the moved mob should execute another command from its destination, put that
+command in the next step (which may also use `after_seconds: 0`) and select the
+mob in the destination room. Mob candidates for all actions in one step are
+snapshotted before mutations, so a second same-step selector for the new room
+does not discover a mob moved earlier in that transaction.
 
 `room@12` means the room's portable positive relative ID, not its database ID,
 coordinates, name, or a runtime instance ID. The referenced room and mob
@@ -760,10 +821,12 @@ that step; `on_step_error: cancel` then cancels the remaining sequence.
 Commands currently approved for transactional steps are room-local `say`,
 `emote`, `talk`, authored socials, room-subject, room-scoped `/echo`, the
 immediate `/open`, `/close`, and `/lock` door commands, player-subject `follow`
-and `unfollow`, and the audited transactional `/transfer` and `/exitinstance`
-commands. Most approved handlers are event-only. The door commands are
-transactional mutations and can use a `trigger_room` or selected-mob subject.
-A direction target can include custom room text directly, such as
+and `unfollow`, player-Trigger-actor and mob-subject adjacent direction
+commands, and the audited transactional `/transfer` and `/exitinstance`
+commands. Most approved handlers are event-only. Character movement and the
+door commands are transactional mutations; door commands can use a
+`trigger_room` or selected-mob subject. A direction target can include custom
+room text directly, such as
 `/lock south The bronze doors close behind you.`; use
 `/lock bronze doors -- ...` for a named target. The custom text replaces the
 normal door state message and is emitted only for a real state change.
@@ -785,11 +848,33 @@ combat, rewards, or loot. Each follower still makes an ordinary movement
 attempt and remains subject to combat locks, stamina, movement policies, and
 door state. A chain is limited to 16 following links; a command that would
 exceed that limit fails without changing the relationship. Ordinary adjacent
-directional locomotion pulls followers. A
+directional locomotion pulls followers. Relationship changes later in the same
+step apply before asynchronous propagation: a new `follow` does not catch an
+edge that already occurred, while `unfollow` or a leader switch can cancel the
+pending attempt. A
 direction-based `/transfer` of a mob through an adjacent exit also carries a
 direction and can pull that mob's followers. Player transfers, mob transfers
 using `here` or a room reference, instance transitions, death routing, resets,
 and other non-directional relocations do not.
+
+A player Trigger actor may issue one bare direction through the ordinary
+movement handler. This is the canonical form for making the player walk at a
+specific point in a scene:
+
+```yaml
+- after_seconds: 4
+  actions:
+    - type: command
+      subject: trigger_actor
+      command: down
+```
+
+The step remains transactional and observes ordinary exits, door state,
+stamina and terrain requirements, combat locks, movement-policy Triggers,
+followers, destination arrival behavior, reactions, and aggro. It does not
+expand player aliases, enter command history, or permit selecting another
+player. Use `/transfer self down` only when the scene deliberately needs to
+bypass ordinary movement rules.
 
 `/transfer` is another mutating exception: it can target only the Trigger
 actor, but any of the three supported subject forms may issue it. The canonical
@@ -810,9 +895,11 @@ step because the successful exit invalidates the run's instance-runtime
 context.
 
 Zone-wide `yell` and zone/world echoes are excluded because they can create
-large fanout while a step transaction is open. Other movement, combat,
-inventory mutation, builder-state mutation, and nested `/cmd` dispatch are not
-currently step-safe.
+large fanout while a step transaction is open. Arbitrary forced player
+commands, combat, inventory mutation, builder-state mutation, and nested
+`/cmd` dispatch are not currently step-safe. Use a bare direction for ordinary
+Trigger-actor movement and `/transfer` for deliberate relocation that bypasses
+ordinary movement rules.
 
 One action contains exactly one command. Newlines, `;` or `&&` chains, history
 references, and nested `/cmd` are rejected. Use multiple `command` actions in
@@ -847,7 +934,7 @@ original Trigger actor before dispatch.
 
 | Type | Required fields | Effect |
 | --- | --- | --- |
-| `command` | `subject`, `command` | Executes one audited command as `trigger_room`, `trigger_actor`, or an exact-one same-runtime mob selected in `trigger_room` or `room@<relative_id>`. Transactional `/transfer` is same-runtime; `/exitinstance` is restricted to the player Trigger actor and must be the sole action of the final step. Command or selector failure rolls back the step. |
+| `command` | `subject`, `command` | Executes one audited command as `trigger_room`, `trigger_actor`, or an exact-one same-runtime mob selected in `trigger_room` or `room@<relative_id>`. A mob subject may traverse one adjacent exit with a bare direction. Transactional `/transfer` is same-runtime; `/exitinstance` is restricted to the player Trigger actor and must be the sole action of the final step. Command or selector failure rolls back the step. |
 | `debit_currency` | `actor: trigger_actor`, `currency`, `amount` | Atomically removes a positive amount of one explicit currency from the triggering player. Fails if the actor is not a player or has insufficient funds. |
 | `grant_currency` | `actor: trigger_actor`, `currency`, `amount` | Atomically adds a positive amount of one explicit currency to the triggering player. Fails if the actor is not a player or the final balance would exceed the safe-integer limit. |
 | `consume_item` | `actor: trigger_actor`, `item`, optional `count` | Removes exact-definition items from the triggering actor's inventory. `count` defaults to `1`. |

@@ -31,6 +31,8 @@ class CommandContext:
     ``issuer`` records who initiated the intent. ``subject`` records the
     embodied player or mob performing it, when present. ``actor`` remains the
     compatibility execution object used by existing handlers.
+    ``builder_force`` is trusted dispatcher provenance for an interactive
+    builder commanding a selected character; it is never read from payloads.
     """
     actor: CommandActor
     actor_type: str
@@ -47,6 +49,7 @@ class CommandContext:
     script_source: bool = False
     capture_only: bool = False
     trigger_step: bool = False
+    builder_force: bool = False
     issuer: CommandActor | None = None
     issuer_type: str | None = None
     issuer_id: int | None = None

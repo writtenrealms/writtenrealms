@@ -50,6 +50,14 @@ entry is active, its target entry must also be active.
 
 Spawn plans are authored through `kind: spawnplan` YAML.
 
+The containing zone has a separate typed default under
+`kind: zone` `spec.respawn`. A spawn plan opts into that default with
+`spec.respawn.mode: inherit_zone` and no plan-level `seconds`. An
+`inherit_zone` plan with explicit `seconds` uses that interval as an override;
+plans using `fixed` or `none` also do not consult the zone. The zone's
+independent `spec.door_reset` policy is not a spawn-plan reset and never
+changes population.
+
 Supported source families should remain definition-backed:
 
 - `mobdefinition.<slug>`
@@ -120,12 +128,24 @@ and rewritten by canonical export as `room@<relative_id>`.
 - Initial population and deliberate repopulation belong to instance/world
   lifecycle services. Spawn plans have no separate reset policy; ordinary
   replacement timing belongs to their respawn policy.
+- Zone population defaults and door resets are independent typed policies.
+  Zone `respawn.mode: none` makes an `inherit_zone` plan without explicit
+  `seconds` ineligible for ordinary replacement; an explicit plan-level
+  `seconds` remains an override. Zone `door_reset.mode: none` disables
+  automatic resets of materialized doorways. One setting never substitutes
+  for the other.
+- Door-reset deadlines are runtime-world state, not authored-zone timestamps.
+  Parallel instance runs and runtime shards therefore schedule and consume
+  their resets independently. A newly initialized fixed schedule starts at the
+  configured interval instead of treating a missing timestamp as immediately
+  due.
 - `/repop` is deliberate, zone-scoped reconciliation. It bypasses respawn mode
   and deadline checks but retains live-output deduplication, active-plan and
   condition checks, no-roam safety, and active-instance snapshot protection.
   Doors are unchanged unless `--doors` is supplied; that option resets
   materialized runtime doorway states in the selected zone to their authored
-  defaults. Neither form consumes the separate authored-zone door-reset timer.
+  defaults. Neither form consumes or advances the zone's automatic runtime
+  door-reset schedule.
 - Conditional logic must use the WR2 condition DSL in
   `backend/core/condition_dsl.py`.
 
@@ -134,6 +154,8 @@ and rewritten by canonical export as `room@<relative_id>`.
 Current builder-facing flows are:
 
 - apply `kind: spawnplan` manifests through **World > Edit World**
+- edit the containing zone's canonical policies through **Zone > Config**
+- use **Zone > Utils** for the separate operational **Move Zone** tool
 - inspect room-scoped plans through room **Spawn Plans**
 - inspect zone-scoped plans through zone **Spawn Plans**
 - export/import spawn plans as YAML manifests

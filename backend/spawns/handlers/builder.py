@@ -1538,7 +1538,7 @@ class CmdHandler(CommandHandler):
         "name": "Cmd",
         "format": "/cmd <room|zone|world|target> -- <command>",
         "description": (
-            "Run a command either as room/zone/world context or as a targeted mob. "
+            "Run a command either as room/zone/world context or as a targeted character. "
             "Use && to chain commands. /force is kept as an alias."
         ),
         "examples": [
@@ -1566,6 +1566,11 @@ class CmdHandler(CommandHandler):
             return
 
         try:
+            builder_force = bool(
+                not ctx.script_source
+                and ctx.actor_type == "player"
+                and has_builder_access(ctx.player)
+            )
             result = CmdAction().execute(
                 actor=ctx.actor,
                 target_selector=target_selector,
@@ -1573,6 +1578,7 @@ class CmdHandler(CommandHandler):
                 runtime_world=ctx.world,
                 skip_triggers=bool(ctx.payload.get("skip_triggers")),
                 script_source=ctx.script_source,
+                builder_force=builder_force,
             )
         except ActionError as err:
             ctx.publish(

@@ -118,6 +118,22 @@ This plan remains directional, but several pieces are now implemented:
   recorded command issuer remains the original Trigger room; only the physical
   mob subject and its execution room change. Single-command, nested-dispatch,
   alias/history, and fallback-trigger guards are enforced at this boundary.
+- A selected mob command subject may issue one bare movement direction from
+  its live room, including from an authored room adjacent to the Trigger room.
+  This is the typed WR2 replacement for deterministic WR1 `/at` scene-entry
+  use cases. The move is transactional, checks the adjacent exit, door state,
+  mob availability, and active combat, and emits ordinary directional room
+  output plus a durable follow edge. Player Trigger actors may likewise issue
+  one bare direction through ordinary player movement rules; other forced
+  player commands and autonomous roaming remain outside generic Trigger-step
+  commands.
+- Interactive `/cmd <character>` and `/force <character>` preserve the
+  authenticated builder player as issuer and the same-room, same-runtime mob
+  or player as subject. This permits ordinary mob directions and player
+  directions without granting either character builder authority. Player
+  targets are movement-only, and their forced input bypasses aliases and
+  command history. This path remains distinct from Trigger-step provenance;
+  trusted scripts cannot opt themselves into interactive builder forcing.
 - The runner reuses the already resolved subject, issuer, and runtime world
   rather than refetching those identities once per command action.
 - Typed steps require item/mob mutations as an initial prefix. After that,

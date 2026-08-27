@@ -10,8 +10,8 @@ content between worlds, then use the system guides for field-by-field examples.
   behavior, supported kinds, and portable references.
 - [World Config](world-config-builder-guide.md) covers global presentation,
   progression, combat, and runtime rules.
-- [Rooms and Doors](room-builder-guide.md) covers room identity, exits,
-  details, doors, and movement policy.
+- [Zones, Rooms, and Doors](room-builder-guide.md) covers zone policy, room
+  identity, exits, details, doors, and movement policy.
 - [World Publishing](world-publishing.md) explains review readiness and the
   publication workflow.
 
