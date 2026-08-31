@@ -449,24 +449,32 @@ onBeforeUnmount(() => {
         .pagination-or-search {
           align-items: center;
           display: flex;
-          flex-wrap: wrap;
           gap: 0.75rem;
+          justify-content: flex-end;
           min-width: 0;
 
           @media ($mobile-site) {
             display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-start;
             min-height: 36px;
             align-items: center;
           }
 
           .form-group {
+            flex: 0 1 22rem;
             margin: 0;
             max-width: 100%;
             min-width: 0;
-            width: 100%;
+            width: 22rem;
 
             input {
               min-width: 0;
+            }
+
+            @media ($mobile-site) {
+              flex-basis: 100%;
+              width: 100%;
             }
           }
         }
