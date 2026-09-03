@@ -524,6 +524,9 @@ const receiveMessage = async ({
     message_data.type === "cmd.flee.success" &&
     message_data.data &&
     message_data.data.room;
+  const isCombatDisengage =
+    message_data.type === "cmd.disengage.success" ||
+    message_data.type === "notification.combat.disengage";
 
   // Connection acknowledged (no state payload yet)
   if (isConnectSuccess) {
@@ -832,6 +835,18 @@ const receiveMessage = async ({
     }
   }
 
+  if (isCombatDisengage && message_data.data) {
+    if (message_data.data.actor) {
+      commit("room_chars_update", message_data.data.actor);
+    }
+    if (message_data.data.target) {
+      commit("room_chars_update", message_data.data.target);
+    }
+    if (message_data.data.next_target) {
+      commit("room_chars_update", message_data.data.next_target);
+    }
+  }
+
   // Open & close messages
   if (
     message_data.type === "door.open" ||
@@ -1109,6 +1124,11 @@ const receiveMessage = async ({
       commit("player_set", message_data.data.target);
     }
 
+  } else if (message_data.type === "cmd.disengage.success") {
+    // Clear the old target first so its effect state is not carried onto a
+    // remaining encounter's new primary target by player_target_set.
+    commit("player_target_set", null);
+    commit("player_target_set", message_data.data?.actor?.target || null);
   } else if (message_data.type === "affect.flee.success" || isCompletedFleeSuccess) {
     commit("player_target_set", null);
   } else if (message_data.type === "notification.duel.completed") {

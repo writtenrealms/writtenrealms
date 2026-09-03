@@ -177,6 +177,18 @@ ordinary direction command to leave before the first combat round resolves.
 Once that first round has resolved, ordinary movement is blocked and you must
 use `flee` to leave combat.
 
+If your current mob opponent is configured not to fight back, use `disengage`
+to end that encounter without leaving the room. Disengaging is immediate: it
+does not choose an exit, cost movement stamina, fire movement events, or give a
+tracker an opportunity to pursue you. Any ability or flee attempt queued for
+that encounter is canceled; stamina already reserved by the canceled flee is
+refunded.
+
+`disengage` works only against a mob with `fights_back: false`. It cannot end a
+fight with a retaliating mob or another player. When several mobs have engaged
+you, it ends only the encounter with your current passive target. Any other
+hostile encounter remains active and becomes your current fight.
+
 The **Rooted** status prevents `flee` while it is active. If you are already
 Rooted, the command is rejected before an escape route is chosen or stamina is
 reserved. Fleeing takes time, so Rooted is checked again when your escape would
@@ -185,9 +197,10 @@ attempt is canceled, its reserved stamina is refunded, and you remain in combat.
 That failed escape uses your action for the round while effects and enemies
 continue to act. You can try again after Rooted expires.
 
-Rooted applies specifically to `flee`; it does not add a separate restriction to
-ordinary direction commands. Those commands still follow the round-zero and
-combat movement rules above.
+Rooted applies specifically to `flee`; it does not prevent `disengage` against
+an eligible passive mob or add a separate restriction to ordinary direction
+commands. Direction commands still follow the round-zero and combat movement
+rules above.
 
 Some mobs have the `tracker` trait. If a tracker has aggroed you during the
 round-zero opening, it follows you through the exit used for ordinary movement

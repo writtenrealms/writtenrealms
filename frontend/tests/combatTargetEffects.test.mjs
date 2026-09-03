@@ -15,6 +15,10 @@ const combatPanelSource = await readFile(
   new URL("../src/components/game/panel/Combat.vue", import.meta.url),
   "utf8",
 );
+const consoleHelpSource = await readFile(
+  new URL("../src/components/game/console/Help.vue", import.meta.url),
+  "utf8",
+);
 const compiled = ts.transpileModule(roundEffectsSource, {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
@@ -75,4 +79,18 @@ test("combat updates route combatant snapshots to the current target", () => {
   );
   assert.match(combatPanelSource, /class="target-round-effect"/);
   assert.match(combatPanelSource, /useStatusLabels:\s*true/);
+});
+
+test("disengage refreshes room combatants and clears or switches the target", () => {
+  assert.match(gameStoreSource, /cmd\.disengage\.success/);
+  assert.match(gameStoreSource, /notification\.combat\.disengage/);
+  assert.match(
+    gameStoreSource,
+    /isCombatDisengage[\s\S]*room_chars_update[\s\S]*message_data\.data\.target[\s\S]*message_data\.data\.next_target/,
+  );
+  assert.match(
+    gameStoreSource,
+    /cmd\.disengage\.success[\s\S]*player_target_set", null[\s\S]*actor\?\.target \|\| null/,
+  );
+  assert.match(consoleHelpSource, /cmdHelp\('disengage'\)/);
 });

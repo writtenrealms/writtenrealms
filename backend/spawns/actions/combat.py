@@ -1841,6 +1841,66 @@ def _engage_events(*, player: Player, room: Room, mob: Mob) -> list[GameEvent]:
     ]
 
 
+def _disengage_events(
+    *,
+    player: Player,
+    room: Room,
+    mob: Mob,
+    encounter_id: int,
+    next_encounter: CombatEncounter | None,
+) -> list[GameEvent]:
+    actor_base_payload = serialize_char_from_player(player).model_dump()
+    actor_payload = actor_base_payload
+    next_target_payload = None
+    if next_encounter and next_encounter.mob:
+        serialized_next_target = serialize_char_from_mob(
+            next_encounter.mob
+        ).model_dump()
+        actor_payload = _combat_state_payload(
+            actor_payload,
+            target_payload=serialized_next_target,
+        )
+        next_target_payload = _combat_state_payload(
+            serialized_next_target,
+            target_payload=actor_base_payload,
+        )
+    target_payload = serialize_char_from_mob(mob).model_dump()
+    target_name = target_payload.get("name") or "them"
+    data = {
+        "actor": actor_payload,
+        "target": target_payload,
+        "encounter_id": encounter_id,
+        "still_in_combat": bool(next_encounter),
+    }
+    if next_target_payload:
+        data["next_target"] = next_target_payload
+    events = [
+        GameEvent(
+            type="cmd.disengage.success",
+            recipients=[player.key],
+            data=data,
+            text=f"You disengage from {target_name}.",
+        )
+    ]
+    if player.is_invisible:
+        return events
+
+    recipients = _combat_recipients(player, room)
+    if recipients:
+        events.append(
+            GameEvent(
+                type="notification.combat.disengage",
+                recipients=recipients,
+                data=data,
+                text=(
+                    f"{safe_capitalize(player.name)} disengages from "
+                    f"{target_name}."
+                ),
+            )
+        )
+    return events
+
+
 def _aggro_engage_events(
     *,
     player: Player,
@@ -2097,6 +2157,41 @@ def _finish_player_encounters_in_room(*, player: Player, room_id: int) -> None:
     for active_encounter in active_encounters:
         _clear_pending_encounter_actions(active_encounter)
         _finish_encounter(active_encounter)
+
+
+def _resume_detached_character_effect_ticks(
+    *,
+    player: Player,
+    mob_ids: Iterable[int],
+) -> None:
+    """Move surviving character effects back onto the detached tick cadence."""
+    next_effect_tick = next_character_effect_tick_ts(player.world)
+    if not CombatEncounter.objects.filter(
+        player=player,
+        status=CombatEncounter.STATUS_ACTIVE,
+    ).exists():
+        ActiveEffect.objects.filter(
+            scope=ActiveEffect.SCOPE_CHARACTER,
+            target_player=player,
+            remaining_rounds__gt=0,
+        ).update(next_tick_ts=next_effect_tick)
+
+    candidate_mob_ids = {int(mob_id) for mob_id in mob_ids if mob_id}
+    if not candidate_mob_ids:
+        return
+    engaged_mob_ids = set(
+        CombatEncounter.objects.filter(
+            mob_id__in=candidate_mob_ids,
+            status=CombatEncounter.STATUS_ACTIVE,
+        ).values_list("mob_id", flat=True)
+    )
+    detached_mob_ids = candidate_mob_ids.difference(engaged_mob_ids)
+    if detached_mob_ids:
+        ActiveEffect.objects.filter(
+            scope=ActiveEffect.SCOPE_CHARACTER,
+            target_mob_id__in=detached_mob_ids,
+            remaining_rounds__gt=0,
+        ).update(next_tick_ts=next_effect_tick)
 
 
 def _schedule_encounter_resolution(encounter_id: int, delay_seconds: float) -> None:
@@ -2448,6 +2543,29 @@ def _reconciled_flee_stamina(
     return min(reconciled, stamina_max) if stamina_max > 0 else reconciled
 
 
+def _refund_pending_flee_reservation(
+    *,
+    player: Player,
+    encounter: CombatEncounter,
+) -> None:
+    pending_flee = encounter.pending_flee or {}
+    try:
+        reserved_flee_cost = max(
+            0,
+            int(pending_flee.get("movement_cost") or 0),
+        )
+    except (TypeError, ValueError):
+        reserved_flee_cost = 0
+    if not reserved_flee_cost:
+        return
+    player.stamina = _reconciled_flee_stamina(
+        player,
+        reserved_cost=reserved_flee_cost,
+        replacement_cost=0,
+    )
+    player.save(update_fields=["stamina"])
+
+
 def _cancel_prevented_flee_completion(
     *,
     encounter: CombatEncounter,
@@ -2654,27 +2772,10 @@ def _complete_flee(
         ).values_list("id", "mob_id")
     )
     _finish_player_encounters_in_room(player=player, room_id=origin_room_id)
-    next_effect_tick = next_character_effect_tick_ts(player.world)
-    if not CombatEncounter.objects.filter(
+    _resume_detached_character_effect_ticks(
         player=player,
-        status=CombatEncounter.STATUS_ACTIVE,
-    ).exists():
-        ActiveEffect.objects.filter(
-            scope=ActiveEffect.SCOPE_CHARACTER,
-            target_player=player,
-            remaining_rounds__gt=0,
-        ).update(next_tick_ts=next_effect_tick)
-    for mob_id in {mob_id for _, mob_id in finished_encounters if mob_id}:
-        if CombatEncounter.objects.filter(
-            mob_id=mob_id,
-            status=CombatEncounter.STATUS_ACTIVE,
-        ).exists():
-            continue
-        ActiveEffect.objects.filter(
-            scope=ActiveEffect.SCOPE_CHARACTER,
-            target_mob_id=mob_id,
-            remaining_rounds__gt=0,
-        ).update(next_tick_ts=next_effect_tick)
+        mob_ids=(mob_id for _, mob_id in finished_encounters if mob_id),
+    )
     encounter.status = CombatEncounter.STATUS_FINISHED
     encounter.next_resolution_ts = None
 
@@ -6533,6 +6634,109 @@ def _cancel_pending_door_for_physical_action(
         code="physical_action_replaced",
         message=message,
     )
+
+
+class DisengageAction:
+    def execute(self, player_id: int) -> ActionResult:
+        with transaction.atomic():
+            player = (
+                Player.objects.select_for_update()
+                .select_related("world")
+                .get(pk=player_id)
+            )
+            room = (
+                Room.objects.select_related("world", "zone")
+                .filter(pk=player.room_id)
+                .first()
+                if player.room_id
+                else None
+            )
+            encounter = primary_active_encounter_for_player(
+                player,
+                room=room,
+                lock=True,
+            )
+            if not encounter:
+                raise ActionError("You are not in combat.", code="not_in_combat")
+
+            target_mob = (
+                Mob.objects.select_for_update(of=("self",))
+                .select_related("definition")
+                .filter(
+                    pk=encounter.mob_id,
+                    room=room,
+                    is_pending_deletion=False,
+                    health__gt=0,
+                )
+                .first()
+            )
+            if not target_mob:
+                _refund_pending_flee_reservation(
+                    player=player,
+                    encounter=encounter,
+                )
+                _clear_pending_encounter_actions(encounter)
+                _finish_encounter(encounter)
+                _resume_detached_character_effect_ticks(
+                    player=player,
+                    mob_ids=[encounter.mob_id] if encounter.mob_id else [],
+                )
+                message = "You are no longer in that fight."
+                return ActionResult(
+                    events=[
+                        GameEvent(
+                            type="cmd.disengage.error",
+                            recipients=[player.key],
+                            data={"error": message, "code": "combat_ended"},
+                            text=message,
+                        ),
+                        _combat_effect_state_event(player),
+                        ability_prepare_state_event(player),
+                    ]
+                )
+            if target_mob.fights_back:
+                target_name = target_mob.name or "that mob"
+                raise ActionError(
+                    f"You cannot disengage while {target_name} is fighting back.",
+                    code="target_fights_back",
+                )
+
+            cancellation_events = _cancel_pending_door_for_physical_action(
+                player,
+                message="You stop working with the door to disengage.",
+            )
+            _refund_pending_flee_reservation(
+                player=player,
+                encounter=encounter,
+            )
+
+            _clear_pending_encounter_actions(encounter)
+            _finish_encounter(encounter)
+            _resume_detached_character_effect_ticks(
+                player=player,
+                mob_ids=[target_mob.id],
+            )
+            next_encounter = primary_active_encounter_for_player(
+                player,
+                room=room,
+            )
+            combat_effect_targets = [target_mob]
+            if next_encounter and next_encounter.mob:
+                combat_effect_targets.append(next_encounter.mob)
+            return ActionResult(
+                events=[
+                    *cancellation_events,
+                    *_disengage_events(
+                        player=player,
+                        room=room,
+                        mob=target_mob,
+                        encounter_id=encounter.id,
+                        next_encounter=next_encounter,
+                    ),
+                    _combat_effect_state_event(player, *combat_effect_targets),
+                    ability_prepare_state_event(player),
+                ]
+            )
 
 
 class FleeAction:

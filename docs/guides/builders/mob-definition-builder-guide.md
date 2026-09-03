@@ -138,6 +138,14 @@ effects, and other combat output continue to use their ability or effect labels.
 Use `aggression: passive`, `normal`, `players`, `all`, or `friendly`. The
 alias `aggressive` is accepted for `all`.
 
+Use `fights_back: true` when a mob should take its normal turns after combat
+starts. Set `fights_back: false` for an attackable mob that never retaliates.
+Players can immediately use `disengage` against such a mob to end only that
+encounter while both remain in the room. They cannot disengage from a mob with
+`fights_back: true`; leaving that fight requires the normal movement or `flee`
+rules. The `fights_back` setting is independent of `aggression`, which controls
+how encounters begin rather than what the mob does once engaged.
+
 Use `target_priority` when several hostile mobs can engage the same player from
 one room and one mob should be the automatic faceoff target. The default is `0`.
 Higher values are targeted first; ties keep the normal room mob order. Negative

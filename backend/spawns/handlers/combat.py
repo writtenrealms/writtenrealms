@@ -1,5 +1,5 @@
 from spawns.actions.base import ActionError
-from spawns.actions.combat import FleeAction, KillAction
+from spawns.actions.combat import DisengageAction, FleeAction, KillAction
 from spawns.events import publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
@@ -34,6 +34,41 @@ class KillHandler(CommandHandler):
             ctx.publish(
                 {
                     "type": "cmd.kill.error",
+                    "text": err.message,
+                    "data": {"error": err.message, "code": err.code, **err.data},
+                }
+            )
+            return
+
+        publish_events(
+            result.events,
+            actor_key=ctx.player.key,
+            connection_id=ctx.connection_id,
+        )
+
+
+@register_handler
+class DisengageHandler(CommandHandler):
+    command_type = "disengage"
+    text_commands = ("disengage",)
+    help = {
+        "name": "Disengage",
+        "format": "disengage",
+        "description": (
+            "Stop fighting a mob that does not fight back without leaving the room."
+        ),
+        "examples": [
+            "disengage",
+        ],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        try:
+            result = DisengageAction().execute(ctx.player.id)
+        except ActionError as err:
+            ctx.publish(
+                {
+                    "type": "cmd.disengage.error",
                     "text": err.message,
                     "data": {"error": err.message, "code": err.code, **err.data},
                 }
