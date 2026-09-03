@@ -25,7 +25,6 @@ const ifStaff = () => {
 // These can be imported from other files
 const routes = [
 
-  { path: '/test', name: 'test', component: () => import('@/views/tests/Index.vue') },
   { path: '/ws', name: 'fastapi_ws', component: () => import('@/views/Ws.vue'), beforeEnter: ifAuthenticated },
 
   // Home
