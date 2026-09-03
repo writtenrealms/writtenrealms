@@ -145,12 +145,15 @@ values sit behind default-priority mobs. This is useful for encounters such as a
 `target_priority: 1` shieldbearer protecting a default-priority fighter and a
 `target_priority: -1` archer in the same room.
 
-Use `roam_chance` to override the world's default ambient roam chance for that
-mob. A value of `0` means "use the world default". Mobs only roam when the
-spawn plan gives them a zone or path target; mobs loaded into a fixed
-room stay static. If a roaming mob enters a room with an eligible player, its
-normal `aggression` rules are checked just as they are when the player enters
-the mob's room.
+Use a positive `roam_chance` to give that mob the highest-precedence ambient
+roam chance. For backward compatibility, a value of `0` means "inherit": WR2
+then checks the spawn plan's `default_roam_chance`, the roaming target zone's
+`default_roam_chance`, and finally the inherited base-world default. At the
+spawn-plan and zone levels, an unset or `null` value means inherit while `0`
+explicitly disables roaming. Mobs only roam when the spawn plan gives them a
+zone or path target; mobs loaded into a fixed room stay static. If a roaming
+mob enters a room with an eligible player, its normal `aggression` rules are
+checked just as they are when the player enters the mob's room.
 
 ## Factions
 

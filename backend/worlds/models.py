@@ -1569,6 +1569,13 @@ class Zone(AdventWorldBaseModel):
     description = models.TextField(blank=True)
     notes = models.TextField(**optional)
 
+    # Optional ambient-roaming default for mobs whose spawn plan and
+    # definition do not provide a more specific value. Null inherits the
+    # world default; zero explicitly disables ambient roaming in this zone.
+    default_roam_chance = models.PositiveIntegerField(
+        validators=[MaxValueValidator(100)],
+        **optional)
+
     zone_data = models.TextField(default="{}", blank=True)
     # Authored defaults copied into per-runtime ZoneState rows.
     initial_state = models.JSONField(default=dict, blank=True)

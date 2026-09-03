@@ -110,6 +110,83 @@ spec:
             {"mode": "fixed", "seconds": 90},
         )
 
+    def test_zone_manifest_round_trips_nullable_default_roam_chance(self):
+        for value, yaml_value in (
+            (0, "0"),
+            (10, "'10'"),
+            (100, "100"),
+            (None, "null"),
+        ):
+            with self.subTest(value=value):
+                manifest = f"""
+kind: zone
+metadata:
+  ref: zone@{self.zone.relative_id}
+  name: Starting Zone
+spec:
+  default_roam_chance: {yaml_value}
+"""
+
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 200, resp.data)
+                self.zone.refresh_from_db()
+                self.assertEqual(self.zone.default_roam_chance, value)
+                exported = yaml.safe_load(resp.data["zone"]["yaml"])
+                self.assertEqual(
+                    exported["spec"]["default_roam_chance"],
+                    value,
+                )
+
+    def test_zone_manifest_omitted_default_roam_chance_preserves_value(self):
+        self.zone.default_roam_chance = 37
+        self.zone.save(update_fields=["default_roam_chance"])
+        manifest = f"""
+kind: zone
+metadata:
+  ref: zone@{self.zone.relative_id}
+  name: Starting Zone
+spec:
+  notes: Leave the roaming default unchanged.
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.zone.refresh_from_db()
+        self.assertEqual(self.zone.default_roam_chance, 37)
+
+    def test_zone_manifest_rejects_invalid_default_roam_chance(self):
+        invalid_values = ("-1", "101", "1.5", "true", "'often'")
+
+        for yaml_value in invalid_values:
+            with self.subTest(value=yaml_value):
+                manifest = f"""
+kind: zone
+metadata:
+  ref: zone@{self.zone.relative_id}
+  name: Starting Zone
+spec:
+  default_roam_chance: {yaml_value}
+"""
+
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400, resp.data)
+                self.assertIn("default_roam_chance", str(resp.data))
+
     def test_apply_zone_manifest_rejects_invalid_policy_shapes(self):
         invalid_specs = (
             ("respawn: fixed", "spec.respawn must be a mapping"),
@@ -544,6 +621,123 @@ spec:
             resp.data["spawn_plan"]["manifest"]["spec"]["entries"][0]["target"],
             f"room@{self.room.relative_id}",
         )
+
+    def test_spawn_plan_manifest_round_trips_nullable_default_roam_chance(self):
+        for index, (value, yaml_value) in enumerate(
+            ((0, "0"), (10, "'10'"), (100, "100"), (None, "null")),
+        ):
+            with self.subTest(value=value):
+                slug = f"roaming-default-{index}"
+                manifest = f"""
+kind: spawnplan
+metadata:
+  slug: {slug}
+  name: Roaming Default {index}
+spec:
+  zone: zone@{self.zone.relative_id}
+  default_roam_chance: {yaml_value}
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target: room@{self.room.relative_id}
+      count: 1
+"""
+
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 201, resp.data)
+                plan = SpawnPlan.objects.get(world=self.world, slug=slug)
+                self.assertEqual(plan.default_roam_chance, value)
+                self.assertEqual(
+                    resp.data["spawn_plan"]["manifest"]["spec"][
+                        "default_roam_chance"
+                    ],
+                    value,
+                )
+
+    def test_spawn_plan_manifest_omitted_default_roam_chance_resets_to_null(self):
+        plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.zone,
+            slug="replace-roaming-default",
+            name="Replace Roaming Default",
+            default_roam_chance=37,
+        )
+        SpawnEntry.objects.create(
+            plan=plan,
+            slug="practice-dummy",
+            source=f"mobdefinition.{self.mob_definition.slug}",
+            target_room=self.room,
+            count=1,
+        )
+        manifest = f"""
+kind: spawnplan
+metadata:
+  slug: {plan.slug}
+  name: Replace Roaming Default
+spec:
+  zone: zone@{self.zone.relative_id}
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target: room@{self.room.relative_id}
+      count: 1
+"""
+
+        resp = self.client.post(
+            self.apply_ep,
+            {"manifest": manifest},
+            format="json",
+        )
+
+        self.assertEqual(resp.status_code, 200, resp.data)
+        plan.refresh_from_db()
+        self.assertIsNone(plan.default_roam_chance)
+        self.assertIsNone(
+            resp.data["spawn_plan"]["manifest"]["spec"][
+                "default_roam_chance"
+            ]
+        )
+
+    def test_spawn_plan_manifest_rejects_invalid_default_roam_chance(self):
+        invalid_values = ("-1", "101", "1.5", "true", "'often'")
+
+        for index, yaml_value in enumerate(invalid_values):
+            with self.subTest(value=yaml_value):
+                slug = f"invalid-roaming-default-{index}"
+                manifest = f"""
+kind: spawnplan
+metadata:
+  slug: {slug}
+  name: Invalid Roaming Default {index}
+spec:
+  zone: zone@{self.zone.relative_id}
+  default_roam_chance: {yaml_value}
+  entries:
+    - slug: practice-dummy
+      source: mobdefinition.{self.mob_definition.slug}
+      target: room@{self.room.relative_id}
+      count: 1
+"""
+
+                resp = self.client.post(
+                    self.apply_ep,
+                    {"manifest": manifest},
+                    format="json",
+                )
+
+                self.assertEqual(resp.status_code, 400, resp.data)
+                self.assertIn("default_roam_chance", str(resp.data))
+                self.assertFalse(
+                    SpawnPlan.objects.filter(
+                        world=self.world,
+                        slug=slug,
+                    ).exists()
+                )
 
     def test_apply_spawn_plan_manifest_accepts_all_scalar_target_types(self):
         path = Path.objects.create(

@@ -776,6 +776,23 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
 
     def test_world_export_round_trips_into_fresh_world(self):
         self.maxDiff = None
+        self.harbor_zone.default_roam_chance = 23
+        self.harbor_zone.save(update_fields=["default_roam_chance"])
+        source_patrol_plan = SpawnPlan.objects.create(
+            world=self.world,
+            zone=self.start_zone,
+            slug="harbor-patrols",
+            name="Harbor Patrols",
+            default_roam_chance=47,
+            respawn_policy={"mode": "fixed", "seconds": 0},
+        )
+        SpawnEntry.objects.create(
+            plan=source_patrol_plan,
+            slug="quartermaster-patrol",
+            source=f"mobdefinition.{self.quartermaster.slug}",
+            target_path=self.patrol_path,
+            count=1,
+        )
         source_export_resp = self.client.get(self.export_ep)
         self.assertEqual(source_export_resp.status_code, 200)
         source_docs = [doc for doc in yaml.safe_load_all(source_export_resp.data["yaml"]) if doc is not None]
@@ -825,6 +842,14 @@ class TestWorldExportImport(AuthenticatedBuilderWorldTestCase):
             imported_plant_trigger.steps[0]["actions"][4]["subject"]["room"],
             f"room@{self.harbor_room.relative_id}",
         )
+        imported_harbor_zone = target_world.zones.get(
+            relative_id=self.harbor_zone.relative_id,
+        )
+        imported_patrol_plan = target_world.spawn_plans.get(
+            slug=source_patrol_plan.slug,
+        )
+        self.assertEqual(imported_harbor_zone.default_roam_chance, 23)
+        self.assertEqual(imported_patrol_plan.default_roam_chance, 47)
 
     def test_complete_import_replaces_lobby_scaffold_and_rehomes_builder(self):
         (

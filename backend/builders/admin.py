@@ -141,7 +141,16 @@ class SpawnEntryInline(admin.TabularInline):
 
 
 class SpawnPlanAdmin(BaseAdmin):
-    list_display = ['id', 'slug', 'name', 'world', 'zone', 'order', 'is_active']
+    list_display = [
+        'id',
+        'slug',
+        'name',
+        'world',
+        'zone',
+        'default_roam_chance',
+        'order',
+        'is_active',
+    ]
     raw_id_fields = ['world', 'zone']
     list_filter = (DirectRootWorldFilter, 'is_active')
     inlines = [SpawnEntryInline]

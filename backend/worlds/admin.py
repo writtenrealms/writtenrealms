@@ -89,7 +89,7 @@ class WorldConfigAdmin(BaseAdmin):
 
 class ZoneAdmin(BaseAdmin):
 
-    list_display = ['id', 'key', 'name', 'world']
+    list_display = ['id', 'key', 'name', 'world', 'default_roam_chance']
     raw_id_fields = ['world', 'center']
     list_filter = (DirectRootWorldFilter,)
 

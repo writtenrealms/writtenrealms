@@ -67,6 +67,7 @@ Instances should use WR Core definitions from the base world:
 - stat and equipment systems
 - combat formulas
 - combat availability and combat pacing
+- the world-level default roam chance
 - duel-result announcement policy
 - merchant profiles
 
@@ -88,7 +89,8 @@ An instance template owns its own playable space and run policy:
 - room flags and details
 - authored world, zone, and room `initial_state`
 - local room/zone/world triggers
-- spawn plans
+- zones' local roaming defaults
+- spawn plans and their local roaming defaults
 - entry room
 - death room
 - exit behavior
@@ -1015,6 +1017,17 @@ The target side is local to the instance template:
 ```yaml
 target: path@1
 ```
+
+An instance cannot replace the base world's world-level
+`default_roam_chance`, but its own zones and spawn plans can set local roaming
+defaults. Resolution is: positive base-world mob-definition `roam_chance`,
+instance spawn-plan `default_roam_chance`, instance roaming-target-zone
+`default_roam_chance`, then the inherited base-world default. For a zone target,
+the target zone supplies that fallback; for a path target, the path's owning
+zone does. For a spawn plan, omit the local default or set it to `null` to
+inherit. For a zone, a stored `null` inherits and `0` explicitly disables
+roaming at that level. When updating an existing zone, omission preserves its
+current value; set the zone field to `null` to clear it.
 
 For future clear-all goals:
 

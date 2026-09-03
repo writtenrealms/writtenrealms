@@ -58,6 +58,18 @@ plans using `fixed` or `none` also do not consult the zone. The zone's
 independent `spec.door_reset` policy is not a spawn-plan reset and never
 changes population.
 
+Ambient roaming uses a separate layered live policy. Spawn-plan and zone
+`spec.default_roam_chance` accept nullable integers from `0` through `100`:
+`null` means inherit and `0` explicitly disables roaming. Plan omission also
+means inherit. Zone applies are partial updates, so omission on an existing
+zone preserves its value and explicit `null` clears it. A roaming mob resolves
+the first applicable value in this order: positive mob-definition
+`roam_chance` (whose legacy `0` still means inherit), non-null spawn-plan
+default, non-null roaming-target-zone default, then the inherited base-world
+default. A zone target uses that target zone; a path target uses the path's
+owning zone, not necessarily the plan's owning zone. Fixed-room targets remain
+static.
+
 Supported source families should remain definition-backed:
 
 - `mobdefinition.<slug>`
@@ -125,6 +137,11 @@ and rewritten by canonical export as `room@<relative_id>`.
 - Active instance runs retain their initial spawn-plan snapshot. Template edits
   pause reconciliation for the stale plan in that active run and apply when a
   future instance run performs initial population.
+- Roaming defaults are heartbeat policy, not placement or materialization
+  inputs. Plan and target-zone policy edits therefore affect surviving mobs on
+  the next heartbeat without regenerating placements, including in active
+  instance runs; this is intentionally independent of the instance placement
+  snapshot rule above.
 - Initial population and deliberate repopulation belong to instance/world
   lifecycle services. Spawn plans have no separate reset policy; ordinary
   replacement timing belongs to their respawn policy.

@@ -115,7 +115,7 @@
           <dt>Relative ID</dt>
           <dd>{{ zone.relative_id }}</dd>
         </div>
-        <div v-if="store.state.auth.user.is_staff">
+        <div>
           <dt>Database ID</dt>
           <dd>{{ zone.id }}</dd>
         </div>

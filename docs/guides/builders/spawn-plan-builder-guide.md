@@ -17,6 +17,7 @@ metadata:
   name: Training Grounds
 spec:
   zone: zone@1
+  default_roam_chance: 25
   respawn:
     mode: fixed
     seconds: 60
@@ -42,6 +43,13 @@ detail API as `manifest_ref`. Zone names are not accepted here because names
 are not guaranteed to be unique. Database zone ids are also not accepted in
 spawn-plan manifests because they are not portable across prod, dev, exports,
 or imports.
+
+`spec.default_roam_chance` is an optional plan-wide default for mob entries
+that have a zone or path roaming target. Use an integer from `0` through `100`.
+Omit it or set it to `null` to inherit through the target zone to the base
+world; set it to `0` to explicitly disable ambient roaming for inheriting mobs
+in this plan. A positive `MobDefinition.spec.roam_chance` still has higher
+precedence than the plan default.
 
 `spec.entries` is the desired population list. Applying a plan replaces the
 entry list with exactly the entries in the manifest, so remove an entry from the
@@ -191,6 +199,10 @@ spawns in one eligible room in that zone, then can wander to adjacent rooms
 inside the same zone on heartbeat ticks. Rooms flagged `no_roam` are excluded
 both at spawn time and while wandering.
 
+When the spawn plan does not set its own `default_roam_chance`, the zone named
+by this target supplies the zone-level fallback. This is the roaming target
+zone, which can differ from the plan's owning `spec.zone`.
+
 Spawn on a path:
 
 ```yaml
@@ -207,6 +219,10 @@ eligible `entry_room`, the initial placement uses that room. An `entry_room`
 flagged `no_roam` is not eligible for a path-targeted mob, so WR2 chooses from
 the path's other eligible rooms instead.
 
+For a path target, the target-zone fallback comes from the zone that owns the
+path. It does not come from the spawn plan's owning zone unless they are the
+same zone.
+
 For both zone and path targets, `no_roam` is also checked when a missing mob is
 repopulated. If a room is flagged after its deterministic placement was
 generated, WR2 keeps the placement but skips loading the mob there. Removing
@@ -220,9 +236,26 @@ target: room@22
 ```
 
 Mobs loaded into a specific room do not roam by default. Ambient roam chance is
-configured on the world manifest with `default_roam_chance`, which defaults to
-`10` percent per heartbeat. An explicit room target remains allowed when that
+resolved for zone- and path-targeted mobs in this order:
+
+1. A positive mob-definition `spec.roam_chance`; `0` retains its legacy
+   meaning of "inherit" at this level.
+2. The spawn plan's non-null `spec.default_roam_chance`.
+3. The roaming target zone's non-null `spec.default_roam_chance`.
+4. The inherited base world's `spec.default_roam_chance`, which defaults to
+   `10` percent per heartbeat.
+
+At the spawn-plan level, omission or `null` means inherit. At the zone level,
+a stored `null` means inherit; because zone applies are partial updates, use an
+explicit `null` to clear an existing override. At either level, `0` means do
+not roam. An explicit room target remains static and is allowed even when that
 room is flagged `no_roam`; the flag only excludes zone- and path-targeted mobs.
+
+Instance templates use the same resolution order. Their spawn plans and target
+zones can set local defaults even though the instance's world-level default is
+inherited from the base world. Base-world mob definitions remain shared, so a
+positive mob-definition `roam_chance` still wins over an instance-local plan or
+zone default.
 
 ## Path Manifests
 

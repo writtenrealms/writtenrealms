@@ -13,9 +13,10 @@ from config import game_settings as adv_config
 from backend.config.exceptions import ServiceError
 from core.computations import compute_stats
 from core.world_config import inherited_system_config
+from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import F, Q, Subquery
 from django.utils import timezone
 from spawns.actions.doors import lock_door_state_for_movement
 from spawns.services import WorldGate
@@ -401,11 +402,77 @@ def _world_default_roam_chance(world: World) -> int:
     )
 
 
-def _mob_roam_chance(mob: Mob, *, world_default_chance: int) -> int:
+def _mob_spawn_plan_default_roam_chance(mob: Mob) -> int | None:
+    placement = getattr(mob, "spawn_placement", None)
+    run = getattr(placement, "run", None)
+    plan = getattr(run, "plan", None)
+    value = getattr(plan, "default_roam_chance", None)
+    if value is None:
+        return None
+    return _as_percent_int(value)
+
+
+def _mob_roam_chance(
+    mob: Mob,
+    *,
+    world_default_chance: int,
+    target_default_chance: int | None = None,
+) -> int:
     explicit_chance = _as_percent_int(getattr(mob, "roam_chance", 0), default=0)
     if explicit_chance:
         return explicit_chance
+    plan_default_chance = _mob_spawn_plan_default_roam_chance(mob)
+    if plan_default_chance is not None:
+        return plan_default_chance
+    if target_default_chance is not None:
+        return _as_percent_int(target_default_chance)
     return world_default_chance
+
+
+def _roam_target_default_chances(
+    mobs_qs,
+) -> dict[tuple[int, int], int]:
+    """Resolve target-zone defaults in a fixed number of database queries."""
+
+    content_types = ContentType.objects.get_for_models(Path, Zone)
+    path_type_id = content_types[Path].id
+    zone_type_id = content_types[Zone].id
+
+    zone_target_ids = Subquery(
+        mobs_qs.filter(roams_type_id=zone_type_id)
+        .order_by()
+        .values("roams_id")
+    )
+    path_target_ids = Subquery(
+        mobs_qs.filter(roams_type_id=path_type_id)
+        .order_by()
+        .values("roams_id")
+    )
+
+    defaults = {
+        (zone_type_id, zone_id): _as_percent_int(chance)
+        for zone_id, chance in Zone.objects.filter(
+            pk__in=zone_target_ids,
+            default_roam_chance__isnull=False,
+        ).values_list("id", "default_roam_chance")
+    }
+    defaults.update({
+        (path_type_id, path_id): _as_percent_int(chance)
+        for path_id, chance in Path.objects.filter(
+            pk__in=path_target_ids,
+            zone__default_roam_chance__isnull=False,
+        ).values_list("id", "zone__default_roam_chance")
+    })
+    return defaults
+
+
+def _mob_roam_target_default_chance(
+    mob: Mob,
+    target_default_chances: dict[tuple[int, int], int],
+) -> int | None:
+    if not mob.roams_type_id or not mob.roams_id:
+        return None
+    return target_default_chances.get((mob.roams_type_id, mob.roams_id))
 
 
 def _room_with_roam_exits(room_id: int) -> Room | None:
@@ -584,10 +651,18 @@ def _try_roam_mob(
     mob: Mob,
     *,
     world_default_chance: int,
+    target_default_chances: dict[tuple[int, int], int],
     event_group: str | None = None,
     aggro_mob_ids_by_world_room: dict[tuple[int, int], set[int]] | None = None,
 ) -> bool:
-    chance = _mob_roam_chance(mob, world_default_chance=world_default_chance)
+    chance = _mob_roam_chance(
+        mob,
+        world_default_chance=world_default_chance,
+        target_default_chance=_mob_roam_target_default_chance(
+            mob,
+            target_default_chances,
+        ),
+    )
     if chance <= 0 or random.randint(1, 100) > chance:
         return False
 
@@ -696,6 +771,7 @@ def _try_roam_cohort(
     mob: Mob,
     *,
     world_default_chance: int,
+    target_default_chances: dict[tuple[int, int], int],
     active_combat_mob_ids: set[int],
     event_group: str | None = None,
     aggro_mob_ids_by_world_room: dict[tuple[int, int], set[int]] | None = None,
@@ -705,6 +781,7 @@ def _try_roam_cohort(
         return 1 if _try_roam_mob(
             mob,
             world_default_chance=world_default_chance,
+            target_default_chances=target_default_chances,
             event_group=event_group,
             aggro_mob_ids_by_world_room=aggro_mob_ids_by_world_room,
         ) else 0
@@ -718,7 +795,11 @@ def _try_roam_cohort(
                 is_pending_deletion=False,
                 room_id__isnull=False,
             )
-            .select_related("world", "definition", "spawn_placement")
+            .select_related(
+                "world",
+                "definition",
+                "spawn_placement__run__plan",
+            )
             .order_by("id")
         )
         leader = _cohort_roam_leader(members)
@@ -727,7 +808,14 @@ def _try_roam_cohort(
         if any(member.id in active_combat_mob_ids for member in members):
             return 0
 
-        chance = _mob_roam_chance(leader, world_default_chance=world_default_chance)
+        chance = _mob_roam_chance(
+            leader,
+            world_default_chance=world_default_chance,
+            target_default_chance=_mob_roam_target_default_chance(
+                leader,
+                target_default_chances,
+            ),
+        )
         if chance <= 0 or random.randint(1, 100) > chance:
             return 0
 
@@ -859,15 +947,20 @@ def run_mob_roaming(*, active_combat_mob_ids: set[int] | None = None) -> int:
         for world in running_worlds
     }
     roamed_count = 0
+    roaming_mobs_qs = Mob.objects.filter(
+        is_pending_deletion=False,
+        room_id__isnull=False,
+        roams_type__isnull=False,
+        roams_id__isnull=False,
+        world_id__in=worlds_by_id.keys(),
+    )
+    target_default_chances = _roam_target_default_chances(roaming_mobs_qs)
     mobs_qs = (
-        Mob.objects.filter(
-            is_pending_deletion=False,
-            room_id__isnull=False,
-            roams_type__isnull=False,
-            roams_id__isnull=False,
-            world_id__in=worlds_by_id.keys(),
+        roaming_mobs_qs.select_related(
+            "world",
+            "definition",
+            "spawn_placement__run__plan",
         )
-        .select_related("world", "definition", "spawn_placement")
         .order_by("id")
     )
     heartbeat_event_group = f"heartbeat.mob_roaming.{uuid.uuid4().hex}"
@@ -885,6 +978,7 @@ def run_mob_roaming(*, active_combat_mob_ids: set[int] | None = None) -> int:
             roamed_count += _try_roam_cohort(
                 mob,
                 world_default_chance=world_default_chance,
+                target_default_chances=target_default_chances,
                 active_combat_mob_ids=active_combat_mob_ids,
                 event_group=heartbeat_event_group,
                 aggro_mob_ids_by_world_room=aggro_mob_ids_by_world_room,
@@ -892,6 +986,7 @@ def run_mob_roaming(*, active_combat_mob_ids: set[int] | None = None) -> int:
         elif _try_roam_mob(
             mob,
             world_default_chance=world_default_chance,
+            target_default_chances=target_default_chances,
             event_group=heartbeat_event_group,
             aggro_mob_ids_by_world_room=aggro_mob_ids_by_world_room,
         ):

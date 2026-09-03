@@ -1295,6 +1295,7 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
             'center',
             'zone_data',
             'initial_state',
+            'default_roam_chance',
             'respawn',
             'door_reset',
             'pvp_zone',
@@ -1316,7 +1317,7 @@ class ZoneBuilderSerializer(serializers.ModelSerializer):
         return zone.rooms.count()
 
     def update(self, instance, validated_data):
-        mutable_fields = {"name", "pvp_zone"}
+        mutable_fields = {"name", "pvp_zone", "default_roam_chance"}
         changes = {
             field_name: value
             for field_name, value in validated_data.items()

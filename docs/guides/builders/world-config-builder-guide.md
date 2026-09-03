@@ -217,7 +217,7 @@ receive none of these class-specific entries.
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `combat_resolution_interval` | number | `0` | `0` resolves combat immediately; `> 0` auto-advances rounds on that cadence; `-1` requires explicit advancement. |
-| `default_roam_chance` | integer 0-100 | `10` | Percent chance per heartbeat that mobs with zone/path roaming targets move. |
+| `default_roam_chance` | integer 0-100 | `10` | Final fallback percent per heartbeat for mobs with zone/path roaming targets. |
 | `is_narrative` | boolean | `false` | Narrative worlds disable combat through the manifest apply path. |
 | `auto_equip` | boolean | `true` | New equipment is equipped automatically when possible. |
 | `players_can_set_title` | boolean | `true` | Allows players to manage their title. |
@@ -228,10 +228,20 @@ receive none of these class-specific entries.
 `kind: world` manifests. Use `is_narrative: true` for the current manifest path
 when a world should be non-combat.
 
-For cohort patrols, `default_roam_chance` is rolled once for the cohort leader
-on each heartbeat. If any live cohort member is in active combat, the cohort
-does not roam on that heartbeat; otherwise, present followers move with the
-leader when the destination is valid for their roaming target.
+Roaming resolves the first applicable value in this order: a positive
+mob-definition `roam_chance`, a non-null spawn-plan `default_roam_chance`, a
+non-null roaming-target-zone `default_roam_chance`, then this base-world
+default. The mob-definition field retains its legacy `0 = inherit` behavior.
+At the plan level, omission or `null` means inherit. At the zone level, a
+stored `null` means inherit. At either level, `0` explicitly disables ambient
+roaming. Because zone applies are partial updates, omitting the field on an
+existing zone preserves its current value; use an explicit `null` to clear that
+zone override.
+
+For cohort patrols, the leader's resolved roam chance is rolled once on each
+heartbeat. If any live cohort member is in active combat, the cohort does not
+roam on that heartbeat; otherwise, present followers move with the leader when
+the destination is valid for their roaming target.
 
 For combat formulas and encounter pacing, see
 [combat-formula-builder-guide.md](combat-formula-builder-guide.md).
@@ -397,6 +407,11 @@ Core systems such as `stats`, `combat`, `equipment`, `ability_progression`,
 `leveling_curve`, `starting_level`, `max_level`, `combat_resolution_interval`,
 `default_roam_chance`, and `announce_duel_results` are inherited from the base
 world.
+
+An instance template still owns its zones and spawn plans. Those manifests may
+set local `default_roam_chance` values that take precedence over the inherited
+world fallback, while a positive shared mob-definition `roam_chance` remains
+the highest-precedence value.
 
 In a family bundle, every instance `kind: world` document has
 `metadata.world_ref: instance.<instance_slug>`. Its `starting_room`,

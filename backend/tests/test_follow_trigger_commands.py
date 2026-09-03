@@ -319,7 +319,7 @@ class TestFollowTriggerCommands(WorldTestCase):
                         {
                             "type": "command",
                             "subject": "trigger_actor",
-                            "command": "north",
+                            "command": "kill nobody",
                         },
                     ],
                 },

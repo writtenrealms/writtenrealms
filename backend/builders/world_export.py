@@ -564,6 +564,21 @@ def _normalize_zone_policy(
     return {"mode": ZONE_POLICY_MODE_FIXED, "seconds": seconds}
 
 
+def _normalize_optional_roam_chance(
+    value: Any,
+    *,
+    field_name: str,
+) -> int | None:
+    if value is None:
+        return None
+    chance = builder_manifests._coerce_int(value, field_name)
+    if not 0 <= chance <= 100:
+        raise serializers.ValidationError(
+            f"{field_name} must be between 0 and 100."
+        )
+    return chance
+
+
 def _serialize_zone_manifest(zone: Zone) -> dict[str, Any]:
     return {
         "apiVersion": CANONICAL_MANIFEST_API_VERSION,
@@ -575,6 +590,7 @@ def _serialize_zone_manifest(zone: Zone) -> dict[str, Any]:
         "spec": {
             "description": zone.description or "",
             "notes": zone.notes or "",
+            "default_roam_chance": zone.default_roam_chance,
             "initial_state": get_initial_state_snapshot(STATE_SCOPE_ZONE, zone),
             "respawn": _serialize_zone_policy(
                 mode=zone.respawn_mode,
@@ -631,6 +647,7 @@ def serialize_zone_payload(
         "name": zone.name,
         "description": zone.description or "",
         "notes": zone.notes or "",
+        "default_roam_chance": zone.default_roam_chance,
         "respawn": _serialize_zone_policy(
             mode=zone.respawn_mode,
             seconds=zone.respawn_seconds,
@@ -1148,6 +1165,7 @@ def _serialize_spawn_plan_manifest(
         "zone": _zone_ref(spawn_plan.zone),
         "order": int(spawn_plan.order),
         "is_active": bool(spawn_plan.is_active),
+        "default_roam_chance": spawn_plan.default_roam_chance,
         "respawn": copy.deepcopy(spawn_plan.respawn_policy),
         "entries": [
             _serialize_spawn_entry(
@@ -1206,6 +1224,7 @@ def serialize_spawn_plan_payload(
         "zone_ref": zone_ref,
         "order": int(spawn_plan.order),
         "is_active": bool(spawn_plan.is_active),
+        "default_roam_chance": spawn_plan.default_roam_chance,
         "num_entries": entry_count,
         "entry_count": entry_count,
         "entries": entry_count,
@@ -3604,6 +3623,8 @@ def _find_placeholder_zone(world: World) -> Zone | None:
         return None
     if zone.pvp_zone:
         return None
+    if zone.default_roam_chance is not None:
+        return None
     if (
         zone.respawn_mode != ZONE_POLICY_MODE_FIXED
         or zone.respawn_seconds != 300
@@ -4494,6 +4515,7 @@ def apply_zone_manifest(
             "initial_state",
             "state",
             "zone_data",
+            "default_roam_chance",
             "respawn",
             "door_reset",
             "pvp_zone",
@@ -4525,6 +4547,14 @@ def apply_zone_manifest(
             field_name="spec.door_reset",
         )
         if "door_reset" in spec
+        else None
+    )
+    default_roam_chance = (
+        _normalize_optional_roam_chance(
+            spec.get("default_roam_chance"),
+            field_name="spec.default_roam_chance",
+        )
+        if "default_roam_chance" in spec
         else None
     )
     if "pvp_zone" in spec and not isinstance(spec["pvp_zone"], bool):
@@ -4597,6 +4627,8 @@ def apply_zone_manifest(
             zone.description = str(spec.get("description", zone.description or ""))
         if "notes" in spec or created:
             zone.notes = str(spec.get("notes", zone.notes or ""))
+        if "default_roam_chance" in spec or created:
+            zone.default_roam_chance = default_roam_chance
         if respawn_policy is not None:
             zone.respawn_mode = respawn_policy["mode"]
             zone.respawn_seconds = respawn_policy["seconds"]
@@ -5739,6 +5771,10 @@ def apply_spawn_plan_manifest(
         room_ref_cache=room_ref_cache,
     )
     respawn_policy = _normalize_spawn_respawn_policy(spec.get("respawn"))
+    default_roam_chance = _normalize_optional_roam_chance(
+        spec.get("default_roam_chance"),
+        field_name="spec.default_roam_chance",
+    )
 
     entries = spec.get("entries") or []
     if not isinstance(entries, list):
@@ -5843,6 +5879,7 @@ def apply_spawn_plan_manifest(
         spawn_plan.notes = str(spec.get("notes") or "")
         spawn_plan.order = int(spec.get("order", spawn_plan.order or 0) or 0)
         spawn_plan.is_active = bool(spec.get("is_active", True))
+        spawn_plan.default_roam_chance = default_roam_chance
         spawn_plan.respawn_policy = respawn_policy
         spawn_plan.randomization = copy.deepcopy(spec.get("randomization") or {})
         spawn_plan.conditions = conditions

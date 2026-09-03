@@ -5,7 +5,7 @@ from croniter import croniter
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import RegexValidator
+from django.core.validators import MaxValueValidator, RegexValidator
 from django.contrib.contenttypes.fields import (
     GenericForeignKey,
     GenericRelation)
@@ -691,6 +691,9 @@ class SpawnPlan(AdventBaseModel):
     notes = models.TextField(**optional)
     order = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    default_roam_chance = models.PositiveIntegerField(
+        validators=[MaxValueValidator(100)],
+        **optional)
     respawn_policy = models.JSONField(default=dict, blank=True)
     randomization = models.JSONField(default=dict, blank=True)
     conditions = models.JSONField(default=dict, blank=True)

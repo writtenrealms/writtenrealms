@@ -50,6 +50,7 @@ spec:
   notes: Builder-only encounter notes.
   initial_state:
     curfew_active: false
+  default_roam_chance: 15
   respawn:
     mode: fixed
     seconds: 300
@@ -66,6 +67,7 @@ spec:
 | `spec.description` | Zone description. |
 | `spec.notes` | Builder-only notes. |
 | `spec.initial_state` | State defaults copied into the zone for each new runtime world. |
+| `spec.default_roam_chance` | Optional fallback percent per heartbeat for mobs whose roaming target is this zone or a path owned by it. |
 | `spec.respawn` | Default replacement policy for `inherit_zone` spawn plans that omit their own `seconds`. |
 | `spec.door_reset` | Independent automatic door-reset policy. |
 | `spec.pvp_zone` | Whether the zone permits PvP when the world uses zone-gated PvP. |
@@ -77,6 +79,16 @@ both to `fixed` with `seconds: 300`. `respawn` is only the default for spawn
 plans that explicitly inherit it without a plan-level `seconds` override.
 `door_reset` affects only materialized runtime doorway state; `none` means
 doors do not reset automatically.
+
+`default_roam_chance` accepts `0` through `100`. A new zone with the field
+omitted inherits the base world's default. On an existing zone, omission
+preserves the current value, so set it explicitly to `null` to clear an override
+and resume inheritance. Set it to `0` to explicitly disable ambient roaming for
+mobs that reach this fallback. A positive mob-definition
+`roam_chance` and a non-null spawn-plan `default_roam_chance` take precedence.
+For a `zone@...` spawn target, this setting comes from the targeted zone, not
+necessarily the zone that owns the spawn plan. For a `path@...` target, it
+comes from the zone that owns the targeted path.
 
 Changing `spec.center` never moves a room between zones. Assign the room to
 the zone first, then select it as the center.
@@ -264,8 +276,10 @@ installation-local world database id and `5` is the zone's world-relative id.
 The zone's Rooms, Paths, Spawns, Config, and Utils routes retain that same
 relative-id segment. Staff can use `/build/worlds/23/zones/db/38` to look up
 database zone 38; the builder immediately replaces that alias with the
-canonical relative-id route. The zone screen exposes the database id only to
-staff in its collapsed technical details.
+canonical relative-id route. Every builder who can view the zone can see its
+installation-local database id in the zone screen's collapsed Technical
+details, matching the room screen; the database-id lookup route remains
+staff-only.
 
 As with rooms, `/zones/5` never falls back to database zone 5. Keeping the
 relative and database namespaces explicit prevents a valid number in one

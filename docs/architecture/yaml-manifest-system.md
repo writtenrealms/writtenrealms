@@ -176,6 +176,11 @@ Current required mappings:
 - WR1 `Loader` / `Rule` rows export as `kind: spawnplan` entries. WR2 no longer
   imports or stores loader/rule rows, and runtime item/mob rows no longer keep
   `rule_id` or source-template FKs.
+- Converted zones and spawn plans omit `spec.default_roam_chance` unless the
+  WR1 source has an explicit authored value with equivalent scope. Do not emit
+  `0` merely because the source lacks a value: on these WR2 manifests `null`
+  means inherit while `0` explicitly disables ambient roaming. Existing WR1
+  mob `roam_chance: 0` retains its separate mob-definition meaning of inherit.
 - Each converted WR1 rule must emit exactly one scalar spawn target:
   `room@<relative_id>`, `zone@<relative_id>`, `path@<relative_id>`, or the
   plan-local `entry.<slug>`. Resolve WR1 numeric and coordinate destinations in
@@ -682,7 +687,7 @@ Builder-facing mob trait authoring guidance lives in:
 
 ## Zone Manifest Shape
 
-Zones own independent population-default and door-reset policies:
+Zones own independent population, roaming, and door-reset defaults:
 
 ```yaml
 apiVersion: writtenrealms.com/v1alpha3
@@ -695,6 +700,7 @@ spec:
   notes: Builder-only notes about the harbor encounter flow.
   initial_state:
     curfew_active: false
+  default_roam_chance: 15
   respawn:
     mode: fixed
     seconds: 300
@@ -715,6 +721,12 @@ only spawn plans whose own `spec.respawn.mode` is `inherit_zone` and which omit
 plan-level `seconds`. An `inherit_zone` plan with explicit `seconds` uses that
 interval as an override, while a plan with `fixed` or `none` keeps its own
 policy. The zone default does not itself create, despawn, or reset population.
+
+`spec.default_roam_chance` is nullable and accepts integers from `0` through
+`100`. A new zone with the field omitted or set to `null` inherits the
+base-world fallback. Because zone applies are partial updates, omission on an
+existing zone preserves its current value; an explicit `null` clears the value
+and resumes inheritance. `0` is an explicit disable, not inheritance.
 
 `spec.door_reset` independently controls when materialized runtime doorways in
 the zone return to the `default_state` authored by their room manifests.
@@ -739,6 +751,52 @@ its final zone assignment before commit.
 `/repop` remains an explicit missing-placement reconciliation command, and
 `/repop --doors` additionally performs an explicit door reset. Neither form
 consumes or advances the zone's automatic door-reset schedule.
+
+## Ambient Roam Default Resolution
+
+Spawn plans may provide their own nullable default at `spec.default_roam_chance`:
+
+```yaml
+kind: spawnplan
+metadata:
+  slug: harbor-patrols
+  name: Harbor Patrols
+spec:
+  zone: zone@1
+  default_roam_chance: 25
+  entries:
+    - slug: watch
+      source: mobdefinition.harbor-watch
+      target: path@4
+      count: 2
+```
+
+Spawn-plan apply replaces the plan contract, so omission and explicit `null`
+both mean inherit. `0` explicitly disables ambient roaming for mobs that reach
+that level. Values from `1` through `100` are the percent chance per heartbeat.
+
+For each zone- or path-targeted mob, WR2 resolves the first applicable value:
+
+1. Positive `MobDefinition.roam_chance`. The existing mob field retains its
+   backward-compatible `0 = inherit` behavior.
+2. Non-null `SpawnPlan.default_roam_chance`, including `0`.
+3. Non-null `Zone.default_roam_chance` from the roaming target zone, including
+   `0`.
+4. The inherited base `WorldConfig.default_roam_chance`.
+
+The target-zone lookup is based on the mob's roaming boundary, not necessarily
+the spawn plan's owning `spec.zone`. A `zone@...` target uses that target zone.
+A `path@...` target uses the zone that owns the targeted path. A cohort follower
+that targets `entry.<leader_slug>` inherits the leader's roaming target, and
+the cohort rolls once with the leader's resolved chance. Fixed `room@...`
+targets have no autonomous roaming target and remain static regardless of these
+defaults.
+
+Instance world manifests continue to inherit the base world's core
+`default_roam_chance`, but instance templates own their zones and spawn plans.
+An instance-local plan or target-zone default therefore overrides the inherited
+world fallback. Mob definitions remain shared with the base world, so a
+positive definition-level `roam_chance` remains the highest-precedence value.
 
 ## Initial State Manifest Shape
 
@@ -2246,11 +2304,14 @@ Queued abilities and non-basic combat actions use this encounter scheduler; see
 [combat-abilities-model.md](combat-abilities-model.md) for their round and
 initiative contract.
 
-`default_roam_chance` is the percent chance that a mob with a zone or path
-roaming target moves on each WR2 heartbeat. The default is `10`, matching the
-old WR1 `ROAM_CHANCE`. Set it to `0` to disable default ambient roaming.
-Mobs loaded into a fixed room have no roaming target and stay static unless a
-future explicit behavior system moves them.
+World `default_roam_chance` is the final fallback percent chance that a mob with
+a zone or path roaming target moves on each WR2 heartbeat. The default is `10`,
+matching the old WR1 `ROAM_CHANCE`; `0` disables roaming for mobs that reach
+this fallback. A positive mob-definition value, then non-null spawn-plan and
+target-zone defaults, take precedence as described in
+[Ambient Roam Default Resolution](#ambient-roam-default-resolution). Mobs
+loaded into a fixed room have no roaming target and stay static unless a future
+explicit behavior system moves them.
 
 `starting_level`, `max_level`, and `leveling_curve` control player progression.
 `leveling_curve` is a cumulative XP threshold list where the first entry is
@@ -2516,6 +2577,11 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
   authored initial state; they never address a live runtime row. New manifests
   must emit `spec.initial_state`. Runtime world/zone/room state is not accepted
   as manifest input.
+- Zone and spawn-plan `default_roam_chance` values are nullable integers from
+  `0` through `100`. `null` means inherit and `0` means explicitly disable.
+  Omitting the field on an existing zone preserves it because zone updates are
+  partial; explicit `null` clears the zone override. Spawn-plan omission and
+  `null` both resolve through the roaming target zone to the base world.
 - Room door entries remain directional faces in `spec.doors`. A face's
   destination must match that room's exit, directions cannot repeat within one
   room, and a door cannot connect a room to itself or cross authored worlds.
