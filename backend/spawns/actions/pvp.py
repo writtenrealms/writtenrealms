@@ -20,6 +20,7 @@ from spawns.ability_prepare_state import (
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.effects import (
     ActiveEffect,
+    active_combatant_effects,
     advance_character_effect_durations,
     clear_actor_effect_cache,
     next_character_effect_tick_ts,
@@ -2023,6 +2024,11 @@ def resolve_pvp_encounter_step(
                     )
 
         combat._advance_non_ticking_effect_durations(context.encounter)
+        effect_combatants = [
+            context.players[participant.player_id]
+            for participant in active_participants
+        ]
+        actor_state_changed: dict[int, bool] = {}
         for participant in active_participants:
             actor = context.players[participant.player_id]
             cooldown_exclude = cooldown_excludes.get(actor.id)
@@ -2039,9 +2045,26 @@ def resolve_pvp_encounter_step(
                 actor.save(
                     update_fields=["ability_cooldowns", "modified_ts"]
                 )
-            if cooldown_exclude or cooldowns_changed or effects_changed:
+            actor_state_changed[actor.id] = bool(
+                cooldown_exclude or cooldowns_changed or effects_changed
+            )
+
+        effects_by_key = active_combatant_effects(effect_combatants)
+        for participant in active_participants:
+            actor = context.players[participant.player_id]
+            if actor_state_changed[actor.id]:
                 events.append(combat._character_effect_state_event(actor))
-            events.append(combat._combat_effect_state_event(actor))
+            events.append(
+                combat._combat_effect_state_event(
+                    actor,
+                    *(
+                        combatant
+                        for combatant in effect_combatants
+                        if combatant.id != actor.id
+                    ),
+                    effects_by_key=effects_by_key,
+                )
+            )
             events.append(ability_prepare_state_event(actor))
 
         context.encounter.pending_player_ability = {}

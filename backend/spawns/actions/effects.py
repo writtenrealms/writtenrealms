@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from copy import deepcopy
 from datetime import timedelta
 from typing import Any
@@ -107,6 +108,56 @@ def active_combat_effects(player: Player) -> list[dict[str, Any]]:
         {**active_effect_payload(effect), "encounter_id": effect.encounter_id}
         for effect in rows
     ]
+
+
+def active_combatant_effects(
+    actors: Iterable[Player | Mob],
+) -> dict[str, list[dict[str, Any]]]:
+    """Return every currently relevant effect for several combatants at once."""
+    actors_by_key = {
+        actor.key: actor
+        for actor in actors
+        if getattr(actor, "id", None) and getattr(actor, "key", None)
+    }
+    payloads_by_key: dict[str, list[dict[str, Any]]] = {
+        key: [] for key in actors_by_key
+    }
+    if not actors_by_key:
+        return payloads_by_key
+
+    player_ids = [
+        actor.id for actor in actors_by_key.values() if isinstance(actor, Player)
+    ]
+    mob_ids = [
+        actor.id for actor in actors_by_key.values() if isinstance(actor, Mob)
+    ]
+    target_filter = Q()
+    if player_ids:
+        target_filter |= Q(target_player_id__in=player_ids)
+    if mob_ids:
+        target_filter |= Q(target_mob_id__in=mob_ids)
+
+    effects = (
+        ActiveEffect.objects.filter(target_filter, remaining_rounds__gt=0)
+        .filter(
+            Q(scope=ActiveEffect.SCOPE_CHARACTER)
+            | Q(
+                scope=ActiveEffect.SCOPE_ENCOUNTER,
+                encounter__status=CombatEncounter.STATUS_ACTIVE,
+            )
+        )
+        .select_related("source_player", "source_mob", "target_player", "target_mob")
+        .order_by("created_ts", "id")
+    )
+    for effect in effects:
+        target = effect.target_player or effect.target_mob
+        if not target or target.key not in payloads_by_key:
+            continue
+        payload = active_effect_payload(effect)
+        if effect.scope == ActiveEffect.SCOPE_ENCOUNTER:
+            payload["encounter_id"] = effect.encounter_id
+        payloads_by_key[target.key].append(payload)
+    return deepcopy(payloads_by_key)
 
 
 def preventing_action_effect(

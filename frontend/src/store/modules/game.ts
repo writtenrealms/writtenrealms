@@ -671,6 +671,15 @@ const receiveMessage = async ({
   }
 
   if (
+    message_data.type === "player.combat_effects.update" &&
+    Array.isArray(message_data.data?.combatants)
+  ) {
+    for (const combatant of message_data.data.combatants) {
+      commit("combat_target_effects_set", combatant);
+    }
+  }
+
+  if (
     message_data.type === "cmd.ability.success" &&
     Array.isArray(message_data.data?.prepared_abilities)
   ) {
@@ -1699,6 +1708,20 @@ const mutations = {
     };
   },
 
+  combat_target_effects_set: (state, payload) => {
+    if (
+      !state.player_target ||
+      !payload?.target?.key ||
+      state.player_target.key !== payload.target.key
+    ) return;
+    state.player_target = {
+      ...state.player_target,
+      active_effects: Array.isArray(payload.active_effects)
+        ? payload.active_effects
+        : [],
+    };
+  },
+
   player_remove_from_inventory: (state, items) => {
     const inv = _.differenceWith(state.player.inventory, items, (a, b) => {
       return a.key == b.key;
@@ -2079,7 +2102,13 @@ const mutations = {
 
   player_target_set: (state, target) => {
     // if (target.key != state.player.key) {
-    state.player_target = target;
+    const existingEffects = state.player_target?.key === target?.key
+      && Array.isArray(state.player_target?.active_effects)
+      ? state.player_target.active_effects
+      : null;
+    state.player_target = target && existingEffects && !Array.isArray(target.active_effects)
+      ? { ...target, active_effects: existingEffects }
+      : target;
     // }
   },
 

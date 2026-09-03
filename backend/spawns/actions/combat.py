@@ -45,7 +45,7 @@ from core.economy import economy_world, money_payload
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.effects import (
     active_effect_payload,
-    active_combat_effects,
+    active_combatant_effects,
     advance_character_effect_durations,
     build_character_effect,
     clear_actor_effect_cache,
@@ -3799,13 +3799,34 @@ def _stun_event(
     return events
 
 
-def _combat_effect_state_event(player: Player) -> GameEvent:
+def _combat_effect_state_event(
+    player: Player,
+    *combatants: Player | Mob,
+    effects_by_key: dict[str, list[dict]] | None = None,
+) -> GameEvent:
+    ordered_combatants = list(
+        {actor.key: actor for actor in (player, *combatants)}.values()
+    )
+    effect_states = effects_by_key or active_combatant_effects(ordered_combatants)
+    player_effects = effect_states.get(player.key, [])
     return GameEvent(
         type="player.combat_effects.update",
         recipients=[player.key],
         data={
             "target": {"key": player.key},
-            "active_effects": active_combat_effects(player),
+            # Preserve the original player-only payload for older clients.
+            "active_effects": [
+                effect
+                for effect in player_effects
+                if effect.get("scope") == ActiveEffect.SCOPE_ENCOUNTER
+            ],
+            "combatants": [
+                {
+                    "target": {"key": actor.key},
+                    "active_effects": effect_states.get(actor.key, []),
+                }
+                for actor in ordered_combatants
+            ],
         },
     )
 
@@ -6307,7 +6328,7 @@ def resolve_combat_encounter_step(
 
         result = replace(
             result,
-            events=[*result.events, _combat_effect_state_event(player)],
+            events=[*result.events, _combat_effect_state_event(player, target_mob)],
         )
         result = _with_ability_prepare_transition(
             result,

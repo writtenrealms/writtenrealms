@@ -24,7 +24,22 @@
           </div>
 
 
-            <div class="target-effects">
+            <div v-if="target_round_effects.length" class="target-round-effects">
+              <div
+                v-for="effect in target_round_effects"
+                :key="effect.key"
+                class="target-round-effect"
+                :class="[`effect-${effect.category}`]"
+                :title="effect.title"
+                :aria-label="effect.title"
+                :style="{ '--effect-fill': effect.fillWidth }"
+              >
+                <span class="target-round-effect-fill"></span>
+                <span class="target-round-effect-label">{{ effect.label }}</span>
+              </div>
+            </div>
+
+            <div v-if="target_effects.length" class="target-effects">
               <ProgressBar
                 v-for="effect in target_effects"
                 :key="effect.expires"
@@ -56,6 +71,7 @@
 import { computed, ref, watch, onUnmounted } from "vue";
 import { useStore } from "vuex";
 import { capfirst, resourcePercent } from "@/core/utils";
+import { presentRoundEffects } from "@/core/roundEffects";
 import ProgressBar from "@/components/game/ProgressBar.vue";
 
 const store = useStore();
@@ -119,6 +135,15 @@ const healthPerc = computed(() => {
   return resourcePercent(player_target.value?.health, player_target.value?.health_max);
 });
 
+const target_round_effects = computed(() => {
+  if (!player_target.value || Number(player_target.value.health || 0) <= 0) {
+    return [];
+  }
+  return presentRoundEffects(player_target.value.active_effects, {
+    useStatusLabels: true,
+  });
+});
+
 const target_effects = computed(() => {
   // For testing
   // return [
@@ -159,7 +184,8 @@ const target_effects = computed(() => {
   //     value: 0
   //   }
   // ];
-  return store.state.game.effects[player_target.value.key];
+  if (!player_target.value?.key) return [];
+  return store.state.game.effects[player_target.value.key] || [];
 });
 </script>
 
@@ -222,6 +248,56 @@ const target_effects = computed(() => {
         .progress-bar {
           margin: 1px 2px;
         }
+      }
+
+      .target-round-effects {
+        display: flex;
+        flex-grow: 1;
+        flex-direction: row-reverse;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-left: 8px;
+      }
+
+      .target-round-effect {
+        @include font-text-regular;
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 20px;
+        padding: 1px 8px;
+        border: 1px solid $color-red;
+        border-radius: 8px;
+        background: $color-red-70;
+        color: $color-text;
+        font-size: 12px;
+        line-height: 16px;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+
+      .target-round-effect.effect-buff {
+        border-color: $color-green;
+        background: $color-green-dark;
+      }
+
+      .target-round-effect-fill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: var(--effect-fill);
+        background: $color-red;
+      }
+
+      .target-round-effect.effect-buff .target-round-effect-fill {
+        background: $color-green;
+      }
+
+      .target-round-effect-label {
+        position: relative;
+        z-index: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
     }
 

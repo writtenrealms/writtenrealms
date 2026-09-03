@@ -69,6 +69,9 @@ Your active round-based effects appear beside your current posture in the
 status panel. This includes both character effects, such as buffs that can span
 encounters, and encounter-scoped effects such as stun. The display updates as
 rounds advance and removes an effect when its remaining duration is consumed.
+The Combat panel also marks your current target with its active round-based
+effects. Statuses use combat-facing labels such as **Stunned** and update or
+disappear as each round is resolved.
 
 ## Casts And Interrupts
 

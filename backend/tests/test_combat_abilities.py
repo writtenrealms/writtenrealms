@@ -2533,6 +2533,83 @@ class TestCombatAbilities(WorldTestCase):
         effect_messages = self._messages_by_type(messages, "notification.combat.effect")
         self.assertTrue(any("stunned" in msg["text"] for msg in effect_messages))
 
+    def test_combat_effect_update_includes_stunned_mob_target(self):
+        self._ability(
+            slug="stun-bash",
+            name="Stun Bash",
+            verbs=["bash"],
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "stun",
+                    "duration": {"rounds": 2},
+                    "apply": "on_resolve",
+                    "text": {"label": "Stun Bash"},
+                }
+            ],
+        )
+        self.player.known_abilities = ["stun-bash"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(attack_power=9, fights_back=True)
+
+        with patch("spawns.actions.combat.random.randint", side_effect=[20, 10]):
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "bash rat")
+
+        updates = self._messages_by_type(
+            messages,
+            "player.combat_effects.update",
+        )
+        mob_state = next(
+            combatant
+            for combatant in updates[-1]["data"]["combatants"]
+            if combatant["target"]["key"] == mob.key
+        )
+
+        self.assertEqual(len(mob_state["active_effects"]), 1)
+        self.assertEqual(mob_state["active_effects"][0]["effect"], "stun")
+        self.assertEqual(mob_state["active_effects"][0]["remaining_rounds"], 1)
+        self.assertEqual(mob_state["active_effects"][0]["duration_rounds"], 2)
+
+    def test_combatant_effect_snapshot_uses_one_query_for_both_sides(self):
+        from spawns.actions.effects import active_combatant_effects
+
+        mob = self._mob()
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+        )
+        create_active_effect(
+            target=self.player,
+            source=mob,
+            encounter=encounter,
+            scope="encounter",
+            payload={
+                "effect": "dot",
+                "label": "Wound",
+                "remaining_rounds": 2,
+            },
+        )
+        create_active_effect(
+            target=mob,
+            source=self.player,
+            encounter=encounter,
+            scope="encounter",
+            payload={
+                "effect": "stun",
+                "label": "Stun Bash",
+                "remaining_rounds": 1,
+            },
+        )
+
+        with self.assertNumQueries(1):
+            effects_by_key = active_combatant_effects([self.player, mob])
+
+        self.assertEqual(effects_by_key[self.player.key][0]["effect"], "dot")
+        self.assertEqual(effects_by_key[mob.key][0]["effect"], "stun")
+
     def test_dot_application_reports_actor_target_and_room_text(self):
         self._ability(
             slug="wound",
