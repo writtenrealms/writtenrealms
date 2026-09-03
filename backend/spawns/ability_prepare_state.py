@@ -15,11 +15,13 @@ def active_prepared_ability_slugs(player: Player) -> list[str]:
     pending_abilities = (
         CombatEncounter.objects.filter(
             player=player,
+            world_id=player.world_id,
             room_id=player.room_id,
             status=CombatEncounter.STATUS_ACTIVE,
             mob_id__isnull=False,
             mob__is_pending_deletion=False,
             mob__health__gt=0,
+            mob__world_id=player.world_id,
             mob__room_id=player.room_id,
         )
         .exclude(pending_player_ability={})
@@ -30,6 +32,7 @@ def active_prepared_ability_slugs(player: Player) -> list[str]:
         CombatParticipant.objects.filter(
             player=player,
             is_active=True,
+            encounter__world_id=player.world_id,
             encounter__room_id=player.room_id,
             encounter__status=CombatEncounter.STATUS_ACTIVE,
             encounter__duel_match_id__isnull=False,
@@ -70,11 +73,13 @@ def ability_prepare_state_events_for_players(
     pending_abilities = (
         CombatEncounter.objects.filter(
             player_id__in=normalized_ids,
+            world_id=F("player__world_id"),
             room_id=F("player__room_id"),
             status=CombatEncounter.STATUS_ACTIVE,
             mob_id__isnull=False,
             mob__is_pending_deletion=False,
             mob__health__gt=0,
+            mob__world_id=F("player__world_id"),
             mob__room_id=F("player__room_id"),
         )
         .exclude(pending_player_ability={})
@@ -95,6 +100,7 @@ def ability_prepare_state_events_for_players(
         CombatParticipant.objects.filter(
             player_id__in=normalized_ids,
             is_active=True,
+            encounter__world_id=F("player__world_id"),
             encounter__room_id=F("player__room_id"),
             encounter__status=CombatEncounter.STATUS_ACTIVE,
             encounter__duel_match_id__isnull=False,

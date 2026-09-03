@@ -1,10 +1,67 @@
 import uuid
 from unittest.mock import patch
 
+from django.db import OperationalError
 from django.test import SimpleTestCase
 
 from spawns.handlers import HandlerNotFoundError, PlayerNotFoundError
-from spawns.tasks import handle_game_command
+from spawns.tasks import (
+    handle_game_command,
+    resolve_combat_encounter,
+    run_due_combat_encounters,
+)
+
+
+class _DriverDatabaseError(Exception):
+    def __init__(self, sqlstate):
+        super().__init__(sqlstate)
+        self.sqlstate = sqlstate
+
+
+class TestResolveCombatEncounterFailures(SimpleTestCase):
+    def _operational_error(self, sqlstate):
+        error = OperationalError("database conflict")
+        error.__cause__ = _DriverDatabaseError(sqlstate)
+        return error
+
+    def test_deadlock_is_retried_with_bounded_delay(self):
+        error = self._operational_error("40P01")
+        with patch(
+            "spawns.actions.combat.resolve_combat_encounter_step",
+            side_effect=error,
+        ), patch.object(
+            resolve_combat_encounter,
+            "retry",
+            side_effect=RuntimeError("retry requested"),
+        ) as retry:
+            with self.assertLogs("spawns.tasks", level="WARNING"):
+                with self.assertRaisesRegex(RuntimeError, "retry requested"):
+                    resolve_combat_encounter.run(42)
+
+        retry.assert_called_once()
+        self.assertIs(retry.call_args.kwargs["exc"], error)
+        self.assertGreater(retry.call_args.kwargs["countdown"], 0)
+        self.assertLessEqual(retry.call_args.kwargs["countdown"], 4)
+
+    def test_unrelated_operational_error_is_not_retried(self):
+        error = self._operational_error("08006")
+        with patch(
+            "spawns.actions.combat.resolve_combat_encounter_step",
+            side_effect=error,
+        ), patch.object(resolve_combat_encounter, "retry") as retry:
+            with self.assertRaises(OperationalError):
+                resolve_combat_encounter.run(42)
+
+        retry.assert_not_called()
+
+    def test_task_redelivers_after_worker_loss(self):
+        self.assertTrue(resolve_combat_encounter.acks_late)
+        self.assertTrue(resolve_combat_encounter.reject_on_worker_lost)
+        self.assertEqual(resolve_combat_encounter.max_retries, 5)
+
+    def test_overlapping_recovery_poll_is_skipped(self):
+        with patch("spawns.tasks.cache.add", return_value=False):
+            self.assertEqual(run_due_combat_encounters.run(), {"skipped": True})
 
 
 class TestHandleGameCommandFailures(SimpleTestCase):

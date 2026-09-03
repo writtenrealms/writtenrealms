@@ -5,7 +5,7 @@ from copy import deepcopy
 from datetime import timedelta
 from typing import Any
 
-from django.db.models import Q, QuerySet
+from django.db.models import F, Q, QuerySet
 from django.utils import timezone
 
 from config import constants as adv_consts
@@ -101,6 +101,7 @@ def active_combat_effects(player: Player) -> list[dict[str, Any]]:
             target_player=player,
             remaining_rounds__gt=0,
         )
+        .filter(_spatially_valid_encounter_effect_q())
         .select_related("source_player", "source_mob", "target_player", "target_mob")
         .order_by("created_ts", "id")
     )
@@ -141,10 +142,7 @@ def active_combatant_effects(
         ActiveEffect.objects.filter(target_filter, remaining_rounds__gt=0)
         .filter(
             Q(scope=ActiveEffect.SCOPE_CHARACTER)
-            | Q(
-                scope=ActiveEffect.SCOPE_ENCOUNTER,
-                encounter__status=CombatEncounter.STATUS_ACTIVE,
-            )
+            | _spatially_valid_encounter_effect_q()
         )
         .select_related("source_player", "source_mob", "target_player", "target_mob")
         .order_by("created_ts", "id")
@@ -179,10 +177,7 @@ def preventing_action_effect(
         .filter(remaining_rounds__gt=0)
         .filter(
             Q(scope=ActiveEffect.SCOPE_CHARACTER)
-            | Q(
-                scope=ActiveEffect.SCOPE_ENCOUNTER,
-                encounter__status=CombatEncounter.STATUS_ACTIVE,
-            )
+            | _spatially_valid_encounter_effect_q()
         )
         .values(
             "id",
@@ -225,6 +220,49 @@ def preventing_action_effect(
                 "primitive": deepcopy(primitive),
             }
     return None
+
+
+def _spatially_valid_encounter_effect_q() -> Q:
+    live_encounter = Q(
+        scope=ActiveEffect.SCOPE_ENCOUNTER,
+        encounter__status=CombatEncounter.STATUS_ACTIVE,
+    )
+    pve_player_target = Q(
+        encounter__duel_match_id__isnull=True,
+        target_player_id__isnull=False,
+        world_id=F("target_player__world_id"),
+        encounter__world_id=F("target_player__world_id"),
+        encounter__room_id=F("target_player__room_id"),
+        encounter__mob__world_id=F("target_player__world_id"),
+        encounter__mob__room_id=F("target_player__room_id"),
+        encounter__mob__is_pending_deletion=False,
+        encounter__mob__health__gt=0,
+    )
+    pve_mob_target = Q(
+        encounter__duel_match_id__isnull=True,
+        target_mob_id__isnull=False,
+        world_id=F("target_mob__world_id"),
+        encounter__world_id=F("target_mob__world_id"),
+        encounter__room_id=F("target_mob__room_id"),
+        encounter__player__world_id=F("target_mob__world_id"),
+        encounter__player__room_id=F("target_mob__room_id"),
+        encounter__mob__is_pending_deletion=False,
+        encounter__mob__health__gt=0,
+    )
+    pvp_player_target = Q(
+        encounter__duel_match_id__isnull=False,
+        target_player_id__isnull=False,
+        world_id=F("target_player__world_id"),
+        encounter__world_id=F("target_player__world_id"),
+        encounter__room_id=F("target_player__room_id"),
+        encounter__participants__player_id=F("target_player_id"),
+        encounter__participants__is_active=True,
+    )
+    return live_encounter & (
+        pve_player_target
+        | pve_mob_target
+        | pvp_player_target
+    )
 
 
 def encounter_effects(encounter: CombatEncounter) -> list[ActiveEffect]:
@@ -539,11 +577,31 @@ def _live_hostile_effects() -> QuerySet[ActiveEffect]:
         remaining_rounds__gt=0,
         world__lifecycle=adv_consts.WORLD_LIFECYCLE_RUNNING,
     ).filter(
-        Q(target_player__in_game=True, target_player__room_id__isnull=False)
-        | Q(
-            target_mob__is_pending_deletion=False,
-            target_mob__health__gt=0,
-            target_mob__room_id__isnull=False,
+        (
+            Q(scope=ActiveEffect.SCOPE_CHARACTER)
+            & (
+                Q(
+                    target_player__in_game=True,
+                    target_player__room_id__isnull=False,
+                    world_id=F("target_player__world_id"),
+                )
+                | Q(
+                    target_mob__is_pending_deletion=False,
+                    target_mob__health__gt=0,
+                    target_mob__room_id__isnull=False,
+                    world_id=F("target_mob__world_id"),
+                )
+            )
+        )
+        | (
+            _spatially_valid_encounter_effect_q()
+            & (
+                Q(target_player__in_game=True)
+                | Q(
+                    target_mob__is_pending_deletion=False,
+                    target_mob__health__gt=0,
+                )
+            )
         )
     )
 

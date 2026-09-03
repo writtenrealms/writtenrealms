@@ -20,12 +20,20 @@ def _active_player_encounter_exists(player: Player) -> bool:
     if CombatEncounter.objects.filter(
         player=player,
         status=CombatEncounter.STATUS_ACTIVE,
+        world_id=player.world_id,
+        room_id=player.room_id,
+        mob__world_id=player.world_id,
+        mob__room_id=player.room_id,
+        mob__is_pending_deletion=False,
+        mob__health__gt=0,
     ).exists():
         return True
     return CombatParticipant.objects.filter(
         player=player,
         is_active=True,
         encounter__status=CombatEncounter.STATUS_ACTIVE,
+        encounter__world_id=player.world_id,
+        encounter__room_id=player.room_id,
     ).exists()
 
 

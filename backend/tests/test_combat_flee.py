@@ -12,10 +12,12 @@ from core.combat_formulas import (
 )
 from core.computations import compute_stats
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.utils import timezone
 from spawns.actions.movement_costs import movement_cost
 from spawns.actions.combat import (
     FleeAction,
+    process_due_combat_encounters,
     resolve_combat_encounter_step,
     resolve_due_character_effects,
 )
@@ -140,6 +142,102 @@ class TestCombatFlee(WorldTestCase):
             mob=mob,
             resolution_interval=1.5,
             pending_flee=pending_flee or {},
+        )
+
+    def test_overdue_recovery_advances_stranded_flee_and_expires_crack(self):
+        mob = self._mob()
+        encounter = self._active_encounter(
+            mob,
+            pending_flee={
+                "status": "preparing",
+                "queued_round": 0,
+                "direction": "east",
+                "destination_room_id": self.escape_room.id,
+                "movement_cost": movement_cost(self.escape_room),
+            },
+        )
+        encounter.next_resolution_ts = timezone.now() - timedelta(seconds=30)
+        encounter.save(update_fields=["next_resolution_ts"])
+        crack = ActiveEffect.objects.create(
+            world=self.spawn_world,
+            encounter=encounter,
+            source_mob=mob,
+            target_player=self.player,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            effect="stun",
+            category="debuff",
+            label="Crack",
+            remaining_rounds=1,
+            duration_rounds=1,
+        )
+
+        recovery_now = timezone.now()
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            result = process_due_combat_encounters(
+                now=recovery_now,
+                grace_seconds=0,
+            )
+
+        encounter.refresh_from_db()
+        self.assertEqual(result, {"candidates": 1, "resolved": 1, "failed": 0})
+        self.assertEqual(encounter.round_number, 1)
+        self.assertEqual(encounter.pending_flee["status"], "ready")
+        self.assertGreater(encounter.next_resolution_ts, recovery_now)
+        self.assertTrue(ActiveEffect.objects.filter(pk=crack.pk).exists())
+
+        second = process_due_combat_encounters(
+            now=recovery_now,
+            grace_seconds=0,
+        )
+        encounter.refresh_from_db()
+        self.assertEqual(second["candidates"], 0)
+        self.assertEqual(encounter.round_number, 1)
+
+        encounter.next_resolution_ts = recovery_now - timedelta(seconds=1)
+        encounter.save(update_fields=["next_resolution_ts"])
+        completed = process_due_combat_encounters(
+            now=recovery_now,
+            grace_seconds=0,
+        )
+        encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertEqual(completed["resolved"], 1)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(self.player.room_id, self.escape_room.id)
+        self.assertFalse(ActiveEffect.objects.filter(pk=crack.pk).exists())
+
+    def test_resolver_locks_player_before_encounter_and_mob(self):
+        mob = self._mob()
+        encounter = self._active_encounter(mob)
+        encounter.next_resolution_ts = timezone.now()
+        encounter.save(update_fields=["next_resolution_ts"])
+        locked_tables = []
+
+        def record_lock(execute, sql, params, many, context):
+            normalized = sql.lower()
+            if "for update" in normalized:
+                for table in (
+                    "spawns_player",
+                    "spawns_combatencounter",
+                    "spawns_mob",
+                ):
+                    if f'"{table}"' in normalized:
+                        locked_tables.append(table)
+                        break
+            return execute(sql, params, many, context)
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with connection.execute_wrapper(record_lock):
+                resolve_combat_encounter_step(encounter.id, auto_advance=True)
+
+        self.assertLess(
+            locked_tables.index("spawns_player"),
+            locked_tables.index("spawns_combatencounter"),
+        )
+        self.assertLess(
+            locked_tables.index("spawns_combatencounter"),
+            locked_tables.index("spawns_mob"),
         )
 
     def _messages_by_type(self, messages, message_type):

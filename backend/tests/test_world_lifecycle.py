@@ -5,7 +5,7 @@ from django.utils import timezone
 from builders.models import MobDefinition, SpawnEntry, SpawnPlan, SpawnPlanRun
 from config import constants as api_consts
 from config.exceptions import ServiceError
-from spawns.models import Item, Mob
+from spawns.models import ActiveEffect, CombatEncounter, Item, Mob
 from spawns.tasks import enter_world, exit_current_world
 from spawns.services import WorldGate
 from tests.base import WorldTestCase
@@ -193,6 +193,135 @@ class TestEnterWorld(WorldTestCase):
         self.assertFalse(self.player.in_game)
         WorldGate(world=self.spawn_world, player=self.player).enter()
         self.assertTrue(self.player.in_game)
+
+    def test_disconnect_preserves_valid_combat_and_reconnect_rearms_it(self):
+        self.world.is_multiplayer = True
+        self.world.save(update_fields=["is_multiplayer"])
+        self.spawn_world.is_multiplayer = True
+        self.spawn_world.save(update_fields=["is_multiplayer"])
+        mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Patient Guard",
+            health=10,
+            health_max=10,
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            resolution_interval=2,
+            next_resolution_ts=timezone.now(),
+        )
+        effect = ActiveEffect.objects.create(
+            world=self.spawn_world,
+            encounter=encounter,
+            target_player=self.player,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            effect="stun",
+            category="debuff",
+            label="Crack",
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async") as enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                WorldGate(world=self.spawn_world, player=self.player).enter()
+        self.assertTrue(enqueue.called)
+
+        WorldGate(world=self.spawn_world, player=self.player).exit()
+        encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertFalse(self.player.in_game)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
+        self.assertIsNotNone(encounter.next_resolution_ts)
+        self.assertTrue(ActiveEffect.objects.filter(pk=effect.pk).exists())
+
+        # Simulate a worker/broker gap that left no future ETA deadline.
+        encounter.next_resolution_ts = None
+        encounter.save(update_fields=["next_resolution_ts"])
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async") as enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                WorldGate(world=self.spawn_world, player=self.player).enter()
+        encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertTrue(self.player.in_game)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
+        self.assertIsNotNone(encounter.next_resolution_ts)
+        enqueue.assert_called_once()
+
+    def test_enter_world_cleans_impossible_cross_runtime_combat(self):
+        other_runtime = self.world.create_spawn_world()
+        other_runtime.lifecycle = api_consts.WORLD_LIFECYCLE_RUNNING
+        other_runtime.save(update_fields=["lifecycle"])
+        mob = Mob.objects.create(
+            world=other_runtime,
+            room=self.room,
+            name="Old Guard",
+            health=10,
+            health_max=10,
+        )
+        self.player.stamina = 5
+        self.player.save(update_fields=["stamina"])
+        encounter = CombatEncounter.objects.create(
+            world=other_runtime,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            resolution_interval=2,
+            next_resolution_ts=timezone.now(),
+            pending_flee={"status": "preparing", "movement_cost": 2},
+        )
+        effect = ActiveEffect.objects.create(
+            world=other_runtime,
+            encounter=encounter,
+            target_player=self.player,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            effect="stun",
+            category="debuff",
+            label="Crack",
+        )
+
+        WorldGate(world=self.spawn_world, player=self.player).enter()
+
+        encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertEqual(encounter.pending_flee, {})
+        self.assertIsNone(encounter.next_resolution_ts)
+        self.assertEqual(self.player.stamina, 7)
+        self.assertFalse(ActiveEffect.objects.filter(pk=effect.pk).exists())
+
+    def test_exit_world_also_cleans_impossible_cross_runtime_combat(self):
+        other_runtime = self.world.create_spawn_world()
+        self.world.is_multiplayer = True
+        self.world.save(update_fields=["is_multiplayer"])
+        self.spawn_world.is_multiplayer = True
+        self.spawn_world.save(update_fields=["is_multiplayer"])
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        mob = Mob.objects.create(
+            world=other_runtime,
+            room=self.room,
+            name="Orphaned Guard",
+            health=10,
+            health_max=10,
+        )
+        encounter = CombatEncounter.objects.create(
+            world=other_runtime,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            resolution_interval=2,
+            next_resolution_ts=timezone.now(),
+        )
+
+        WorldGate(world=self.spawn_world, player=self.player).exit()
+
+        encounter.refresh_from_db()
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertIsNone(encounter.next_resolution_ts)
 
     def test_enter_world_notifies_other_online_players(self):
         self.world.is_multiplayer = True

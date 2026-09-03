@@ -54,6 +54,13 @@ app.conf.beat_schedule = {
         # durable recovery path if an ETA delivery is lost.
         'options': {'expires': _heartbeat_interval_seconds()},
     },
+    'run-due-combat-encounters': {
+        'task': 'spawns.tasks.run_due_combat_encounters',
+        'schedule': _heartbeat_interval_seconds(),
+        # Scheduled per-encounter tasks are the fast path. This indexed,
+        # bounded poll repairs an ETA lost to a worker or broker failure.
+        'options': {'expires': _heartbeat_interval_seconds()},
+    },
     'run-world-spawn-plans': {
         'task': 'worlds.tasks.run_world_spawn_plans',
         'schedule': _spawn_plan_interval_seconds(),

@@ -42,21 +42,42 @@ class WorldGate:
 
         self.preflight()
 
-        player.in_game = True
-        player.last_connection_ts = timezone.now()
-        player.last_action_ts = timezone.now()
-        player.save(update_fields=[
-            'in_game', 'last_connection_ts', 'last_action_ts'])
+        with transaction.atomic():
+            player = (
+                Player.objects.select_for_update(of=('self',))
+                .select_related('world')
+                .get(pk=player.pk)
+            )
+            if player.world_id != world.id:
+                raise ServiceError("Character changed worlds while entering.")
+            player.in_game = True
+            player.last_connection_ts = timezone.now()
+            player.last_action_ts = timezone.now()
+            player.save(update_fields=[
+                'in_game', 'last_connection_ts', 'last_action_ts'])
 
-        # Mark when the context world was last entered
+            # Reconnect keeps a valid same-place fight, but repairs impossible
+            # cross-world/room state and re-arms a lost scheduled resolution.
+            from spawns.actions.combat import reconcile_locked_player_pve_combat
+
+            reconcile_locked_player_pve_combat(player=player, resume=True)
+
+            PlayerEvent.objects.create(
+                player=player,
+                event=constants.PLAYER_EVENT_LOGIN,
+                ip=ip)
+
+        # Keep the context write outside the Player/combat lock transaction.
+        # Instance run creation owns the inverse World -> Player aggregate
+        # order, so holding both here would reintroduce a lifecycle deadlock.
         context = world.context if world.context else world
         context.last_entered_ts = timezone.now()
         context.save(update_fields=['last_entered_ts'])
 
-        PlayerEvent.objects.create(
-            player=player,
-            event=constants.PLAYER_EVENT_LOGIN,
-            ip=ip)
+        self.player.in_game = player.in_game
+        self.player.last_connection_ts = player.last_connection_ts
+        self.player.last_action_ts = player.last_action_ts
+        self.player = player
 
         return player
 
@@ -276,6 +297,11 @@ class WorldGate:
                 message="You stop working with the door as you leave the world.",
             )
             clear_movement_follows_for_players([player.id])
+            from spawns.actions.combat import reconcile_locked_player_pve_combat
+
+            # Disconnect is not an escape. Preserve valid spatial combat while
+            # still cleaning impossible state at the lifecycle boundary.
+            reconcile_locked_player_pve_combat(player=player, resume=False)
             player.in_game = False
             player.save(update_fields=['in_game'])
             PlayerEvent.objects.create(

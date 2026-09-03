@@ -358,13 +358,21 @@ lifecycle. The extended WR2 order is:
 1. Base-runtime lifecycle lock, only when creating a return lease or tearing
    down that runtime
 2. Instance run
-3. Match/combat aggregates in stable id order
+3. Match and duel-combat aggregates in stable id order, when the operation
+   owns that aggregate
 4. Player rows, which also serve as participation reservations, in stable id
    order
-5. Instance participants in stable id order
-6. Rooms
-7. Mobs
-8. Items
+5. Ordinary PVE encounters for those players in stable id order
+6. Instance participants in stable id order
+7. Rooms
+8. Mobs
+9. Items
+
+Ordinary PVE resolution and commands do not own an `InstanceRun`; they begin at
+step 4 and consistently use Player -> PVE encounter -> Mob. Instance entry and
+leave use Run -> Player -> PVE encounter so they cannot invert locks with a
+concurrent combat round. Duel resolution retains its Run/Match-first aggregate
+order.
 
 Entry, leave, goal progression, timer expiry, completion, and cleanup all mutate
 instance lifecycle and should lock the run row.
@@ -539,11 +547,13 @@ Entry should:
 4. find or create an active `InstanceRun`
 5. create or update the participant row, recording the current runtime as
    `return_runtime_world` before movement
-6. move the player into the run's spawned world and entry room
-7. move the complete carried/equipped ownership closure to the spawned world
-8. seed world/zone/room state if this is a newly created runtime world
-9. emit `instance.entered`
-10. emit normal room look/enter events
+6. finish the player's ordinary PVE encounters, refund reserved flee stamina,
+   and remove encounter-scoped effects
+7. move the player into the run's spawned world and entry room
+8. move the complete carried/equipped ownership closure to the spawned world
+9. seed world/zone/room state if this is a newly created runtime world
+10. emit `instance.entered`
+11. emit normal room look/enter events
 
 The transfer is recursively complete in semantics: containers inside
 containers cannot be left in the base runtime. Its database implementation
@@ -565,12 +575,14 @@ Leave should:
    - explicit instance exit destination
    - base-world starting room fallback
 3. validate and use the participant's exact `return_runtime_world`
-4. move the player to that runtime and chosen authored room
-5. move the complete carried/equipped ownership closure to that runtime
-6. set participant `exited_at` and `exit_reason`
-7. update run `last_active_at`
-8. emit `instance.left`
-9. leave cleanup to the cleanup scheduler
+4. finish the player's ordinary PVE encounters, refund reserved flee stamina,
+   and remove encounter-scoped effects
+5. move the player to that runtime and chosen authored room
+6. move the complete carried/equipped ownership closure to that runtime
+7. set participant `exited_at` and `exit_reason`
+8. update run `last_active_at`
+9. emit `instance.left`
+10. leave cleanup to the cleanup scheduler
 
 Leaving should not delete the run.
 

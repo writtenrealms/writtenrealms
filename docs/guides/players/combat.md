@@ -215,6 +215,18 @@ trackers from the same fight, not just your primary target. Mobs that remain in
 the origin room are no longer shown as fighting you on nearby scans unless they
 later reach and engage you again.
 
+Entering or leaving an instance is a stronger boundary than moving between
+rooms. Ordinary mob combat ends before you cross into the other runtime, queued
+combat actions are cleared, encounter-only statuses such as **Stunned** are
+removed, and stamina reserved by an unfinished flee is refunded. Buffs and
+other character-scoped effects continue to follow you.
+
+Disconnecting or reloading is not a way to escape a valid fight. When you enter
+the world again, the game checks that the encounter, opponent, runtime, and room
+still agree. A valid fight continues and any missing round schedule is restored;
+an impossible stale fight is closed and its encounter-only statuses are
+removed.
+
 A tracker follows only the single exit you just used. It does not teleport or
 search across multiple rooms. If the mob can no longer traverse that exact
 route, or either of you has moved somewhere unexpected before the chase

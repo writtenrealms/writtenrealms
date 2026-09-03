@@ -159,6 +159,16 @@ is removed, or its target dies. Combat tagging suppresses normal combat-exit
 behavior such as regeneration, but it does not allow attacks or targeting
 across rooms.
 
+Spatial PVE validity includes the spawned runtime as well as the authored room:
+the player, encounter, and mob must all have the same runtime-world id and room
+id. This matters for instances because separate runs reuse the same authored
+room rows. Crossing a runtime boundary finishes ordinary PVE encounters,
+refunds any reserved flee movement cost, clears pending intents, and removes
+encounter-scoped effects before the player moves. Character-scoped effects
+continue to follow their target. A disconnect by itself is not an escape and
+does not finish a still-valid encounter; entry revalidates it and restores a
+missing scheduled resolution.
+
 ### Combat Resolution Step
 
 A combat resolution step is one iteration of encounter processing.
@@ -223,6 +233,32 @@ Instead:
 
 This is a better fit for WR2 scaling than a world-wide combat heartbeat that
 must continuously inspect everyone who might be fighting.
+
+### Resolution Reliability And Locking
+
+Scheduled encounter tasks are an acceleration path over durable encounter
+deadlines, not the only record that work remains. A bounded beat task queries
+the indexed `(status, next_resolution_ts)` deadline slice and resolves overdue
+positive-interval PVE encounters. It ignores manual encounters and advances an
+overdue fight by one logical round rather than replaying every missed wall-clock
+interval. The normal future task and the recovery path both lock and recheck the
+encounter deadline, so duplicate delivery is a no-op.
+
+Ordinary PVE commands, resolution, and lifecycle reconciliation use one row-lock
+order:
+
+1. relevant Player rows in stable id order
+2. that player's PVE `CombatEncounter` rows in stable id order
+3. relevant Mob rows in stable id order
+4. effect and dependent state rows
+
+This prevents command/resolver inversions such as `flee` holding Player while a
+round resolver holds the same encounter. PostgreSQL deadlock and serialization
+failures are still treated as transient infrastructure failures: the
+late-acknowledged resolver retries them with bounded backoff, while unrelated
+database or gameplay failures are not blindly retried. Round output is stored
+in the transactional event outbox so a worker loss after state commit cannot
+silently discard the corresponding messages.
 
 ## Relationship To WR2 Architecture
 

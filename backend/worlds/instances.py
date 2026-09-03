@@ -455,12 +455,6 @@ def enter_players_into_run(
         )
         if len(players) != len(player_ids):
             raise ValueError("One or more players no longer exist.")
-        list(
-            InstanceParticipant.objects.select_for_update(of=('self',))
-            .filter(player_id__in=player_ids)
-            .order_by('player_id', 'id')
-        )
-
         for player in players:
             in_base_world = player.world.context_id == run.base_world_id
             already_in_run = player.world_id == run.spawned_world_id
@@ -477,6 +471,17 @@ def enter_players_into_run(
                 raise RuntimeError(
                     "A player moved away before instance entry completed."
                 )
+
+        from spawns.actions.combat import finish_locked_player_pve_encounters
+
+        for player in players:
+            finish_locked_player_pve_encounters(player=player)
+
+        list(
+            InstanceParticipant.objects.select_for_update(of=('self',))
+            .filter(player_id__in=player_ids)
+            .order_by('player_id', 'id')
+        )
 
         _clear_movement_follows_for_players(player_ids)
         now = timezone.now()
@@ -938,26 +943,6 @@ def _required_model_id(value, *, label):
     return model_id
 
 
-def _finish_forced_exit_encounters(encounters):
-    from spawns.models import ActiveEffect, CombatEncounter
-
-    encounter_ids = [encounter.id for encounter in encounters]
-    if not encounter_ids:
-        return []
-    ActiveEffect.objects.filter(
-        encounter_id__in=encounter_ids,
-        scope=ActiveEffect.SCOPE_ENCOUNTER,
-    ).delete()
-    CombatEncounter.objects.filter(pk__in=encounter_ids).update(
-        status=CombatEncounter.STATUS_FINISHED,
-        next_resolution_ts=None,
-        pending_player_ability={},
-        pending_mob_ability={},
-        pending_flee={},
-    )
-    return encounter_ids
-
-
 def force_exit_instance(
         *,
         player,
@@ -1013,9 +998,9 @@ def force_exit_instance(
         )
 
     with transaction.atomic():
-        # Global order: Run, combat rows, Player, InstanceParticipant. A run
-        # lock deliberately serializes lifecycle-changing exits for one run,
-        # while ordinary movement and combat in other runs remain independent.
+        # Global order: Run/match/duel rows, Player, ordinary PVE encounters,
+        # InstanceParticipant. A run lock deliberately serializes lifecycle
+        # exits while the Player -> PVE suffix matches normal combat writers.
         locked_run = (
             InstanceRun.objects.select_for_update(of=('self',))
             .select_related('base_world')
@@ -1072,16 +1057,6 @@ def force_exit_instance(
                     code="active_duel",
                 )
 
-        active_encounters = list(
-            CombatEncounter.objects.select_for_update(of=('self',))
-            .filter(
-                world_id=origin_world_id,
-                player_id=player_id,
-                status=CombatEncounter.STATUS_ACTIVE,
-                duel_match__isnull=True,
-            )
-            .order_by('id')
-        )
         locked_player = (
             Player.objects.select_for_update(of=('self',))
             .filter(pk=player_id)
@@ -1105,22 +1080,15 @@ def force_exit_instance(
                 "The player is no longer in the expected instance room.",
                 code="origin_changed",
             )
-        locked_encounter_ids = {
-            encounter.id for encounter in active_encounters
-        }
-        current_encounter_ids = set(
-            CombatEncounter.objects.filter(
-                world_id=origin_world_id,
+        active_encounters = list(
+            CombatEncounter.objects.select_for_update(of=('self',))
+            .filter(
                 player_id=player_id,
                 status=CombatEncounter.STATUS_ACTIVE,
                 duel_match__isnull=True,
-            ).values_list('id', flat=True)
-        )
-        if current_encounter_ids != locked_encounter_ids:
-            raise ForcedInstanceExitError(
-                "The player's combat state changed. Try the exit again.",
-                code="target_busy",
             )
+            .order_by('id')
+        )
 
         locked_participant = (
             InstanceParticipant.objects.select_for_update(of=('self',))
@@ -1148,8 +1116,11 @@ def force_exit_instance(
             )
 
         now = timezone.now()
-        finished_encounter_ids = _finish_forced_exit_encounters(
-            active_encounters,
+        from spawns.actions.combat import finish_locked_player_pve_encounters
+
+        finished_encounter_ids = finish_locked_player_pve_encounters(
+            player=locked_player,
+            encounters=active_encounters,
         )
         transfer_result = _transfer_instance_participant_locked(
             player=locked_player,
@@ -1292,6 +1263,13 @@ def enter_instance(
                 "A player moved away before instance entry completed."
             )
 
+        from spawns.actions.combat import finish_locked_player_pve_encounters
+
+        # Spatial PVE never crosses a runtime boundary. Clean every active
+        # PVE encounter before moving so a stale encounter from this same run
+        # cannot become valid again after re-entry.
+        finish_locked_player_pve_encounters(player=locked_player)
+
         cancellation_events = _cancel_pending_door_action(
             player=locked_player,
             code="actor_world_changed",
@@ -1397,6 +1375,9 @@ def leave_instance(*, player, force_active_duel=False):
             raise RuntimeError(
                 "The player is no longer in the expected instance runtime."
             )
+        from spawns.actions.combat import finish_locked_player_pve_encounters
+
+        finish_locked_player_pve_encounters(player=locked_player)
         participant = (
             InstanceParticipant.objects.select_for_update(of=('self',))
             .select_related('run', 'return_runtime_world', 'transfer_from')

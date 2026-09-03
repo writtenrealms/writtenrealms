@@ -2087,7 +2087,10 @@ class AbilityAction:
             raise ActionError("You don't see them there.", code="target_missing")
         if not getattr(target_mob, "attackable", True):
             raise ActionError("You cannot attack them.", code="not_attackable")
-        if CombatEncounter.objects.select_for_update().filter(
+        # The Mob row is the creation reservation. This is a read-only busy
+        # check: locking the existing encounter after Mob would invert the
+        # resolver's Encounter -> Mob suffix.
+        if CombatEncounter.objects.filter(
             mob=target_mob,
             status=CombatEncounter.STATUS_ACTIVE,
         ).exists():
@@ -2374,7 +2377,9 @@ class AbilityAction:
             if not target_mob:
                 raise ActionError("You don't see them here.", code="target_missing")
 
-            if CombatEncounter.objects.select_for_update().filter(
+            # Do not lock an existing encounter after taking the Mob lock.
+            # A committed busy row is sufficient to reject this new fight.
+            if CombatEncounter.objects.filter(
                 mob=target_mob,
                 status=CombatEncounter.STATUS_ACTIVE,
             ).exists():

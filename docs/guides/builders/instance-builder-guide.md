@@ -552,12 +552,22 @@ combat, communication, triggers, and scoped room/zone state are constrained by
 both the spawned world and authored room, so parallel copies of the same arena
 cannot see or affect one another.
 
+The same runtime identity rule applies to ordinary PVE. Separate instance runs
+share authored room rows, so matching room ids alone never make an encounter
+valid across runs. Entering or leaving an instance atomically finishes the
+player's ordinary PVE encounters before transfer, clears queued combat intents
+and encounter-scoped effects, and refunds stamina reserved by an unfinished
+flee. Character-scoped effects continue into the destination runtime.
+
 The runtime uses indexed match, participant, run, and encounter rows rather
 than scanning every player or room. Only active encounters schedule combat
 work, and result finalization is idempotent so worker retries cannot increment
 records twice. Enabling world-wide result announcements adds one bounded fanout
 per completed duel across the base world's online population; leave the
 default off unless that broadcast is a deliberate part of the world design.
+Scheduled PVE rounds also have an indexed, bounded overdue-deadline recovery
+poll. This repairs a lost worker or broker delivery without turning combat into
+a world-wide player or room scan.
 
 ## Player Commands
 

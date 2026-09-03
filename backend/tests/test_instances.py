@@ -32,6 +32,16 @@ from spawns.models import (
     Item,
     Mob,
 )
+from spawns.actions.combat import (
+    primary_active_encounter_for_player,
+    resolve_combat_encounter_step,
+)
+from spawns.actions.effects import (
+    active_combat_effects,
+    actor_is_combat_tagged,
+    preventing_action_effect,
+)
+from spawns.actions.player_state import RestAction
 from spawns.events import flush_game_event_outbox
 from tests.base import WorldTestCase
 from worlds.models import (
@@ -905,6 +915,161 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         World.leave_instance(player=self.player)
         effect.refresh_from_db()
         self.assertEqual(effect.world, self.spawn_world)
+
+    def test_instance_boundaries_finish_pve_and_preserve_character_effects(self):
+        self.player.stamina = 5
+        self.player.save(update_fields=["stamina"])
+        base_mob = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Threshold Guard",
+            health=10,
+            health_max=10,
+        )
+        base_encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=base_mob,
+            resolution_interval=2,
+            next_resolution_ts=timezone.now(),
+            pending_player_ability={"ability": "strike"},
+            pending_mob_ability={"ability": "claw"},
+            pending_flee={"status": "preparing", "movement_cost": 2},
+        )
+        base_effect = ActiveEffect.objects.create(
+            world=self.spawn_world,
+            encounter=base_encounter,
+            target_player=self.player,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            effect="stun",
+            category="debuff",
+            label="Crack",
+        )
+        character_effect = ActiveEffect.objects.create(
+            world=self.spawn_world,
+            target_player=self.player,
+            scope=ActiveEffect.SCOPE_CHARACTER,
+            effect="blessing",
+            category="buff",
+            label="Blessing",
+        )
+
+        spawned_instance = self._enter()
+
+        base_encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        character_effect.refresh_from_db()
+        self.assertEqual(base_encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertIsNone(base_encounter.next_resolution_ts)
+        self.assertEqual(base_encounter.pending_player_ability, {})
+        self.assertEqual(base_encounter.pending_mob_ability, {})
+        self.assertEqual(base_encounter.pending_flee, {})
+        self.assertEqual(self.player.stamina, 7)
+        self.assertFalse(ActiveEffect.objects.filter(pk=base_effect.pk).exists())
+        self.assertEqual(character_effect.world, spawned_instance)
+
+        instance_mob = Mob.objects.create(
+            world=spawned_instance,
+            room=self.instance_room,
+            name="Inner Guard",
+            health=10,
+            health_max=10,
+        )
+        instance_encounter = CombatEncounter.objects.create(
+            world=spawned_instance,
+            room=self.instance_room,
+            player=self.player,
+            mob=instance_mob,
+            resolution_interval=2,
+            next_resolution_ts=timezone.now(),
+            pending_flee={"status": "preparing", "movement_cost": 3},
+        )
+        instance_effect = ActiveEffect.objects.create(
+            world=spawned_instance,
+            encounter=instance_encounter,
+            target_player=self.player,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            effect="root",
+            category="debuff",
+            label="Pinned",
+        )
+
+        World.leave_instance(player=self.player)
+
+        instance_encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        character_effect.refresh_from_db()
+        self.assertEqual(instance_encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertEqual(instance_encounter.pending_flee, {})
+        self.assertEqual(self.player.stamina, 10)
+        self.assertFalse(ActiveEffect.objects.filter(pk=instance_effect.pk).exists())
+        self.assertEqual(character_effect.world, self.spawn_world)
+
+    def test_cross_runtime_encounter_is_never_revived_by_shared_room_id(self):
+        first_runtime = self._enter()
+        mob = Mob.objects.create(
+            world=first_runtime,
+            room=self.instance_room,
+            name="Run One Guard",
+            health=10,
+            health_max=10,
+        )
+        encounter = CombatEncounter.objects.create(
+            world=first_runtime,
+            room=self.instance_room,
+            player=self.player,
+            mob=mob,
+            resolution_interval=2,
+            next_resolution_ts=timezone.now(),
+        )
+        stale_effect = ActiveEffect.objects.create(
+            world=first_runtime,
+            encounter=encounter,
+            source_mob=mob,
+            target_player=self.player,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            effect="stun",
+            category="debuff",
+            label="Crack",
+            is_hostile=True,
+            primitives=[{
+                "type": "action_rule",
+                "phase": "before_action",
+                "rule": "prevent",
+                "actions": ["flee"],
+            }],
+        )
+        second_runtime = self.instance_template.create_spawn_world(
+            instance_ref="second-runtime",
+        )
+        second_runtime.lifecycle = adv_consts.WORLD_LIFECYCLE_RUNNING
+        second_runtime.save(update_fields=["lifecycle"])
+        self.player.world = second_runtime
+        self.player.room = self.instance_room
+        self.player.in_game = True
+        self.player.save(update_fields=["world", "room", "in_game"])
+
+        self.assertIsNone(
+            primary_active_encounter_for_player(
+                self.player,
+                room=self.instance_room,
+            )
+        )
+        self.assertEqual(active_combat_effects(self.player), [])
+        self.assertIsNone(preventing_action_effect(self.player, "flee"))
+        self.assertFalse(actor_is_combat_tagged(self.player))
+        RestAction().execute(self.player.id)
+
+        health_before = self.player.health
+        result = resolve_combat_encounter_step(encounter.id, auto_advance=True)
+
+        encounter.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertFalse(result.encounter_active)
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
+        self.assertEqual(self.player.health, health_before)
+        self.assertFalse(ActiveEffect.objects.filter(pk=stale_effect.pk).exists())
 
     def test_leave_instance_marks_participant_exited_without_deleting_run(self):
         spawned_instance = self._enter()

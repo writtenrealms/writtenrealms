@@ -21,7 +21,10 @@ from spawns.actions.combat import (
 from spawns.actions.player_state import RestAction
 from spawns.actions.pvp import reconcile_stale_pvp_encounters
 from spawns.actions.effects import (
+    active_combat_effects,
+    active_combatant_effects,
     build_character_effect,
+    preventing_action_effect,
     refresh_or_add_character_effect,
 )
 from spawns.duels import (
@@ -287,6 +290,40 @@ class DuelCombatTests(WorldTestCase):
 
     def test_transfer_finishes_pvp_for_other_participant(self):
         self._assert_transfer_finishes_pvp_encounter(self.opponent)
+
+    def test_duel_encounter_effect_remains_visible_and_prevents_actions(self):
+        KillAction().execute(self.player.id, "Rival")
+        encounter = CombatEncounter.objects.get(
+            duel_match=self.match,
+            status=CombatEncounter.STATUS_ACTIVE,
+        )
+        effect = ActiveEffect.objects.create(
+            world=self.run.spawned_world,
+            encounter=encounter,
+            source_player=self.opponent,
+            target_player=self.player,
+            scope=ActiveEffect.SCOPE_ENCOUNTER,
+            effect="root",
+            category="debuff",
+            label="Pinned",
+            primitives=[{
+                "type": "action_rule",
+                "phase": "before_action",
+                "rule": "prevent",
+                "actions": ["flee"],
+            }],
+        )
+
+        self.assertEqual(active_combat_effects(self.player)[0]["id"], effect.id)
+        effects_by_actor = active_combatant_effects([
+            self.player,
+            self.opponent,
+        ])
+        self.assertEqual(effects_by_actor[self.player.key][0]["id"], effect.id)
+        self.assertEqual(
+            preventing_action_effect(self.player, "flee")["id"],
+            effect.id,
+        )
 
     def test_flee_finishes_only_spatial_encounter_and_allows_reengagement(self):
         KillAction().execute(self.player.id, "Rival")

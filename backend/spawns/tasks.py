@@ -15,7 +15,7 @@ from core.computations import compute_stats
 from core.world_config import inherited_system_config
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
-from django.db import transaction
+from django.db import OperationalError, transaction
 from django.db.models import F, Q, Subquery
 from django.utils import timezone
 from spawns.actions.doors import lock_door_state_for_movement
@@ -59,6 +59,7 @@ WR2_STANDING_REGEN_RATE = adv_config.PLAYER_STARTING_STAMINA_REGEN
 WR2_RESTING_REGEN_MULTIPLIER = 3
 DEFAULT_MOB_ROAM_CHANCE = getattr(adv_config, "DEFAULT_MOB_ROAM_CHANCE", 10)
 GAME_HEARTBEAT_LOCK_KEY = "heartbeat_regen_lock"
+DUE_COMBAT_LOCK_KEY = "due_combat_encounters_lock"
 
 
 logger = logging.getLogger(__name__)
@@ -322,6 +323,20 @@ def run_due_prepared_game_actions(limit: int = 100):
     return process_due_prepared_door_actions(limit=limit)
 
 
+@shared_task(name="spawns.tasks.run_due_combat_encounters", ignore_result=True)
+def run_due_combat_encounters(limit: int = 100):
+    from spawns.actions.combat import process_due_combat_encounters
+
+    if not cache.add(DUE_COMBAT_LOCK_KEY, 1, timeout=60):
+        return {"skipped": True}
+    try:
+        result = process_due_combat_encounters(limit=limit)
+        flush_game_event_outbox(publisher=publish_events)
+        return result
+    finally:
+        cache.delete(DUE_COMBAT_LOCK_KEY)
+
+
 @shared_task(name="spawns.tasks.prune_prepared_game_actions", ignore_result=True)
 def prune_prepared_game_actions(retention_days: int = 7) -> int:
     from spawns.actions.doors import prune_terminal_prepared_door_actions
@@ -378,6 +393,23 @@ def _heartbeat_interval_seconds() -> float:
 
 def _heartbeat_lock_timeout_seconds() -> int:
     return max(int(math.ceil(_heartbeat_interval_seconds() * 4)), 10)
+
+
+def _database_sqlstate(exc: BaseException) -> str | None:
+    """Find PostgreSQL's SQLSTATE through Django/driver exception wrappers."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        code = getattr(current, "sqlstate", None) or getattr(current, "pgcode", None)
+        if code:
+            return str(code)
+        current = getattr(current, "__cause__", None) or getattr(
+            current,
+            "__context__",
+            None,
+        )
+    return None
 
 
 def _as_non_negative_int(value, default: int = 0) -> int:
@@ -1567,14 +1599,37 @@ def execute_trigger_script_segments(
             return
 
 
-@shared_task(ignore_result=True)
-def resolve_combat_encounter(encounter_id: int):
+@shared_task(
+    bind=True,
+    ignore_result=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    max_retries=5,
+)
+def resolve_combat_encounter(self, encounter_id: int):
     from spawns.actions.combat import resolve_combat_encounter_step
 
-    result = resolve_combat_encounter_step(
-        encounter_id,
-        auto_advance=True,
-    )
+    try:
+        result = resolve_combat_encounter_step(
+            encounter_id,
+            auto_advance=True,
+            durable_events=True,
+        )
+    except OperationalError as exc:
+        if _database_sqlstate(exc) not in {"40P01", "40001"}:
+            raise
+        retry_count = max(0, int(getattr(self.request, "retries", 0) or 0))
+        logger.warning(
+            "Retrying combat encounter %s after transient database conflict.",
+            encounter_id,
+        )
+        raise self.retry(
+            exc=exc,
+            countdown=min(4.0, 0.25 * (2 ** retry_count)),
+        )
+    # Combat output was committed to the outbox with the round. Attempt
+    # immediate delivery; the heartbeat retains ownership of later retries.
+    flush_game_event_outbox(publisher=publish_events)
     if result.events:
         publish_events(
             result.events,

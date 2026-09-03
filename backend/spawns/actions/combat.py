@@ -101,6 +101,7 @@ from worlds.models import (
 
 logger = logging.getLogger(__name__)
 MAX_AUTO_RESOLVE_ROUNDS = 100
+MAX_DUE_COMBAT_ENCOUNTERS = 200
 DEFAULT_HIT_MSG_FIRST = "hit"
 DEFAULT_HIT_MSG_THIRD = "hits"
 
@@ -311,6 +312,17 @@ class CombatStepResult:
     events: list[GameEvent]
     encounter_active: bool
     tracker_chase: dict | None = None
+
+
+def _persist_combat_step_events(
+    result: CombatStepResult,
+    *,
+    durable_events: bool,
+) -> CombatStepResult:
+    if not durable_events or not result.events:
+        return result
+    enqueue_game_events(result.events)
+    return replace(result, events=[])
 
 
 def _prepared_player_ability_slug(
@@ -532,8 +544,12 @@ def _active_faceoff_encounter_queryset(
         .select_related("mob")
         .filter(
             player=player,
+            world_id=player.world_id,
+            room_id=player.room_id,
             status=CombatEncounter.STATUS_ACTIVE,
             mob_id__isnull=False,
+            mob__world_id=player.world_id,
+            mob__room_id=player.room_id,
             mob__is_pending_deletion=False,
             mob__health__gt=0,
         )
@@ -2187,11 +2203,29 @@ def _resume_detached_character_effect_ticks(
     )
     detached_mob_ids = candidate_mob_ids.difference(engaged_mob_ids)
     if detached_mob_ids:
-        ActiveEffect.objects.filter(
-            scope=ActiveEffect.SCOPE_CHARACTER,
-            target_mob_id__in=detached_mob_ids,
-            remaining_rounds__gt=0,
-        ).update(next_tick_ts=next_effect_tick)
+        detached_mobs = (
+            Mob.objects.filter(id__in=detached_mob_ids)
+            .select_related(
+                "world",
+                "world__config",
+                "world__context",
+                "world__context__config",
+                "world__context__instance_of",
+                "world__context__instance_of__config",
+            )
+            .order_by("world_id", "id")
+        )
+        mob_ids_by_world: dict[int, tuple[World, list[int]]] = {}
+        for mob in detached_mobs:
+            if mob.world_id not in mob_ids_by_world:
+                mob_ids_by_world[mob.world_id] = (mob.world, [])
+            mob_ids_by_world[mob.world_id][1].append(mob.id)
+        for mob_world, world_mob_ids in mob_ids_by_world.values():
+            ActiveEffect.objects.filter(
+                scope=ActiveEffect.SCOPE_CHARACTER,
+                target_mob_id__in=world_mob_ids,
+                remaining_rounds__gt=0,
+            ).update(next_tick_ts=next_character_effect_tick_ts(mob_world))
 
 
 def _schedule_encounter_resolution(encounter_id: int, delay_seconds: float) -> None:
@@ -2564,6 +2598,179 @@ def _refund_pending_flee_reservation(
         replacement_cost=0,
     )
     player.save(update_fields=["stamina"])
+
+
+def _pending_flee_movement_cost(encounter: CombatEncounter) -> int:
+    try:
+        return max(
+            0,
+            int((encounter.pending_flee or {}).get("movement_cost") or 0),
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
+def finish_locked_player_pve_encounters(
+    *,
+    player: Player,
+    encounters: Iterable[CombatEncounter] | None = None,
+) -> list[int]:
+    """Finish a locked player's spatial PVE combat before a runtime transfer.
+
+    PVE mutations use Player -> CombatEncounter -> Mob lock order. Callers must
+    hold ``player``'s row lock and be inside the surrounding transaction.
+    """
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("PVE encounter cleanup requires an atomic transaction.")
+
+    if encounters is None:
+        encounters = list(
+            CombatEncounter.objects.select_for_update(of=("self",))
+            .filter(
+                player_id=player.id,
+                status=CombatEncounter.STATUS_ACTIVE,
+                duel_match_id__isnull=True,
+            )
+            .order_by("id")
+        )
+    active_encounters = [
+        encounter
+        for encounter in encounters
+        if (
+            encounter.status == CombatEncounter.STATUS_ACTIVE
+            and encounter.duel_match_id is None
+            and encounter.player_id == player.id
+        )
+    ]
+    encounter_ids = [encounter.id for encounter in active_encounters]
+    if not encounter_ids:
+        return []
+
+    reserved_stamina = sum(
+        _pending_flee_movement_cost(encounter)
+        for encounter in active_encounters
+    )
+    if reserved_stamina:
+        player.stamina = _reconciled_flee_stamina(
+            player,
+            reserved_cost=reserved_stamina,
+            replacement_cost=0,
+        )
+        player.save(update_fields=["stamina"])
+
+    mob_ids = [encounter.mob_id for encounter in active_encounters if encounter.mob_id]
+    ActiveEffect.objects.filter(
+        encounter_id__in=encounter_ids,
+        scope=ActiveEffect.SCOPE_ENCOUNTER,
+    ).delete()
+    CombatEncounter.objects.filter(
+        pk__in=encounter_ids,
+        status=CombatEncounter.STATUS_ACTIVE,
+        duel_match_id__isnull=True,
+    ).update(
+        status=CombatEncounter.STATUS_FINISHED,
+        next_resolution_ts=None,
+        pending_player_ability={},
+        pending_mob_ability={},
+        pending_flee={},
+    )
+    for encounter in active_encounters:
+        encounter.status = CombatEncounter.STATUS_FINISHED
+        encounter.next_resolution_ts = None
+        encounter.pending_player_ability = {}
+        encounter.pending_mob_ability = {}
+        encounter.pending_flee = {}
+    _resume_detached_character_effect_ticks(player=player, mob_ids=mob_ids)
+    return encounter_ids
+
+
+def _pve_encounter_is_spatially_valid(
+    *,
+    encounter: CombatEncounter,
+    player: Player,
+    target_mob: Mob | None,
+) -> bool:
+    return bool(
+        target_mob
+        and not target_mob.is_pending_deletion
+        and int(target_mob.health or 0) > 0
+        and int(player.health or 0) > 0
+        and player.world_id == encounter.world_id == target_mob.world_id
+        and player.room_id == encounter.room_id == target_mob.room_id
+    )
+
+
+def reconcile_locked_player_pve_combat(
+    *,
+    player: Player,
+    resume: bool,
+) -> dict[str, list[int]]:
+    """Repair one locked player's PVE encounters at a world lifecycle edge."""
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError("PVE reconciliation requires an atomic transaction.")
+
+    encounters = list(
+        CombatEncounter.objects.select_for_update(of=("self",))
+        .filter(
+            player_id=player.id,
+            status=CombatEncounter.STATUS_ACTIVE,
+            duel_match_id__isnull=True,
+        )
+        .order_by("id")
+    )
+    mob_ids = sorted({encounter.mob_id for encounter in encounters if encounter.mob_id})
+    mobs_by_id = {
+        mob.id: mob
+        for mob in Mob.objects.select_for_update(of=("self",))
+        .filter(id__in=mob_ids)
+        .order_by("id")
+    }
+    stale = [
+        encounter
+        for encounter in encounters
+        if not _pve_encounter_is_spatially_valid(
+            encounter=encounter,
+            player=player,
+            target_mob=mobs_by_id.get(encounter.mob_id),
+        )
+    ]
+    finished_ids = finish_locked_player_pve_encounters(
+        player=player,
+        encounters=stale,
+    )
+
+    valid = [encounter for encounter in encounters if encounter not in stale]
+    resumed_ids: list[int] = []
+    if not resume:
+        return {"finished": finished_ids, "resumed": resumed_ids}
+
+    now = timezone.now()
+    for encounter in valid:
+        if encounter.resolution_interval <= 0:
+            continue
+        if encounter.next_resolution_ts and encounter.next_resolution_ts > now:
+            continue
+        delay = 0.05
+        if encounter.next_resolution_ts is None:
+            encounter.next_resolution_ts = now
+            encounter.save(update_fields=["next_resolution_ts"])
+        _schedule_encounter_resolution(encounter.id, delay)
+        resumed_ids.append(encounter.id)
+    return {"finished": finished_ids, "resumed": resumed_ids}
+
+
+def reconcile_player_pve_combat(
+    player_id: int,
+    *,
+    resume: bool = True,
+) -> dict[str, list[int]]:
+    with transaction.atomic():
+        player = (
+            Player.objects.select_for_update(of=("self",))
+            .select_related("world")
+            .get(pk=player_id)
+        )
+        return reconcile_locked_player_pve_combat(player=player, resume=resume)
 
 
 def _cancel_prevented_flee_completion(
@@ -6319,6 +6526,7 @@ def resolve_combat_encounter_step(
     encounter_id: int,
     *,
     auto_advance: bool,
+    durable_events: bool = False,
 ) -> CombatStepResult:
     if CombatEncounter.objects.filter(
         pk=encounter_id,
@@ -6331,13 +6539,52 @@ def resolve_combat_encounter_step(
             auto_advance=auto_advance,
         )
 
+    encounter_snapshot = (
+        CombatEncounter.objects.filter(pk=encounter_id)
+        .values("player_id", "mob_id")
+        .first()
+    )
+    if not encounter_snapshot:
+        return CombatStepResult(actor_key=None, events=[], encounter_active=False)
+
     next_delay: float | None = None
 
     with transaction.atomic():
+        source_target_filter = Q(
+            target_player_id=encounter_snapshot["player_id"],
+        )
+        if encounter_snapshot["mob_id"]:
+            source_target_filter |= Q(
+                target_mob_id=encounter_snapshot["mob_id"],
+            )
+        source_player_ids = set(
+            ActiveEffect.objects.filter(
+                scope=ActiveEffect.SCOPE_CHARACTER,
+                remaining_rounds__gt=0,
+                source_player_id__isnull=False,
+            )
+            .filter(source_target_filter)
+            .values_list("source_player_id", flat=True)
+        )
+        source_player_ids.add(encounter_snapshot["player_id"])
+        locked_players = {
+            actor.id: actor
+            for actor in Player.objects.select_for_update(of=("self",))
+            .select_related("world")
+            .filter(id__in=sorted(source_player_ids))
+            .order_by("id")
+        }
+        player = locked_players.get(encounter_snapshot["player_id"])
+        if player is None:
+            return CombatStepResult(actor_key=None, events=[], encounter_active=False)
+
+        # All PVE writers acquire Player before CombatEncounter. This matches
+        # flee, disengage, abilities, aggro, and instance lifecycle paths and
+        # removes the inverse lock edge that caused the stranded-combat bug.
         encounter = (
-            CombatEncounter.objects.select_for_update()
-            .select_related("player", "world", "room")
-            .filter(pk=encounter_id)
+            CombatEncounter.objects.select_for_update(of=("self",))
+            .select_related("world", "room")
+            .filter(pk=encounter_id, player_id=player.id)
             .first()
         )
         if not encounter or encounter.status != CombatEncounter.STATUS_ACTIVE:
@@ -6347,31 +6594,11 @@ def resolve_combat_encounter_step(
         now = timezone.now()
         if auto_advance and encounter.next_resolution_ts and encounter.next_resolution_ts > now:
             return CombatStepResult(
-                actor_key=encounter.player.key,
+                actor_key=player.key,
                 events=[],
                 encounter_active=True,
             )
 
-        source_player_ids = set(
-            ActiveEffect.objects.filter(
-                scope=ActiveEffect.SCOPE_CHARACTER,
-                remaining_rounds__gt=0,
-                source_player_id__isnull=False,
-            )
-            .filter(
-                Q(target_player_id=encounter.player_id)
-                | Q(target_mob_id=encounter.mob_id)
-            )
-            .values_list("source_player_id", flat=True)
-        )
-        source_player_ids.add(encounter.player_id)
-        locked_players = {
-            actor.id: actor
-            for actor in Player.objects.select_for_update()
-            .filter(id__in=sorted(source_player_ids))
-            .order_by("id")
-        }
-        player = locked_players[encounter.player_id]
         target_mob = (
             Mob.objects.select_for_update(of=("self",))
             .select_related("definition")
@@ -6379,8 +6606,11 @@ def resolve_combat_encounter_step(
             .first()
         )
         if not target_mob:
-            _finish_encounter(encounter)
-            return _with_ability_prepare_transition(
+            finish_locked_player_pve_encounters(
+                player=player,
+                encounters=[encounter],
+            )
+            cleanup_result = _with_ability_prepare_transition(
                 CombatStepResult(
                     actor_key=player.key,
                     events=[_combat_effect_state_event(player)],
@@ -6390,10 +6620,21 @@ def resolve_combat_encounter_step(
                 previous_slug=previous_prepared_slug,
                 current_slug=None,
             )
+            return _persist_combat_step_events(
+                cleanup_result,
+                durable_events=durable_events,
+            )
 
-        if player.room_id != encounter.room_id or target_mob.room_id != encounter.room_id:
-            _finish_encounter(encounter)
-            return _with_ability_prepare_transition(
+        if not _pve_encounter_is_spatially_valid(
+            encounter=encounter,
+            player=player,
+            target_mob=target_mob,
+        ):
+            finish_locked_player_pve_encounters(
+                player=player,
+                encounters=[encounter],
+            )
+            cleanup_result = _with_ability_prepare_transition(
                 CombatStepResult(
                     actor_key=player.key,
                     events=[_combat_effect_state_event(player)],
@@ -6402,6 +6643,10 @@ def resolve_combat_encounter_step(
                 player=player,
                 previous_slug=previous_prepared_slug,
                 current_slug=None,
+            )
+            return _persist_combat_step_events(
+                cleanup_result,
+                durable_events=durable_events,
             )
 
         config = player.world.effective_config
@@ -6441,6 +6686,10 @@ def resolve_combat_encounter_step(
             result,
             events=persist_follow_dependent_game_events(result.events),
         )
+        result = _persist_combat_step_events(
+            result,
+            durable_events=durable_events,
+        )
 
     if result.tracker_chase:
         from spawns.actions.mob_movement import ResolveTrackerChaseAction
@@ -6461,9 +6710,66 @@ def resolve_combat_encounter_step(
                 tracker_chase=None,
             )
 
+    result = _persist_combat_step_events(
+        result,
+        durable_events=durable_events,
+    )
+
     if next_delay:
         _schedule_encounter_resolution(encounter_id, next_delay)
 
+    return result
+
+
+def process_due_combat_encounters(
+    *,
+    limit: int = 100,
+    now=None,
+    grace_seconds: float = 4.0,
+) -> dict[str, int]:
+    """Resolve a bounded overdue slice when an ETA delivery was lost."""
+    row_limit = max(1, min(int(limit or 1), MAX_DUE_COMBAT_ENCOUNTERS))
+    due_at = now or timezone.now()
+    try:
+        grace = max(0.0, float(grace_seconds or 0))
+    except (TypeError, ValueError):
+        grace = 4.0
+    overdue_at = due_at - timedelta(seconds=grace)
+    candidate_ids = list(
+        CombatEncounter.objects.filter(
+            status=CombatEncounter.STATUS_ACTIVE,
+            duel_match_id__isnull=True,
+            resolution_interval__gt=0,
+            player__in_game=True,
+            player__world__lifecycle=adv_consts.WORLD_LIFECYCLE_RUNNING,
+        )
+        .filter(
+            Q(next_resolution_ts__isnull=True)
+            | Q(next_resolution_ts__lte=overdue_at)
+        )
+        .order_by(F("next_resolution_ts").asc(nulls_first=True), "id")
+        .values_list("id", flat=True)[:row_limit]
+    )
+    result = {"candidates": len(candidate_ids), "resolved": 0, "failed": 0}
+    for candidate_id in candidate_ids:
+        try:
+            step = resolve_combat_encounter_step(
+                candidate_id,
+                auto_advance=True,
+                durable_events=True,
+            )
+        except Exception:
+            result["failed"] += 1
+            logger.exception(
+                "Failed to recover overdue combat encounter %s.",
+                candidate_id,
+            )
+            continue
+        if step.encounter_active or not CombatEncounter.objects.filter(
+            pk=candidate_id,
+            status=CombatEncounter.STATUS_ACTIVE,
+        ).exists():
+            result["resolved"] += 1
     return result
 
 
@@ -6975,7 +7281,10 @@ class KillAction:
                 return ActionResult(events=[*cancellation_events, *step.events])
 
             active_mob_encounter = (
-                CombatEncounter.objects.select_for_update()
+                # The target Mob lock serializes encounter creation. Do not
+                # take an existing Encounter lock after Mob; the resolver owns
+                # the opposite Encounter -> Mob suffix while advancing it.
+                CombatEncounter.objects
                 .filter(
                     mob=target_mob,
                     status=CombatEncounter.STATUS_ACTIVE,
