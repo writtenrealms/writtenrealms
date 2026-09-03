@@ -50,29 +50,31 @@ Typed Trigger `command` actions have their own narrower audited contract; for
 example, a player `trigger_actor` may execute the step-safe `/transfer self`
 form even though arbitrary player scripts cannot issue `/transfer`.
 
+Commands are listed alphabetically. Select a command to jump to its details.
+
 | Command | Builder Player | Player Script | Mob Actor | Room Script | Zone Script | World Script |
 | --- | --- | --- | --- | --- | --- | --- |
-| `/load` | Direct | Script | Script | Script | No | No |
-| `/grantitem` | Direct | Script | Script | Script | No | No |
-| `/kill` | Direct | No | Script | Script | No | No |
-| `/transfer` | Direct | No | Script | Script | No | No |
-| `/exitinstance` | Direct | No | Script | Script | No | No |
-| `/purge` | Direct | No | No | No | No | No |
-| `/echo`, `/zecho`, `/wecho` | Direct | Script | Script | Script | Script | Script |
-| `/send`, `/sendexcept` | Direct | No | Script | Script | Script | Script |
-| `/state` | Direct | No | Script | Script | Script | Script |
-| `/stats` | Direct | No | No | No | No | No |
-| `/regen` | Direct | No | Mob | No | No | No |
-| `/open`, `/close`, `/lock`, `/unlock` | Direct | No | Script | Script | No | No |
-| `/set` | Direct | No | No | Script | No | No |
-| `/setcurrency` | Direct | No | No | No | No | No |
-| `/setlevel` | Direct | No | No | No | No | No |
-| `/setclass` | Direct | Script | No | Script | No | No |
-| `/cmd`, `/force`, `/rcmd`, `/zcmd`, `/wcmd` | Direct | Script | Script | Script | Script | Script |
-| `/edit` | Direct | No | No | No | No | No |
-| `/jump` | Direct | No | No | No | No | No |
-| `/repop` | Direct | No | No | Script | No | No |
-| `/reset` | Direct | No | No | No | No | No |
+| [`/close`, `/lock`, `/open`, `/unlock`](#open-close-lock-unlock) | Direct | No | Script | Script | No | No |
+| [`/cmd`, `/force`, `/rcmd`, `/wcmd`, `/zcmd`](#cmd-force-rcmd-zcmd-wcmd) | Direct | Script | Script | Script | Script | Script |
+| [`/echo`, `/wecho`, `/zecho`](#echo-zecho-wecho) | Direct | Script | Script | Script | Script | Script |
+| [`/edit`](#edit) | Direct | No | No | No | No | No |
+| [`/exitinstance`](#exitinstance) | Direct | No | Script | Script | No | No |
+| [`/grantitem`](#grantitem) | Direct | Script | Script | Script | No | No |
+| [`/jump`](#jump) | Direct | No | No | No | No | No |
+| [`/kill`](#kill) | Direct | No | Script | Script | No | No |
+| [`/load`](#load) | Direct | Script | Script | Script | No | No |
+| [`/purge`](#purge) | Direct | No | No | No | No | No |
+| [`/regen`](#regen) | Direct | No | Mob | No | No | No |
+| [`/repop`](#repop) | Direct | No | No | Script | No | No |
+| [`/reset`](#reset) | Direct | No | No | No | No | No |
+| [`/send`, `/sendexcept`](#send-sendexcept) | Direct | No | Script | Script | Script | Script |
+| [`/set`](#set) | Direct | No | No | Script | No | No |
+| [`/setclass`](#setclass) | Direct | Script | No | Script | No | No |
+| [`/setcurrency`](#setcurrency) | Direct | No | No | No | No | No |
+| [`/setlevel`](#setlevel) | Direct | No | No | No | No | No |
+| [`/state`](#state) | Direct | No | Script | Script | Script | Script |
+| [`/stats`](#stats) | Direct | No | No | No | No | No |
+| [`/transfer`](#transfer) | Direct | No | Script | Script | No | No |
 
 ## Command Details
 
