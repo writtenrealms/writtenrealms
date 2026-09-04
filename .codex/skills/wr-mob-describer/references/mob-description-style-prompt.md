@@ -5,7 +5,7 @@ You are writing mobs (creatures and NPCs) for a text-based multiplayer world (MU
 ## The three components
 
 1. **Name** — the short, canonical reference used in combat and when the mob is mentioned. A minimal noun fragment, not a sentence.
-2. **Room description** — one complete sentence shown when a player looks at the room the mob is in. It appears after the room's own description, so it must read as a line of ambient life within a scene.
+2. **Room description** — one complete sentence shown when a player looks at the room the mob is in. It appears after the room's own description, so it must read as a brief line of ambient life within a scene, describing what any observer can see without needing to recognize the mob.
 3. **Description** — the detailed portrait shown only when a player looks directly at the mob. One short paragraph.
 
 ## Name rules
@@ -18,9 +18,11 @@ You are writing mobs (creatures and NPCs) for a text-based multiplayer world (MU
 ## Room description rules
 
 - One complete sentence, present tense, ending with a period. Roughly 6–15 words.
+- **Screen width is at a premium.** Prefer the shortest natural sentence that conveys one distinctive action or posture. Avoid filler and optional trailing details; reserve richer detail for `description`. The word range is guidance, not a minimum to pad toward.
 - The formula is *subject + one characteristic, repeatable action or posture*: "A city guard stands at attention." "A prowling tiger lurks hungrily." "A grumbling streetsweeper grudgingly grooms the road." The action must be ambient and loopable — something the mob could plausibly be doing every single time the player looks, never a one-time event.
-- Optionally extend with a short trailing detail: "A rabbit sits here, fluffy ears drooping by his side." "A weathered fisherman sits here, legs dangling over the side of the jetty."
-- The sentence does **not** need to repeat the name verbatim — it may recast the mob by appearance instead of identity, saving the reveal for the name: name "a novice ruffian" → room description "A shifty-looking lad is here, constantly looking over his shoulder." Name "a fallen knight" → "Once human, a fallen knight stares at you with piercing purple eyes." Use this deliberately for mobs whose nature isn't obvious at a glance.
+- Add a short trailing detail only when it provides essential visual distinction; otherwise save it for `description`.
+- **Prefer a visible description over the mob's proper name.** The room description is what everyone sees, including a stranger to the zone who has never heard of the mob or cannot identify them. Use supported appearance, species, clothing, or an obvious role as the subject. For a mob named Demeas whose source fields establish that he is a tall man practicing shieldwork, prefer "A tall man drills shieldwork beside a practice dummy." to "Demeas drills shieldwork beside a battered practice dummy." Do not invent appearance to avoid a name.
+- A common mob's name can already be a suitable visible description, such as "a gray cat" or "a city guard". Recast names that imply knowledge unavailable at a glance: name "a novice ruffian" → room description "A shifty-looking lad glances over his shoulder." Keep hidden identities and unobservable affiliations out of the room description.
 - "X is here, …" is an acceptable construction but vary it; most room descriptions should use an active verb instead.
 - Second person is permitted and effective in small doses, framed as the mob's attention on the player: "A wild pig eyes you carefully." "An innkeeper smiles at you, hoping for your business."
 - The sentence may anchor the mob to fixtures of its intended room (a jetty, a forge, a bar, a cage) — this coupling is desirable for stationary NPCs.
@@ -72,7 +74,7 @@ A shambling corpse wanders blindly.
 The half-rotted body walks without aim or purpose. Flesh as dry as papyrus stretches over the figure's face in a pained mockery of the features it had in life, still human enough to be deeply wrong. Faint violet wisps trail out of empty eye sockets like vaporous tears.
 
 **Father Anilas**
-Father Anilas prays before a statue.
+A balding priest prays before a statue.
 The sharp features and strong jawline under his remaining wisps of white hair were likely quite striking in his younger days. Crimson bands hang from the shoulders of his simple robes, indicating his elevated rank in the clergy. He looks up at the marble figure of Saint Lobelia as if seeking some guidance in her serene, unmoving expression.
 
 **a frozen flame**

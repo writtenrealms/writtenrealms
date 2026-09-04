@@ -28,7 +28,7 @@ Use this skill as a local authoring assistant for Written Realms mob definitions
 7. Preserve populated target fields exactly. Use them to constrain missing fields even when their prose does not perfectly match the style prompt. The creation-default `<name> is here.` room description is not populated content and may be replaced without `--allow-overwrite`. Overwrite any other populated field only when the user explicitly asks for a revision.
 8. Infer conservatively. Treat `notes` as author intent and constraints, not prose that must be copied. Do not invent named lore, affiliations, props, surroundings, or history unsupported by the available fields.
 9. Preview the proposed fields, then apply them with `scripts/db_mob_context.py apply`. Use `--allow-overwrite` only for an explicitly requested revision.
-10. Run `scripts/db_mob_context.py validate --mob-definition-id <id>` after applying. Fix warnings in newly generated fields. Report but do not silently rewrite warnings caused by preserved fields.
+10. Run `scripts/db_mob_context.py validate --mob-definition-id <id>` after applying. Fix warnings in newly generated fields, except that a room description below the suggested word range may stand when it is already a complete, natural sentence. Report but do not silently rewrite warnings caused by preserved fields.
 
 For bulk work, inspect and generate each mob independently. Write paired mobs or state variants together only when their existing fields explicitly establish that relationship.
 
@@ -37,6 +37,8 @@ For bulk work, inspect and generate each mob independently. Write paired mobs or
 - Follow the bundled style prompt over general MUD-writing instincts.
 - Write the name as a minimal canonical noun fragment. Use a lowercase article for common mobs and normal capitalization for proper names.
 - Write `room_description` as one complete present-tense sentence of roughly 6-15 words, ending in a period. Give the mob one characteristic, repeatable action or posture.
+- Screen width is at a premium for `room_description`. Prefer the shortest natural sentence that conveys one distinctive action or posture. Avoid filler and optional trailing details; reserve richer detail for `description`. The word range is guidance, not a minimum to pad toward.
+- Prefer a visible description of the mob as the subject of `room_description`, rather than its proper name. Write what any observer can see, including a stranger who cannot identify the mob. Use supported appearance, species, clothing, or an obvious role; do not assume recognition or reveal a hidden identity.
 - Write `description` as one paragraph of 1-4 sentences, scaling length to importance. Keep all behavior habitual and repeatable.
 - Make missing fields consistent with every populated source field. Do not duplicate the room description as the detailed description's opening sentence.
 - Anchor details in the supplied world descriptions without inventing a mob's role in world lore. When instance and base-world descriptions are both present, respect both and prefer the instance description for local atmosphere or scope.
