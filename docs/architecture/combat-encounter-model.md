@@ -4,6 +4,12 @@ This document proposes a high-level combat direction for WR2 that fits the
 existing `Command -> Action -> Event` architecture and keeps room for later
 implementation details.
 
+The detailed extension for fights containing multiple players, mobs, and
+hostile sides lives in
+[multi-participant-combat.md](multi-participant-combat.md). That proposal
+refines the encounter boundary and participant model described here without
+changing the logical-time and pacing principles below.
+
 The intent is not to lock in exact formulas, timings, or schemas. The intent is
 to define the shape combat should have so WR2 can:
 
@@ -142,7 +148,10 @@ enter, spends that destination room's normal movement cost, and stores a pending
 flee intent. On the next combat step, the player spends the round looking for an
 opening and takes no primary action. On the following combat step, flee resolves
 at the top of the step before effect ticks, attacks, or other damage can occur;
-the encounter finishes and the player moves to the chosen room.
+the player leaves combat and moves to the chosen room. In the current
+one-player/one-mob encounter that finishes the encounter. Under the
+multi-participant model, the remaining fight continues while an active hostile
+relation remains.
 
 Completion rechecks the same action rule before route-policy revalidation and
 movement. This is necessary because a root can land after preparation starts.
@@ -162,12 +171,14 @@ across rooms.
 Spatial PVE validity includes the spawned runtime as well as the authored room:
 the player, encounter, and mob must all have the same runtime-world id and room
 id. This matters for instances because separate runs reuse the same authored
-room rows. Crossing a runtime boundary finishes ordinary PVE encounters,
-refunds any reserved flee movement cost, clears pending intents, and removes
-encounter-scoped effects before the player moves. Character-scoped effects
-continue to follow their target. A disconnect by itself is not an escape and
-does not finish a still-valid encounter; entry revalidates it and restores a
-missing scheduled resolution.
+room rows. Crossing a runtime boundary removes the moving participant and
+finishes the current pair encounter; a future multi-participant encounter may
+continue for combatants that remain colocated. The exit refunds any reserved
+flee movement cost, clears that participant's pending intents, and removes its
+encounter-scoped effects before movement. Character-scoped effects continue to
+follow their target. A disconnect by itself is not an escape and does not
+finish a still-valid encounter; entry revalidates it and restores a missing
+scheduled resolution.
 
 ### Combat Resolution Step
 
@@ -399,7 +410,6 @@ concrete models:
 The following are intentionally left open for later design work:
 
 - what exact cadence should be the default for live worlds
-- whether encounters are scoped by room, party, instance, or some hybrid
 - how initiative should incorporate stats, action speed, and tie-breaking
   beyond the current stable random near-term rule
 - how interruptible casts should behave
