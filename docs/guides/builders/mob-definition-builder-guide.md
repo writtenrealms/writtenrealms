@@ -560,6 +560,8 @@ spec:
       - ability: shadow-bolt
         weight: 3
         chance: 25
+        cooldown:
+          rounds: 4
 ```
 
 Each loadout entry supports:
@@ -569,14 +571,20 @@ Each loadout entry supports:
   otherwise-eligible ability must pass this percentage roll before selection.
 - `weight`: optional positive integer. Higher weights make the ability more
   likely when multiple entries pass their chance rolls.
+- `cooldown`: optional per-mob override using `rounds` and, optionally,
+  `trigger: on_resolve` or `trigger: on_hit`. Omitted fields inherit from the
+  ability definition. Set `rounds: 0` to disable the ability's default
+  cooldown for this mob.
 - `when`: optional WR2 condition DSL gate. Use this for health thresholds,
   phases, room state, or world state.
 
-Cooldown, resource cost, and `when` eligibility are checked before `chance`.
+The resolved cooldown, resource cost, and `when` eligibility are checked before
+`chance`.
 Chance is rolled independently for each remaining entry, then `weight` chooses
 among the entries that passed. If none pass, the mob uses its normal basic
 attack. A failed chance roll does not start the ability cooldown, so the mob can
-try again on its next turn.
+try again on its next turn. Cooldown overrides affect only that mob definition;
+they do not alter the reusable ability or player cooldowns.
 
 Example self-heal that only becomes eligible when the mob is wounded:
 

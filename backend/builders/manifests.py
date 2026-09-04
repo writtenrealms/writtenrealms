@@ -53,6 +53,7 @@ from builders.models import (
 from config import constants as adv_consts
 from core.abilities import (
     AbilityValidationError,
+    COOLDOWN_TRIGGERS,
     normalize_ability_availability,
     normalize_ability_definition,
     normalize_ability_progression,
@@ -4838,7 +4839,15 @@ def _coerce_mob_combat_ability_entry(
     if isinstance(entry, dict):
         unknown_fields = sorted(
             set(entry.keys())
-            - {"ability", "slug", "weight", "chance", "when", "conditions"}
+            - {
+                "ability",
+                "slug",
+                "weight",
+                "chance",
+                "cooldown",
+                "when",
+                "conditions",
+            }
         )
         if unknown_fields:
             raise serializers.ValidationError(
@@ -4856,6 +4865,37 @@ def _coerce_mob_combat_ability_entry(
         chance = _coerce_int(entry.get("chance", 100), f"{field_name}.chance")
         if chance < 0 or chance > 100:
             raise serializers.ValidationError(f"{field_name}.chance must be 0-100.")
+        raw_cooldown = entry.get("cooldown")
+        if "cooldown" in entry and not isinstance(raw_cooldown, dict):
+            raise serializers.ValidationError(f"{field_name}.cooldown must be a mapping.")
+        cooldown = {}
+        if isinstance(raw_cooldown, dict):
+            unknown_cooldown_fields = sorted(
+                set(raw_cooldown.keys()) - {"rounds", "trigger"}
+            )
+            if unknown_cooldown_fields:
+                raise serializers.ValidationError(
+                    f"Unsupported {field_name}.cooldown field(s): "
+                    f"{', '.join(unknown_cooldown_fields)}."
+                )
+            if "rounds" in raw_cooldown:
+                rounds = _coerce_int(
+                    raw_cooldown.get("rounds"),
+                    f"{field_name}.cooldown.rounds",
+                )
+                if rounds < 0:
+                    raise serializers.ValidationError(
+                        f"{field_name}.cooldown.rounds must be non-negative."
+                    )
+                cooldown["rounds"] = rounds
+            if "trigger" in raw_cooldown:
+                trigger = str(raw_cooldown.get("trigger") or "").strip().lower()
+                if trigger not in COOLDOWN_TRIGGERS:
+                    raise serializers.ValidationError(
+                        f"{field_name}.cooldown.trigger must be one of: "
+                        f"{', '.join(COOLDOWN_TRIGGERS)}."
+                    )
+                cooldown["trigger"] = trigger
         conditions = entry.get("when", entry.get("conditions", {}))
     else:
         ability_slug = _resolve_ability_slug_reference(
@@ -4865,6 +4905,7 @@ def _coerce_mob_combat_ability_entry(
         )
         weight = 1
         chance = 100
+        cooldown = {}
         conditions = {}
 
     if conditions in (None, "", []):
@@ -4880,6 +4921,8 @@ def _coerce_mob_combat_ability_entry(
     }
     if isinstance(entry, dict) and "chance" in entry:
         normalized["chance"] = chance
+    if cooldown:
+        normalized["cooldown"] = cooldown
     if conditions:
         normalized["when"] = conditions
     return normalized

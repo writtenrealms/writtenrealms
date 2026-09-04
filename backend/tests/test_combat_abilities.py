@@ -18,6 +18,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 from spawns.actions.combat import (
     CombatStepResult,
+    _start_mob_ability_cooldown,
     _with_ability_prepare_transition,
 )
 from spawns.actions.abilities import (
@@ -424,6 +425,82 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(mob.ability_cooldowns, {"shadow-bolt": 2})
         self.assertLess(self.player.health, self.stats["health_max"])
 
+    def test_mob_loadout_cooldown_merges_with_ability_default(self):
+        ability = self._ability(
+            slug="shadow-bolt",
+            name="Shadow Bolt",
+            verbs=["shadowbolt"],
+            cooldown={"rounds": 6, "trigger": "on_hit"},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 2},
+                    "text": {"label": "Shadow Bolt"},
+                }
+            ],
+        )
+        mob = self._mob()
+
+        self.assertFalse(
+            _start_mob_ability_cooldown(
+                mob,
+                ability,
+                cooldown_override={"rounds": 3},
+                hit_landed=False,
+            )
+        )
+        self.assertEqual(mob.ability_cooldowns, {})
+
+        self.assertTrue(
+            _start_mob_ability_cooldown(
+                mob,
+                ability,
+                cooldown_override={"rounds": 3, "trigger": "on_resolve"},
+                hit_landed=False,
+            )
+        )
+        self.assertEqual(mob.ability_cooldowns, {"shadow-bolt": 3})
+
+        mob.ability_cooldowns = {}
+        ability.cooldown = {"rounds": 0}
+        self.assertTrue(
+            _start_mob_ability_cooldown(
+                mob,
+                ability,
+                cooldown_override={"rounds": 4},
+                hit_landed=True,
+            )
+        )
+        self.assertEqual(mob.ability_cooldowns, {"shadow-bolt": 4})
+
+    def test_mob_loadout_can_disable_ability_cooldown(self):
+        ability = self._ability(
+            slug="shadow-bolt",
+            name="Shadow Bolt",
+            verbs=["shadowbolt"],
+            cooldown={"rounds": 6},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 2},
+                    "text": {"label": "Shadow Bolt"},
+                }
+            ],
+        )
+        mob = self._mob()
+
+        self.assertFalse(
+            _start_mob_ability_cooldown(
+                mob,
+                ability,
+                cooldown_override={"rounds": 0},
+                hit_landed=True,
+            )
+        )
+        self.assertEqual(mob.ability_cooldowns, {})
+
     def test_player_only_ability_is_skipped_by_mob_loadout(self):
         self._ability(
             slug="player-strike",
@@ -672,7 +749,13 @@ class TestCombatAbilities(WorldTestCase):
                 "weapon_damage": 0,
                 "fights_back": True,
             },
-            combat_abilities=[{"ability": "mob-leg-irons", "weight": 1}],
+            combat_abilities=[
+                {
+                    "ability": "mob-leg-irons",
+                    "weight": 1,
+                    "cooldown": {"rounds": 3},
+                }
+            ],
         )
         mob = mob_definition.spawn(self.room, self.spawn_world)
         encounter = CombatEncounter.objects.create(
@@ -697,6 +780,7 @@ class TestCombatAbilities(WorldTestCase):
                 "command": "mob-leg-irons",
                 "target": {"type": "player", "id": self.player.id},
                 "queued_round": 1,
+                "cooldown": {"rounds": 3},
                 "status": "casting",
                 "cast_rounds_remaining": 0,
             },
@@ -738,7 +822,7 @@ class TestCombatAbilities(WorldTestCase):
             ],
         )
         self.assertEqual(encounter.pending_mob_ability, {})
-        self.assertEqual(mob.ability_cooldowns, {"mob-leg-irons": 7})
+        self.assertEqual(mob.ability_cooldowns, {"mob-leg-irons": 3})
 
         starting_stamina = self.player.stamina
         with capture_game_messages() as flee_messages:

@@ -585,6 +585,9 @@ spec:
       - ability: shadow-bolt
         weight: 3
         chance: 25
+        cooldown:
+          rounds: 4
+          trigger: on_hit
         when:
           lte:
             - actor.health_percent
@@ -599,6 +602,7 @@ spec:
                 "ability": "shadow-bolt",
                 "weight": 3,
                 "chance": 25,
+                "cooldown": {"rounds": 4, "trigger": "on_hit"},
                 "when": {"lte": ["actor.health_percent", 50]},
             }
         ]
@@ -634,6 +638,39 @@ spec:
 
                 self.assertEqual(resp.status_code, 400)
                 self.assertIn("chance must be 0-100", str(resp.data))
+
+    def test_mob_definition_manifest_rejects_invalid_combat_ability_cooldown(self):
+        self._create_ability(
+            slug="shadow-bolt",
+            name="Shadow Bolt",
+            command_verbs=["shadowbolt"],
+        )
+
+        invalid_cooldowns = (
+            ("2", "cooldown must be a mapping"),
+            ("{rounds: -1}", "cooldown.rounds must be non-negative"),
+            ("{trigger: on_cast}", "cooldown.trigger must be one of"),
+            ("{seconds: 10}", "Unsupported spec.combat.abilities[0].cooldown"),
+        )
+        for cooldown, expected_error in invalid_cooldowns:
+            with self.subTest(cooldown=cooldown):
+                manifest = f"""
+kind: mobdefinition
+metadata:
+  world: world.{self.world.id}
+  slug: cave-shaman
+  name: a cave shaman
+spec:
+  type: humanoid
+  combat:
+    abilities:
+      - ability: shadow-bolt
+        cooldown: {cooldown}
+"""
+                resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn(expected_error, str(resp.data))
 
     def test_apply_ability_manifest_accepts_condition_requirements(self):
         manifest = f"""

@@ -3300,6 +3300,12 @@ class AbilityRoundResult:
     target_interrupted: bool = False
 
 
+@dataclass(frozen=True)
+class MobAbilitySelection:
+    ability: AbilityDefinition
+    cooldown_override: dict[str, Any] | None = None
+
+
 def _ability_definition_for_player(player: Player, slug: str) -> AbilityDefinition | None:
     source_world = definition_world(player.world)
     return AbilityDefinition.objects.filter(
@@ -3645,12 +3651,22 @@ def _start_mob_ability_cooldown(
     mob: Mob,
     ability: AbilityDefinition,
     *,
+    cooldown_override: dict[str, Any] | None = None,
     hit_landed: bool = False,
 ) -> bool:
-    rounds = int((ability.cooldown or {}).get("rounds") or 0)
+    ability_cooldown = ability.cooldown if isinstance(ability.cooldown, dict) else {}
+    cooldown = dict(ability_cooldown)
+    if isinstance(cooldown_override, dict):
+        for field in ("rounds", "trigger"):
+            if field in cooldown_override:
+                cooldown[field] = cooldown_override[field]
+    try:
+        rounds = max(0, int(cooldown.get("rounds") or 0))
+    except (TypeError, ValueError):
+        rounds = 0
     if rounds <= 0:
         return False
-    trigger = str((ability.cooldown or {}).get("trigger") or "on_resolve").strip().lower()
+    trigger = str(cooldown.get("trigger") or "on_resolve").strip().lower()
     if trigger == "on_hit" and not hit_landed:
         return False
     cooldowns = _mob_ability_cooldowns(mob)
@@ -3734,6 +3750,7 @@ def _pending_ability_payload(
     target_type: str,
     target_id: int,
     queued_round: int,
+    cooldown_override: dict[str, Any] | None = None,
 ) -> dict:
     payload = {
         "ability": ability.slug,
@@ -3744,6 +3761,8 @@ def _pending_ability_payload(
         },
         "queued_round": queued_round,
     }
+    if cooldown_override:
+        payload["cooldown"] = cooldown_override
     cast_rounds = ability_cast_rounds(ability)
     if cast_rounds > 0:
         payload["status"] = ABILITY_INTENT_STATUS_QUEUED
@@ -3805,7 +3824,7 @@ def _choose_mob_ability(
     mob: Mob,
     player: Player,
     room: Room,
-) -> AbilityDefinition | None:
+) -> MobAbilitySelection | None:
     entries = _mob_loadout_entries(mob)
     if not entries:
         return None
@@ -3826,7 +3845,7 @@ def _choose_mob_ability(
         if ability_allows_actor(ability, "mob")
     }
 
-    weighted: list[tuple[AbilityDefinition, int]] = []
+    weighted: list[tuple[MobAbilitySelection, int]] = []
     for entry in entries:
         slug = str(entry.get("ability") or "").strip().lower()
         ability = abilities_by_slug.get(slug)
@@ -3852,17 +3871,28 @@ def _choose_mob_ability(
             weight = max(1, int(entry.get("weight") or 1))
         except (TypeError, ValueError):
             weight = 1
-        weighted.append((ability, weight))
+        cooldown_override = entry.get("cooldown")
+        weighted.append((
+            MobAbilitySelection(
+                ability=ability,
+                cooldown_override=(
+                    cooldown_override
+                    if isinstance(cooldown_override, dict) and cooldown_override
+                    else None
+                ),
+            ),
+            weight,
+        ))
 
     if not weighted:
         return None
-    total = sum(weight for _ability, weight in weighted)
+    total = sum(weight for _selection, weight in weighted)
     roll = random.randint(1, total)
     cursor = 0
-    for ability, weight in weighted:
+    for selection, weight in weighted:
         cursor += weight
         if roll <= cursor:
-            return ability
+            return selection
     return weighted[-1][0]
 
 
@@ -5940,6 +5970,7 @@ def _execute_pending_mob_ability(
     cooldown_started = _start_mob_ability_cooldown(
         target_mob,
         ability,
+        cooldown_override=pending.get("cooldown"),
         hit_landed=hit_landed,
     )
     update_fields: list[str] = []
@@ -6171,12 +6202,13 @@ def _apply_mob_primary_turn(
         return MobTurnOutcome(events=events)
 
     if not suppress_ability_selection and not encounter.pending_mob_ability:
-        ability = _choose_mob_ability(
+        selection = _choose_mob_ability(
             mob=target_mob,
             player=player,
             room=room,
         )
-        if ability:
+        if selection:
+            ability = selection.ability
             target_type, target_id = _mob_ability_target_ref(
                 ability=ability,
                 mob=target_mob,
@@ -6188,6 +6220,7 @@ def _apply_mob_primary_turn(
                 target_type=target_type,
                 target_id=target_id,
                 queued_round=encounter.round_number,
+                cooldown_override=selection.cooldown_override,
             )
 
     ability_events, ability_result = _execute_pending_mob_ability(
