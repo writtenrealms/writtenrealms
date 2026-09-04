@@ -341,6 +341,26 @@ class TestCombatAbilities(WorldTestCase):
             },
         ]
 
+    def _mob_first_initiative(self, mob):
+        return [
+            {
+                "type": "mob",
+                "id": mob.id,
+                "key": mob.key,
+                "side": "hostile",
+                "initiative": 20,
+                "source": "test",
+            },
+            {
+                "type": "player",
+                "id": self.player.id,
+                "key": self.player.key,
+                "side": "player_party",
+                "initiative": 10,
+                "source": "test",
+            },
+        ]
+
     def test_casting_and_future_channeling_intents_are_interruptible(self):
         for status, phase in (("casting", "cast"), ("channeling", "channel")):
             with self.subTest(status=status):
@@ -841,24 +861,21 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(self.player.stamina, starting_stamina)
         self.assertEqual(encounter.pending_flee, {})
 
-    def test_kick_interrupts_active_mob_cast_without_same_round_reselection(self):
-        self._kick_ability()
+    def test_kick_interrupts_active_cast_before_faster_mob_turn(self):
+        kick = self._kick_ability()
         self.player.known_abilities = ["kick"]
-        self.player.save(update_fields=["known_abilities"])
+        self.player.health = 10
+        self.player.save(update_fields=["known_abilities", "health"])
         mob, mob_ability = self._mob_with_cast_ability()
         starting_health = mob.health
+        initiative_order = self._mob_first_initiative(mob)
         encounter = CombatEncounter.objects.create(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
             mob=mob,
-            initiative_order=self._player_first_initiative(mob),
-            pending_player_ability={
-                "ability": "kick",
-                "command": "kick",
-                "target": {"type": "mob", "id": mob.id},
-                "queued_round": 0,
-            },
+            resolution_interval=1,
+            initiative_order=initiative_order,
             pending_mob_ability={
                 "ability": mob_ability.slug,
                 "command": mob_ability.slug,
@@ -869,6 +886,19 @@ class TestCombatAbilities(WorldTestCase):
             },
         )
 
+        AbilityAction().execute(
+            self.player.id,
+            ability=kick,
+            command=kick.slug,
+            args=[],
+        )
+        encounter.refresh_from_db()
+        self.assertEqual(encounter.initiative_order, initiative_order)
+        self.assertEqual(
+            encounter.pending_player_ability["turn_priority"],
+            "interrupt",
+        )
+
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
                 resolve_combat_encounter(encounter.id)
@@ -876,10 +906,12 @@ class TestCombatAbilities(WorldTestCase):
         encounter.refresh_from_db()
         mob.refresh_from_db()
         self.player.refresh_from_db()
+        self.assertEqual(encounter.initiative_order, initiative_order)
         self.assertEqual(
             starting_health - mob.health,
             math.ceil(self.stats["attack_power"] * 0.25),
         )
+        self.assertGreater(self.player.health, 0)
         self.assertEqual(encounter.pending_mob_ability, {})
         self.assertEqual(mob.ability_cooldowns, {})
         self.assertEqual(self.player.ability_cooldowns, {"kick": 12})
@@ -912,7 +944,7 @@ class TestCombatAbilities(WorldTestCase):
         )
 
     def test_kick_does_not_interrupt_an_ability_that_is_only_queued(self):
-        self._kick_ability()
+        kick = self._kick_ability()
         self.player.known_abilities = ["kick"]
         self.player.save(update_fields=["known_abilities"])
         mob, mob_ability = self._mob_with_cast_ability()
@@ -921,13 +953,8 @@ class TestCombatAbilities(WorldTestCase):
             room=self.room,
             player=self.player,
             mob=mob,
+            resolution_interval=1,
             initiative_order=self._player_first_initiative(mob),
-            pending_player_ability={
-                "ability": "kick",
-                "command": "kick",
-                "target": {"type": "mob", "id": mob.id},
-                "queued_round": 0,
-            },
             pending_mob_ability={
                 "ability": mob_ability.slug,
                 "command": mob_ability.slug,
@@ -936,6 +963,18 @@ class TestCombatAbilities(WorldTestCase):
                 "status": "queued",
                 "cast_rounds_remaining": 1,
             },
+        )
+
+        AbilityAction().execute(
+            self.player.id,
+            ability=kick,
+            command=kick.slug,
+            args=[],
+        )
+        encounter.refresh_from_db()
+        self.assertEqual(
+            encounter.pending_player_ability["turn_priority"],
+            "interrupt",
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
@@ -948,6 +987,74 @@ class TestCombatAbilities(WorldTestCase):
             encounter.pending_mob_ability["cast_rounds_remaining"],
             0,
         )
+        self.assertEqual(
+            self._messages_by_type(
+                messages,
+                "notification.combat.ability_interrupted",
+            ),
+            [],
+        )
+
+    def test_zero_windup_non_interrupt_keeps_mob_first_initiative(self):
+        quick_jab = self._ability(
+            slug="quick-jab",
+            name="Quick Jab",
+            verbs=["jab"],
+            cast_time={"rounds": 0},
+            components=[
+                {
+                    "type": "damage",
+                    "profile": "basic_physical",
+                    "overrides": {"multiplier": 1},
+                    "text": {"label": "Quick Jab"},
+                }
+            ],
+        )
+        self.player.known_abilities = [quick_jab.slug]
+        self.player.save(update_fields=["known_abilities"])
+        mob, mob_ability = self._mob_with_cast_ability()
+        initiative_order = self._mob_first_initiative(mob)
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            resolution_interval=1,
+            initiative_order=initiative_order,
+            pending_mob_ability={
+                "ability": mob_ability.slug,
+                "command": mob_ability.slug,
+                "target": {"type": "player", "id": self.player.id},
+                "queued_round": 0,
+                "status": "casting",
+                "cast_rounds_remaining": 0,
+            },
+        )
+
+        AbilityAction().execute(
+            self.player.id,
+            ability=quick_jab,
+            command=quick_jab.slug,
+            args=[],
+        )
+        encounter.refresh_from_db()
+        self.assertNotIn("turn_priority", encounter.pending_player_ability)
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as messages:
+                resolve_combat_encounter(encounter.id)
+
+        encounter.refresh_from_db()
+        ability_attacks = [
+            attack["data"]["attack"]
+            for attack in self._messages_by_type(
+                messages,
+                "notification.combat.attack",
+            )
+            if attack["data"]["attack"] in {mob_ability.slug, quick_jab.slug}
+        ]
+        self.assertEqual(encounter.initiative_order, initiative_order)
+        self.assertEqual(ability_attacks, [mob_ability.slug, quick_jab.slug])
         self.assertEqual(
             self._messages_by_type(
                 messages,
@@ -973,13 +1080,8 @@ class TestCombatAbilities(WorldTestCase):
             room=self.room,
             player=self.player,
             mob=mob,
-            initiative_order=self._player_first_initiative(mob),
-            pending_player_ability={
-                "ability": kick.slug,
-                "command": kick.slug,
-                "target": {"type": "mob", "id": mob.id},
-                "queued_round": 0,
-            },
+            resolution_interval=1,
+            initiative_order=self._mob_first_initiative(mob),
             pending_mob_ability={
                 "ability": mob_ability.slug,
                 "command": mob_ability.slug,
@@ -988,6 +1090,13 @@ class TestCombatAbilities(WorldTestCase):
                 "status": "casting",
                 "cast_rounds_remaining": 0,
             },
+        )
+
+        AbilityAction().execute(
+            self.player.id,
+            ability=kick,
+            command=kick.slug,
+            args=[],
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
@@ -1005,8 +1114,13 @@ class TestCombatAbilities(WorldTestCase):
             attack for attack in attacks if attack["data"]["attack"] == kick.slug
         ]
         self.assertEqual(kick_attacks[0]["data"]["outcome"], "dodged")
-        self.assertTrue(
-            any(attack["data"]["attack"] == mob_ability.slug for attack in attacks)
+        self.assertEqual(
+            [
+                attack["data"]["attack"]
+                for attack in attacks
+                if attack["data"]["attack"] in {kick.slug, mob_ability.slug}
+            ],
+            [kick.slug, mob_ability.slug],
         )
         self.assertEqual(
             self._messages_by_type(

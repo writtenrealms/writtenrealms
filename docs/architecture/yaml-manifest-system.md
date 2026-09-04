@@ -1926,8 +1926,9 @@ combines with class, level, requirements, and trainer policy rather than
 replacing them.
 
 Ability manifests store ordered, normalized combat components. An interrupt is
-its own component rather than a flag on damage. For example, this Hoplite Kick
-deals one-quarter physical damage and interrupts only when that output lands:
+its own component rather than a flag on damage. For example, this Kick deals
+one-quarter physical damage and interrupts only when that output lands. Its
+availability is omitted because class access is world-specific:
 
 ```yaml
 kind: ability
@@ -1940,10 +1941,6 @@ spec:
   target:
     type: hostile
     default: current_target
-  availability:
-    actors: [player, mob]
-    classes: [hoplite]
-    min_level: 1
   cast_time:
     rounds: 0
   cooldown:
@@ -1970,20 +1967,35 @@ mapping. An ability containing the component must set `spec.target.type` to
 an earlier output component in the same resolution recorded a landed outcome.
 
 The runtime interrupts only committed intent states: implemented `casting` and
-reserved future `channeling`. A replaceable `queued` intent is immune. Clearing
-a committed intent leaves its resource cost unpaid and its cooldown unstarted;
-when that actor's initiative turn arrives, it falls back to a legal basic attack
-instead of selecting another special ability during the same turn.
+reserved future `channeling`. A replaceable `queued` intent is immune. A ready
+hostile ability containing an interrupt component that is already pending when
+primary order is derived is placed immediately before its committed target's
+primary action for the current resolution step, regardless of stored
+initiative. This priority does not mutate stored order, and multiple interrupts
+competing for the same placement retain their relative stored order. Clearing a
+committed intent leaves its resource cost unpaid and its cooldown unstarted;
+when that actor's turn arrives, it falls back to a legal basic attack instead of
+selecting another special ability during the same turn.
 
-Interrupt resolution reads and mutates the target's pending intent from the
-participant state already locked for the encounter step. It does not scan the
-target's encounters, ability catalog, or world documents per component. A
-hostile ability with `cast_time.rounds: 0`, including Kick, has zero windup but
-is still queued and resolves on its actor's stored initiative turn. Channel
+Interrupt ordering, resolution, and mutation use the target's pending intent
+from participant state already locked for the encounter step. They do not scan
+the target's encounters, ability catalog, or world documents per component.
+The queue path derives an internal priority marker from the normalized
+components, keeping round-order derivation in memory and bounded by the locked
+participant count. A hostile ability with `cast_time.rounds: 0` has zero windup
+but ordinarily resolves on its actor's stored initiative turn. Only a ready
+hostile ability containing an interrupt component gets response priority, and
+only against a target already committed as `casting` or `channeling`; `on_hit`
+must still land or the target's ability continues on its turn. Channel
 authoring and execution remain future work even though `channeling` is already
 a recognized committed status. In player duels, hostile cast narration exposes
 the casting contestant and ability to the opponent so an interruptible cast is
 visible before it resolves.
+
+Player and duel commands queued between rounds are pending at ordering time.
+Current NPC ability selection occurs only when the NPC's primary turn begins,
+so a zero-windup interrupt first selected there does not retroactively gain
+response priority in that step; a previously pending NPC interrupt can qualify.
 
 ## Trainer Profile Manifest Shape
 

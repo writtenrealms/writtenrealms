@@ -44,9 +44,11 @@ sequence is: prepare the ability, spend the next encounter round charging, then
 resolve the damage or healing on the following encounter round. Charging rounds
 consume the primary action when `consumes_primary_action_while_casting` is true.
 
-A hostile ability with `cast_time.rounds: 0` has no windup, but it is not a
-reaction or a free action. It is still queued and resolves only when its actor's
-initiative-bound turn arrives.
+A hostile ability with `cast_time.rounds: 0` has no windup, but it is not
+normally a reaction or a free action. It is still queued and resolves only when
+its actor's initiative-bound turn arrives. The narrow exception is a ready
+hostile interrupt aimed at a committed cast or channel, described under
+[Interrupts](#interrupts).
 
 If no ability is queued, the actor uses the normal auto-attack.
 
@@ -386,8 +388,8 @@ are combat-round behavior.
 ## Interrupts
 
 Use an `interrupt` component to cancel a hostile target's committed cast. This
-Hoplite ability deals one-quarter physical damage and interrupts only when that
-damage lands:
+example deals one-quarter physical damage and interrupts only when that damage
+lands. Its availability is omitted because class access is world-specific:
 
 ```yaml
 kind: ability
@@ -400,9 +402,6 @@ spec:
   target:
     type: hostile
     default: current_target
-  availability:
-    classes: [hoplite]
-    min_level: 1
   cast_time:
     rounds: 0
   cooldown:
@@ -443,10 +442,27 @@ cannot author or execute channel abilities yet.
 
 Interrupting clears the victim's committed ability before it resolves. The
 victim pays none of that ability's cost, starts none of its cooldown, and falls
-back to a basic attack on its turn when one is legal. The interrupt does not
-bypass encounter order: Kick is a zero-windup ability, so it is still queued
-and must resolve before the target's turn to stop a cast that would otherwise
-complete first.
+back to a basic attack on its turn when one is legal.
+
+A ready hostile ability containing an interrupt component receives narrow
+primary-action priority when it is already pending as the step's primary order
+is derived and its target has a committed `casting` or `channeling` intent. The
+resolver places it immediately before that target for the current step,
+regardless of stored initiative, without changing the stored order. If multiple
+qualifying interrupts have the same insertion point, their relative order
+remains the stored encounter order.
+
+This response priority does not guarantee cancellation. An `on_hit` interrupt
+must still land; if its preceding output misses or is dodged, the target's cast
+continues on its turn. A `queued` target is not committed, so it receives no
+special interrupt ordering and cannot be canceled. Zero-windup abilities that
+do not contain an interrupt component remain initiative-bound.
+
+Player and duel commands queued between rounds meet the pending-intent
+requirement. NPC ability selection currently happens when the NPC's turn begins,
+so a zero-windup interrupt first selected at that point cannot retroactively
+reorder the step. An NPC interrupt already pending from an earlier windup can
+still receive response priority when it becomes ready.
 
 ## Primary Action Consumption
 

@@ -17,6 +17,7 @@ from spawns.ability_prepare_state import (
     ability_prepare_state_event,
     ability_prepare_state_events_for_players,
 )
+from spawns.ability_intents import prioritize_ready_interrupts
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.effects import (
     ActiveEffect,
@@ -1738,6 +1739,23 @@ def _ordered_participants(
     return ordered
 
 
+def _primary_ordered_participants(
+    ordered: list[CombatParticipant],
+) -> list[CombatParticipant]:
+    participants_by_key = {
+        ("player", participant.player_id): participant
+        for participant in ordered
+    }
+    actor_keys = prioritize_ready_interrupts(
+        participants_by_key,
+        pending_by_actor={
+            actor_key: participant.pending_ability
+            for actor_key, participant in participants_by_key.items()
+        },
+    )
+    return [participants_by_key[actor_key] for actor_key in actor_keys]
+
+
 def resolve_pvp_encounter_step(
     encounter_id: int,
     *,
@@ -1916,7 +1934,7 @@ def resolve_pvp_encounter_step(
             )
 
         cooldown_excludes: dict[int, str | None] = {}
-        for participant in ordered:
+        for participant in _primary_ordered_participants(ordered):
             actor = context.players[participant.player_id]
             opponent_participant = _opponent_for(
                 participant,

@@ -66,7 +66,9 @@ from spawns.ability_intents import (
     ABILITY_INTENT_STATUS_CASTING,
     ABILITY_INTENT_STATUS_QUEUED,
     InterruptibleAbilityIntent,
+    ability_intent_turn_priority,
     interruptible_ability_intent,
+    prioritize_ready_interrupts,
 )
 from spawns.events import (
     GameEvent,
@@ -637,6 +639,10 @@ def _actor_ref_token(ref: dict) -> str:
     return f"{ref.get('type')}:{int(ref.get('id') or 0)}"
 
 
+def _actor_ref_key(ref: dict) -> tuple[str, int]:
+    return str(ref.get("type") or ""), int(ref.get("id") or 0)
+
+
 def _actor_ref_matches(ref: dict, *, actor_type: str, actor_id: int) -> bool:
     return str(ref.get("type") or "") == actor_type and int(ref.get("id") or 0) == int(actor_id)
 
@@ -721,27 +727,36 @@ def _primary_turn_order(
         target_mob=target_mob,
     )
     opening_priority = _opening_priority_for_round(encounter)
-    if not opening_priority:
-        return base_order
+    ordered = base_order
+    if opening_priority:
+        # Hook for charge/ambush/prepared attacks: populate `opening_priority`
+        # before the first round with the actor refs that should override normal
+        # initiative for their first primary action only. The persistent
+        # initiative order remains unchanged for later rounds.
+        prioritized_tokens = [_actor_ref_token(ref) for ref in opening_priority]
+        prioritized_token_set = set(prioritized_tokens)
+        prioritized = [
+            ref
+            for token in prioritized_tokens
+            for ref in base_order
+            if _actor_ref_token(ref) == token
+        ]
+        remaining = [
+            ref
+            for ref in base_order
+            if _actor_ref_token(ref) not in prioritized_token_set
+        ]
+        ordered = [*prioritized, *remaining]
 
-    # Hook for charge/ambush/prepared attacks: populate `opening_priority`
-    # before the first round with the actor refs that should override normal
-    # initiative for their first primary action only. The persistent initiative
-    # order remains unchanged for later rounds.
-    prioritized_tokens = [_actor_ref_token(ref) for ref in opening_priority]
-    prioritized_token_set = set(prioritized_tokens)
-    prioritized = [
-        ref
-        for token in prioritized_tokens
-        for ref in base_order
-        if _actor_ref_token(ref) == token
-    ]
-    remaining = [
-        ref
-        for ref in base_order
-        if _actor_ref_token(ref) not in prioritized_token_set
-    ]
-    return [*prioritized, *remaining]
+    refs_by_key = {_actor_ref_key(ref): ref for ref in ordered}
+    actor_keys = prioritize_ready_interrupts(
+        (_actor_ref_key(ref) for ref in ordered),
+        pending_by_actor={
+            ("player", player.id): encounter.pending_player_ability,
+            ("mob", target_mob.id): encounter.pending_mob_ability,
+        },
+    )
+    return [refs_by_key[actor_key] for actor_key in actor_keys]
 
 
 def _ensure_corpse(mob: Mob) -> int:
@@ -3761,6 +3776,9 @@ def _pending_ability_payload(
         },
         "queued_round": queued_round,
     }
+    turn_priority = ability_intent_turn_priority(ability)
+    if turn_priority:
+        payload["turn_priority"] = turn_priority
     if cooldown_override:
         payload["cooldown"] = cooldown_override
     cast_rounds = ability_cast_rounds(ability)

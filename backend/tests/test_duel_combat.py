@@ -984,7 +984,7 @@ class DuelCombatTests(WorldTestCase):
         }
         kicker = participants[self.player.id]
         caster = participants[self.opponent.id]
-        encounter.initiative_order = [
+        initiative_order = [
             {
                 "type": "player",
                 "id": self.opponent.id,
@@ -998,6 +998,7 @@ class DuelCombatTests(WorldTestCase):
                 "side": f"team.{kicker.team}",
             },
         ]
+        encounter.initiative_order = initiative_order
         encounter.save(update_fields=["initiative_order"])
         caster.pending_ability = {
             "ability": slow_cast.slug,
@@ -1028,29 +1029,18 @@ class DuelCombatTests(WorldTestCase):
         self.assertEqual(len(hostile_cast_events), 1)
 
         encounter.refresh_from_db()
-        encounter.initiative_order = [
-            {
-                "type": "player",
-                "id": self.player.id,
-                "key": self.player.key,
-                "side": f"team.{kicker.team}",
-            },
-            {
-                "type": "player",
-                "id": self.opponent.id,
-                "key": self.opponent.key,
-                "side": f"team.{caster.team}",
-            },
-        ]
-        encounter.save(update_fields=["initiative_order"])
+        self.assertEqual(encounter.initiative_order, initiative_order)
+        encounter.resolution_interval = 1
+        encounter.save(update_fields=["resolution_interval"])
+
+        AbilityAction().execute(
+            self.player.id,
+            ability=kick,
+            command=kick.slug,
+            args=[],
+        )
         kicker.refresh_from_db()
-        kicker.pending_ability = {
-            "ability": kick.slug,
-            "command": kick.slug,
-            "target": {"type": "player", "id": self.opponent.id},
-            "queued_round": encounter.round_number,
-        }
-        kicker.save(update_fields=["pending_ability"])
+        self.assertEqual(kicker.pending_ability["turn_priority"], "interrupt")
 
         interrupt_result = resolve_combat_encounter_step(
             encounter.id,
@@ -1060,6 +1050,8 @@ class DuelCombatTests(WorldTestCase):
         caster.refresh_from_db()
         self.player.refresh_from_db()
         self.opponent.refresh_from_db()
+        encounter.refresh_from_db()
+        self.assertEqual(encounter.initiative_order, initiative_order)
         self.assertEqual(caster.pending_ability, {})
         self.assertEqual(self.player.ability_cooldowns.get(kick.slug), 12)
         self.assertNotIn(slow_cast.slug, self.opponent.ability_cooldowns)

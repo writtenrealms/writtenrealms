@@ -79,9 +79,10 @@ disappear as each round is resolved.
 
 ## Casts And Interrupts
 
-A zero-windup hostile ability is still a queued combat action. It resolves when
-your turn arrives in the stored encounter order; "instant" does not mean that
-it jumps ahead of initiative.
+An ordinary zero-windup hostile ability is still a queued combat action. It
+resolves when your turn arrives in the stored encounter order; "instant" does
+not normally mean that it jumps ahead of initiative. A ready interrupt aimed at
+an active cast is the narrow exception described below.
 
 Once a windup begins, its ability is committed and is shown as casting. An
 interrupt can cancel that committed cast, but it cannot cancel an ability that
@@ -89,10 +90,20 @@ is only queued and can still be replaced by its owner. The interrupted ability
 spends no resource and starts no cooldown. When the interrupted combatant's
 turn arrives, they use their basic attack instead if one is legal.
 
-For example, a Hoplite's **Kick** is a zero-windup attack with a 12-round
-cooldown. It deals 0.25x physical damage and interrupts the target when the hit
-lands. Because encounter order still applies, Kick must resolve before the
-enemy completes its cast.
+For example, **Kick** is a zero-windup attack with a 12-round cooldown. It deals
+0.25x physical damage and interrupts the target when the hit lands. If you
+prepare Kick while that target already has a committed cast or channel, Kick
+gets primary-action priority immediately before the target, regardless of the
+stored encounter order. This priority does not change the stored order for
+later actions or rounds. If multiple interrupt actions qualify for the same
+position, their relative order remains the stored encounter order.
+
+Priority only creates the opportunity to interrupt. Kick's `on_hit` interrupt
+still requires its damage to land; if the attack misses or is dodged, the
+target's committed ability continues on its turn. An ability that is merely
+queued is not yet committed, so it is immune to both interruption and this
+response priority. Zero-windup abilities without an interrupt component remain
+initiative-bound.
 
 In a duel, hostile cast narration identifies the opposing contestant and the
 ability being prepared, so both players can see the committed cast and its

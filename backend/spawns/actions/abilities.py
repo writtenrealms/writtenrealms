@@ -56,6 +56,7 @@ from spawns.ability_prepare_state import (
 from spawns.ability_intents import (
     ABILITY_INTENT_STATUS_CHANNELING,
     ABILITY_INTENT_STATUS_QUEUED,
+    ability_intent_turn_priority,
     ability_intent_is_committed,
 )
 from spawns.events import GameEvent, persist_follow_dependent_game_events
@@ -1374,6 +1375,9 @@ def _pending_payload(
         },
         "queued_round": queued_round,
     }
+    turn_priority = ability_intent_turn_priority(ability)
+    if turn_priority:
+        payload["turn_priority"] = turn_priority
     cast_rounds = ability_cast_rounds(ability)
     if cast_rounds > 0:
         payload["status"] = ABILITY_INTENT_STATUS_QUEUED

@@ -71,8 +71,10 @@ The current design decisions are:
 - the implemented persistent effect primitives include stun, damage-over-time,
   heal-over-time, and root-style action rules that prevent fleeing
 - `interrupt` is a normalized ordered component that cancels committed
-  `casting` state and recognizes future `channeling` state; it never cancels a
-  replaceable `queued` intent
+  `casting` state and recognizes future `channeling` state; a ready hostile
+  interrupt already pending when primary order is derived resolves immediately
+  before its committed target's primary action, regardless of stored
+  initiative, but never cancels a replaceable `queued` intent
 
 ## WR1 Reference
 
@@ -596,8 +598,9 @@ spec:
 ```
 
 An interrupt is a separate ordered component rather than a special damage
-flag. For example, the Hoplite's Kick is a zero-windup, initiative-bound attack
-that interrupts only after its damage lands:
+flag. For example, Kick is a zero-windup attack that gets response priority
+against its committed target but interrupts only after its damage lands. Its
+availability is omitted because class access is world-specific:
 
 ```yaml
 kind: ability
@@ -610,9 +613,6 @@ spec:
   target:
     type: hostile
     default: current_target
-  availability:
-    classes: [hoplite]
-    min_level: 1
   cast_time:
     rounds: 0
   cooldown:
@@ -636,6 +636,24 @@ The normalized interrupt shape admits `target`, `apply`, and `text` only.
 `on_resolve` or `on_hit`. Because components resolve in authored order,
 `on_hit` requires a preceding output component to have landed during the same
 ability resolution.
+
+When a ready hostile ability containing an interrupt component is already a
+pending intent and targets a committed `casting` or `channeling` intent, round
+ordering places the interrupter immediately before that target's primary
+action. This response priority overrides stored initiative only for that
+placement and does not mutate the encounter's stored order. Multiple interrupt
+actions competing for the same placement retain their relative stored order. A
+queued target grants no response priority, and ordinary zero-windup abilities
+remain initiative-bound. Queueing derives this internal priority marker from
+the normalized components, so the locked round resolver orders participant
+intents in memory without another ability-definition query.
+
+Player and duel commands submitted between rounds are pending before order is
+derived. Current NPC ability selection happens on the NPC's primary turn, so a
+zero-windup interrupt first selected there cannot retroactively reorder that
+step; a previously pending NPC interrupt can qualify. A future multi-actor AI
+selection phase may move that decision before primary ordering without changing
+the pending-intent contract.
 
 ## Relationship To Combat Profiles
 
@@ -782,11 +800,13 @@ If the ability is invalid at resolution time, the baseline behavior should be:
 This keeps early WR2 combat forgiving and avoids turns disappearing because of
 ordinary multiplayer timing races.
 
-An explicit interrupt follows the same forgiving fallback rule. It clears the
-victim's committed ability before resolution, so that ability pays no cost and
-starts no cooldown. On the victim's initiative-bound turn, the resolver falls
-back to a basic attack when one is legal. The interrupting ability resolves its
-own cost and cooldown normally.
+An explicit interrupt follows the same forgiving fallback rule. A ready
+hostile interrupt gets primary-action priority immediately before its committed
+target, then clears the victim's ability if its application condition succeeds.
+That ability pays no cost and starts no cooldown. On the victim's turn, the
+resolver falls back to a basic attack when one is legal. The interrupting
+ability resolves its own cost and cooldown normally. An `on_hit` interrupt that
+misses or is dodged leaves the committed ability intact to resolve on that turn.
 
 ## Cost And Cooldown Timing
 
@@ -839,8 +859,11 @@ Pending intent status is part of the interruption boundary:
   channel execution.
 
 A hostile ability with `cast_time.rounds: 0` has no windup, but it still enters
-the pending primary-intent pipeline and resolves on the actor's stored
-initiative turn. It is not an out-of-order reaction.
+the pending primary-intent pipeline and ordinarily resolves on the actor's
+stored initiative turn. The sole response-order exception is a ready hostile
+ability containing an interrupt component whose target already has a committed
+`casting` or `channeling` intent. That action is placed immediately before its
+target for the step; a merely `queued` target is immune and grants no priority.
 
 A windup occupies the primary action according to
 `consumes_primary_action_while_casting`. Completing it resolves the ordered
@@ -921,8 +944,11 @@ The ability-aware encounter round follows this shape:
 load encounter and lock participants
 increment round number
 resolve round_start effects
+derive primary order from persisted encounter order
+place each ready hostile interrupt immediately before its committed target
+preserve persisted relative order for equal interrupt placements
 
-for each participant in persisted encounter order:
+for each participant in derived primary order:
   action = pending_primary_intent or default_auto_attack
   if the participant's committed intent was interrupted earlier this step:
     action = default_auto_attack if legal
@@ -930,7 +956,8 @@ for each participant in persisted encounter order:
     emit private failure
     action = default_auto_attack if legal
   resolve action components
-  interrupt components may clear another locked participant's committed intent
+  interrupt components may clear the locked target's committed intent when
+  their application condition succeeds
   clear consumed pending intent
   stop if encounter ended
 
