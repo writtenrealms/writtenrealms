@@ -446,6 +446,11 @@ turn when one is legal. The default cooldown does not start. If the ability uses
 `cooldown.trigger: on_cast`, its already-started cooldown continues after the
 interrupt, preventing another attempt until it expires.
 
+Interrupt messages identify the canceled ability by its display name, captured
+when its cast begins, and show that name in bold and the primary color. This is
+the interrupted ability's name, separate from the interrupt component's label.
+The action word **interrupt** or **interrupts** receives the same emphasis.
+
 A ready hostile ability containing an interrupt component receives narrow
 primary-action priority when it is already pending as the step's primary order
 is derived and its target has a committed `casting` or `channeling` intent. The

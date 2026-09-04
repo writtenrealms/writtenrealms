@@ -25,6 +25,7 @@ INTERRUPTIBLE_ABILITY_INTENT_STATUSES = frozenset(
 class InterruptibleAbilityIntent:
     slug: str
     status: str
+    name: str = ""
 
     @property
     def phase(self) -> str:
@@ -48,6 +49,7 @@ def interruptible_ability_intent(
     return InterruptibleAbilityIntent(
         slug=str(pending.get("ability") or "").strip().lower(),
         status=str(pending.get("status") or "").strip().lower(),
+        name=str(pending.get("ability_name") or ""),
     )
 
 

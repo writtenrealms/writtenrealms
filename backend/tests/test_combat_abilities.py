@@ -20,6 +20,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from spawns.actions.combat import (
     CombatStepResult,
+    _combat_interrupt_events,
     _execute_pending_mob_ability,
     _start_mob_ability_cooldown,
     _with_ability_prepare_transition,
@@ -369,10 +370,12 @@ class TestCombatAbilities(WorldTestCase):
             with self.subTest(status=status):
                 intent = interruptible_ability_intent({
                     "ability": "long-action",
+                    "ability_name": "Long Action",
                     "status": status,
                 })
                 self.assertIsNotNone(intent)
                 self.assertEqual(intent.slug, "long-action")
+                self.assertEqual(intent.name, "Long Action")
                 self.assertEqual(intent.phase, phase)
 
         for status in ("queued", "", None):
@@ -800,6 +803,7 @@ class TestCombatAbilities(WorldTestCase):
             encounter.pending_mob_ability,
             {
                 "ability": "mob-leg-irons",
+                "ability_name": "Leg Irons",
                 "command": "mob-leg-irons",
                 "target": {"type": "player", "id": self.player.id},
                 "queued_round": 1,
@@ -937,14 +941,48 @@ class TestCombatAbilities(WorldTestCase):
             interrupts[0]["data"]["interrupted_ability"],
             {
                 "slug": mob_ability.slug,
+                "name": mob_ability.name,
                 "status": "casting",
                 "phase": "cast",
             },
         )
         self.assertEqual(
+            interrupts[0]["text"],
+            "You interrupt a hexer's cast of Mob Hex.",
+        )
+        self.assertEqual(
             interrupts[0]["data"]["round_id"],
             f"encounter:{encounter.id}:1",
         )
+
+    def test_interrupt_reuses_cast_name_without_ability_definition_queries(self):
+        kick = self._kick_ability()
+        mob, ability = self._mob_with_cast_ability()
+        for status, phase in (("casting", "cast"), ("channeling", "channel")):
+            interrupted = interruptible_ability_intent({
+                "ability": ability.slug,
+                "ability_name": ability.name,
+                "status": status,
+            })
+            for actor, target, expected in (
+                (self.player, mob, f"You interrupt a hexer's {phase} of Mob Hex."),
+                (mob, self.player, f"A hexer interrupts your {phase} of Mob Hex."),
+            ):
+                with self.subTest(status=status, actor=actor.key):
+                    with CaptureQueriesContext(connection) as queries:
+                        events = _combat_interrupt_events(
+                            actor=actor, target=target, ability=kick,
+                            interrupted=interrupted, round_id="test:interrupt",
+                        )
+                    self.assertEqual(len(events), 1)
+                    self.assertEqual(events[0].text, expected)
+                    self.assertEqual(
+                        events[0].data["interrupted_ability"]["name"], ability.name,
+                    )
+                    self.assertFalse(any(
+                        'FROM "builders_abilitydefinition"' in query["sql"]
+                        for query in queries
+                    ))
 
     def _resolve_ability_round(self, encounter):
         # Make each scheduled round due without relying on wall-clock sleeps.
@@ -976,6 +1014,7 @@ class TestCombatAbilities(WorldTestCase):
         self._resolve_ability_round(encounter)
         mob.refresh_from_db()
         self.assertEqual(encounter.pending_mob_ability["status"], "casting")
+        self.assertEqual(encounter.pending_mob_ability["ability_name"], ability.name)
         self.assertEqual(mob.ability_cooldowns, {ability.slug: 3})
         self.assertEqual(mob.energy, 10)
 

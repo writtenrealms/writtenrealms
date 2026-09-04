@@ -32,6 +32,7 @@ import { computed, onMounted, onUnmounted, onUpdated, ref } from 'vue';
 import { useStore } from 'vuex';
 import _ from "lodash";
 import BuilderStats from "@/components/game/console/BuilderStats.vue";
+import AbilityCastMessage from "@/components/game/console/AbilityCastMessage.vue";
 import AbilityTrainingList from "@/components/game/console/AbilityTrainingList.vue";
 import Chat from '@/components/game/console/Chat.vue';
 import CombatMessage from '@/components/game/console/CombatMessage.vue';
@@ -140,6 +141,10 @@ const consoleMessage = (message) => {
 
   if (type === "notification.combat.attack" ||
       type === "notification.combat.healing") return CombatMessage;
+
+  if (type === "notification.combat.ability_interrupted" ||
+      (type === "notification.combat.ability_casting" &&
+       message.data?.actor?.char_type === "mob")) return AbilityCastMessage;
 
   return Message;
 }

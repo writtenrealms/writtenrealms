@@ -3479,6 +3479,19 @@ def _combat_interrupt_events(
     interrupted: InterruptibleAbilityIntent,
     round_id: str,
 ) -> list[GameEvent]:
+    interrupted_name = interrupted.name
+    if not interrupted_name and interrupted.slug:
+        # Casts already in progress may not have captured their display name.
+        interrupted_name = (
+            AbilityDefinition.objects.filter(
+                world_id=ability.world_id,
+                slug=interrupted.slug,
+            ).values_list("name", flat=True).first()
+            or ""
+        )
+    interrupted_label = interrupted.phase
+    if interrupted_name:
+        interrupted_label += f" of {interrupted_name}"
     actor_payload = _combat_state_payload(
         _combat_actor_payload(actor),
         target_payload=_combat_actor_payload(target),
@@ -3496,6 +3509,7 @@ def _combat_interrupt_events(
         "target": target_payload,
         "interrupted_ability": {
             "slug": interrupted.slug,
+            "name": interrupted_name,
             "status": interrupted.status,
             "phase": interrupted.phase,
         },
@@ -3510,7 +3524,7 @@ def _combat_interrupt_events(
                 type="notification.combat.ability_interrupted",
                 recipients=[actor.key],
                 data=data,
-                text=f"You interrupt {_possessive(target_name)} {interrupted.phase}.",
+                text=f"You interrupt {_possessive(target_name)} {interrupted_label}.",
             )
         )
     if isinstance(target, Player) and not (
@@ -3523,7 +3537,7 @@ def _combat_interrupt_events(
                 data=data,
                 text=(
                     f"{safe_capitalize(actor_name)} interrupts your "
-                    f"{interrupted.phase}."
+                    f"{interrupted_label}."
                 ),
             )
         )
@@ -5606,6 +5620,7 @@ def _execute_pending_player_ability(
         next_remaining = cast_rounds_remaining - 1
         encounter.pending_player_ability = {
             **pending,
+            "ability_name": ability.name,
             "status": ABILITY_INTENT_STATUS_CASTING,
             "cast_rounds_remaining": next_remaining,
         }
@@ -5868,6 +5883,7 @@ def _execute_pending_mob_ability(
         next_remaining = cast_rounds_remaining - 1
         encounter.pending_mob_ability = {
             **pending,
+            "ability_name": ability.name,
             "status": ABILITY_INTENT_STATUS_CASTING,
             "cast_rounds_remaining": next_remaining,
         }

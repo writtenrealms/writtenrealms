@@ -1024,6 +1024,7 @@ class DuelCombatTests(WorldTestCase):
 
         caster.refresh_from_db()
         self.assertEqual(caster.pending_ability["status"], "casting")
+        self.assertEqual(caster.pending_ability["ability_name"], slow_cast.name)
         self.assertEqual(caster.pending_ability["cast_rounds_remaining"], 0)
         self.opponent.refresh_from_db()
         self.assertEqual(
@@ -1082,8 +1083,20 @@ class DuelCombatTests(WorldTestCase):
         self.assertTrue(
             all(
                 event.data["interrupted_ability"]["slug"] == slow_cast.slug
+                and event.data["interrupted_ability"]["name"] == slow_cast.name
                 for event in interrupted_events
             )
+        )
+        interrupt_text_by_recipient = {
+            event.recipients[0]: event.text for event in interrupted_events
+        }
+        self.assertEqual(
+            interrupt_text_by_recipient[self.player.key],
+            f"You interrupt {self.opponent.name}'s cast of Slow Cast.",
+        )
+        self.assertEqual(
+            interrupt_text_by_recipient[self.opponent.key],
+            f"{self.player.name} interrupts your cast of Slow Cast.",
         )
         self.assertFalse(
             any(

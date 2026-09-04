@@ -94,6 +94,12 @@ remaining cooldown running, giving you time before the next attempt. When the
 interrupted combatant's turn arrives, they use their basic attack instead if
 one is legal.
 
+When a mob charges an ability, the combat log shows **charges** and the ability
+name in bold and the primary color. Later charging rounds highlight
+**continues charging** the same way. Interrupt messages highlight **interrupt**
+or **interrupts** alongside the canceled ability, for example,
+"You **interrupt** Tigranes the spear-bearer's cast of **Crush**."
+
 For example, **Kick** is a zero-windup attack with a 12-round cooldown. It deals
 0.25x physical damage and interrupts the target when the hit lands. If you
 prepare Kick while that target already has a committed cast or channel, Kick
