@@ -797,13 +797,17 @@ If the ability is invalid at resolution time, the baseline behavior should be:
 3. do not charge the ability cost
 4. do not start the ability cooldown
 
+An opted-in `on_cast` cooldown that already began at commitment is retained
+when later validation fails; it is not refunded or restarted.
+
 This keeps early WR2 combat forgiving and avoids turns disappearing because of
 ordinary multiplayer timing races.
 
 An explicit interrupt follows the same forgiving fallback rule. A ready
 hostile interrupt gets primary-action priority immediately before its committed
 target, then clears the victim's ability if its application condition succeeds.
-That ability pays no cost and starts no cooldown. On the victim's turn, the
+That ability pays no cost and starts no new cooldown. An existing `on_cast`
+cooldown continues. On the victim's turn, the
 resolver falls back to a basic attack when one is legal. The interrupting
 ability resolves its own cost and cooldown normally. An `on_hit` interrupt that
 misses or is dodged leaves the committed ability intact to resolve on that turn.
@@ -819,6 +823,25 @@ Recommended defaults:
 - pay cost when the ability resolves
 - start cooldown when the ability resolves
 - do not pay cost or start cooldown if the ability falls back before resolving
+
+Abilities and per-mob loadout overrides also support `trigger: on_cast`.
+This policy starts cooldown once when a queued intent first commits to its
+windup, or when a zero-windup ability executes. Command submission, failed mob
+chance rolls, and unselected loadout entries do not start it. The cooldown is
+excluded from decrement on its starting round, then advances during subsequent
+rounds, including windup. Completion, interruption, stun, or a later validation
+failure does not restart or refund it. Costs remain payable only on resolution.
+
+The pending intent records `cast_cooldown_started` so subsequent windup and
+resolution can bypass their own active cooldown without starting it again,
+even if the cooldown expires before the windup ends. New attempts still pass
+the normal cooldown gate. Player PvE, duels, and mobs share this timing.
+
+This uses the actor's existing cooldown JSON and the locked pending intent,
+with no new timers, jobs, tables, or catalog queries. Committing a windup adds
+one actor-row update to persist the cooldown; subsequent rounds reuse existing
+cooldown decrement writes. A query regression test compares mob commitment
+against `on_resolve` and verifies this single update with no additional reads.
 
 Cooldowns should be expressed in logical combat rounds:
 
@@ -868,8 +891,9 @@ target for the step; a merely `queued` target is immune and grants no priority.
 A windup occupies the primary action according to
 `consumes_primary_action_while_casting`. Completing it resolves the ordered
 component list. An interrupt clears the committed intent before resolution;
-the victim's cost and cooldown remain unpaid and unstarted, and its turn falls
-back to a legal basic attack. The resolver must also suppress immediate special
+the victim's cost remains unpaid and no new cooldown starts. A previously
+started `on_cast` cooldown continues. Its turn falls back to a legal basic
+attack. The resolver must also suppress immediate special
 ability reselection for that actor during the same turn.
 
 Channels remain future work. A channel should be represented as repeated
@@ -1156,7 +1180,8 @@ pre-normalized data.
 - resolve damage abilities through existing `resolve_attack`
 - resolve healing abilities through the combat formula result shape
 - pay simple resource costs at resolution time
-- start simple round-based cooldowns at resolution time
+- start round-based cooldowns at resolution by default, with optional `on_hit`
+  or `on_cast` timing
 - support simple cast-time windups with `cast_time.rounds`
 - support explicit interrupts of committed casts, with ordered `on_resolve` and
   `on_hit` application

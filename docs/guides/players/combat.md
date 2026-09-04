@@ -87,8 +87,12 @@ an active cast is the narrow exception described below.
 Once a windup begins, its ability is committed and is shown as casting. An
 interrupt can cancel that committed cast, but it cannot cancel an ability that
 is only queued and can still be replaced by its owner. The interrupted ability
-spends no resource and starts no cooldown. When the interrupted combatant's
-turn arrives, they use their basic attack instead if one is legal.
+spends no resource. Most abilities start their cooldown when they finish, so
+interrupting them leaves them ready to try again next round. Some abilities
+start their cooldown when casting begins; interrupting one of these leaves its
+remaining cooldown running, giving you time before the next attempt. When the
+interrupted combatant's turn arrives, they use their basic attack instead if
+one is legal.
 
 For example, **Kick** is a zero-windup attack with a 12-round cooldown. It deals
 0.25x physical damage and interrupts the target when the hit lands. If you

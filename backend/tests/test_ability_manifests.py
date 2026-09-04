@@ -612,6 +612,60 @@ spec:
             expected,
         )
 
+    def test_cast_cooldown_round_trips_for_ability_and_mob_override(self):
+        ability_manifest = {
+            "kind": "ability",
+            "metadata": {"slug": "crush", "name": "Crush"},
+            "spec": {
+                "command": {"verbs": ["crush"]},
+                "cast_time": {"rounds": 1},
+                "cooldown": {"rounds": 7, "trigger": "on_cast"},
+                "components": [{"type": "damage", "profile": "basic_physical"}],
+            },
+        }
+        mob_manifest = {
+            "kind": "mobdefinition",
+            "metadata": {"slug": "spear-bearer", "name": "a spear-bearer"},
+            "spec": {"combat": {"abilities": [{
+                "ability": "crush", "weight": 1, "chance": 50,
+                "cooldown": {"rounds": 4, "trigger": "on_cast"},
+            }]}},
+        }
+        for manifest in (ability_manifest, mob_manifest):
+            response = self.client.post(
+                self.apply_ep, {"manifest": yaml.safe_dump(manifest)}, format="json",
+            )
+            self.assertEqual(response.status_code, 201, response.data)
+
+        response = self.client.get(self.export_ep)
+        self.assertEqual(response.status_code, 200, response.data)
+        exported = {
+            document["kind"]: document
+            for document in yaml.safe_load_all(response.data["yaml"])
+            if document and document["kind"] in {"ability", "mobdefinition"}
+        }
+        self.assertEqual(
+            exported["ability"]["spec"]["cooldown"],
+            ability_manifest["spec"]["cooldown"],
+        )
+        self.assertEqual(
+            exported["mobdefinition"]["spec"]["combat"]["abilities"],
+            mob_manifest["spec"]["combat"]["abilities"],
+        )
+        for document in exported.values():
+            response = self.client.post(
+                self.apply_ep, {"manifest": yaml.safe_dump(document)}, format="json",
+            )
+            self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(
+            AbilityDefinition.objects.get(world=self.world, slug="crush").cooldown,
+            ability_manifest["spec"]["cooldown"],
+        )
+        self.assertEqual(
+            MobDefinition.objects.get(world=self.world, slug="spear-bearer").combat_abilities,
+            mob_manifest["spec"]["combat"]["abilities"],
+        )
+
     def test_mob_definition_manifest_rejects_invalid_combat_ability_chance(self):
         self._create_ability(
             slug="shadow-bolt",
@@ -649,7 +703,7 @@ spec:
         invalid_cooldowns = (
             ("2", "cooldown must be a mapping"),
             ("{rounds: -1}", "cooldown.rounds must be non-negative"),
-            ("{trigger: on_cast}", "cooldown.trigger must be one of"),
+            ("{trigger: on_queue}", "cooldown.trigger must be one of"),
             ("{seconds: 10}", "Unsupported spec.combat.abilities[0].cooldown"),
         )
         for cooldown, expected_error in invalid_cooldowns:

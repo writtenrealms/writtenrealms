@@ -13,6 +13,7 @@ from django.utils import timezone
 from builders.models import AbilityDefinition
 from config import constants as adv_consts
 from core.abilities import (
+    COOLDOWN_TRIGGERS,
     ability_allows_actor,
     definition_world,
     max_known_abilities_for_world,
@@ -1162,7 +1163,7 @@ def cooldown_remaining(player: Player, ability: AbilityDefinition) -> int:
 
 def cooldown_trigger(ability: AbilityDefinition) -> str:
     trigger = str((ability.cooldown or {}).get("trigger") or "on_resolve").strip().lower()
-    if trigger not in {"on_resolve", "on_hit"}:
+    if trigger not in COOLDOWN_TRIGGERS:
         return "on_resolve"
     return trigger
 
@@ -1194,11 +1195,15 @@ def start_ability_cooldown(
     ability: AbilityDefinition,
     *,
     hit_landed: bool = False,
+    on_cast: bool = False,
 ) -> bool:
     rounds = int((ability.cooldown or {}).get("rounds") or 0)
     if rounds <= 0:
         return False
-    if cooldown_trigger(ability) == "on_hit" and not hit_landed:
+    trigger = cooldown_trigger(ability)
+    if (trigger == "on_cast") != on_cast:
+        return False
+    if trigger == "on_hit" and not hit_landed:
         return False
     cooldowns = _cooldowns(player)
     cooldowns[ability.slug] = rounds
@@ -1872,6 +1877,7 @@ class AbilityAction:
 
         validate_ability_ready(player, ability)
         paid = pay_ability_cost(player, ability)
+        cooldown_started = start_ability_cooldown(player, ability, on_cast=True)
 
         stats = compute_stats(player.level, player.archetype, char=player, world=player.world)
         health_max = max(1, int(stats.get("health_max") or 1))
@@ -1942,7 +1948,7 @@ class AbilityAction:
                 )
             )
 
-        cooldown_started = start_ability_cooldown(player, ability)
+        cooldown_started = start_ability_cooldown(player, ability) or cooldown_started
         update_fields = ["health"]
         if paid:
             update_fields.append((ability.cost or {}).get("resource") or "energy")

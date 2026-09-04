@@ -1973,9 +1973,16 @@ primary order is derived is placed immediately before its committed target's
 primary action for the current resolution step, regardless of stored
 initiative. This priority does not mutate stored order, and multiple interrupts
 competing for the same placement retain their relative stored order. Clearing a
-committed intent leaves its resource cost unpaid and its cooldown unstarted;
+committed intent leaves its resource cost unpaid and starts no new cooldown;
 when that actor's turn arrives, it falls back to a legal basic attack instead of
 selecting another special ability during the same turn.
+
+Ability `spec.cooldown` and per-mob `spec.combat.abilities[].cooldown` accept
+`trigger: on_cast` alongside `on_resolve` and `on_hit`. It starts cooldown when
+the windup commits (or a zero-windup ability executes), and interruption keeps
+that cooldown running. It does not start on queueing or a failed chance roll,
+and resolution does not restart it. Loadout overrides merge `rounds` and
+`trigger` independently with the ability definition; `rounds: 0` disables it.
 
 Interrupt ordering, resolution, and mutation use the target's pending intent
 from participant state already locked for the encounter step. They do not scan

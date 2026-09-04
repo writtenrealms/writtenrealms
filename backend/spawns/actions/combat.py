@@ -3668,6 +3668,7 @@ def _start_mob_ability_cooldown(
     *,
     cooldown_override: dict[str, Any] | None = None,
     hit_landed: bool = False,
+    on_cast: bool = False,
 ) -> bool:
     ability_cooldown = ability.cooldown if isinstance(ability.cooldown, dict) else {}
     cooldown = dict(ability_cooldown)
@@ -3682,6 +3683,8 @@ def _start_mob_ability_cooldown(
     if rounds <= 0:
         return False
     trigger = str(cooldown.get("trigger") or "on_resolve").strip().lower()
+    if (trigger == "on_cast") != on_cast:
+        return False
     if trigger == "on_hit" and not hit_landed:
         return False
     cooldowns = _mob_ability_cooldowns(mob)
@@ -5554,8 +5557,10 @@ def _execute_pending_player_ability(
             )
         ], AbilityRoundResult(consumed_primary=False)
 
+    # A committed cast may continue through the cooldown it started itself.
+    cast_cooldown_started = bool(pending.get("cast_cooldown_started"))
     remaining = cooldown_remaining(player, ability)
-    if remaining > 0:
+    if remaining > 0 and not cast_cooldown_started:
         return [
             _combat_failure_event(
                 player,
@@ -5592,6 +5597,12 @@ def _execute_pending_player_ability(
 
     cast_rounds_remaining = _pending_cast_rounds_remaining(pending, ability)
     if cast_rounds_remaining > 0:
+        cooldown_started = not cast_cooldown_started and start_ability_cooldown(
+            player, ability, on_cast=True,
+        )
+        if cooldown_started:
+            pending["cast_cooldown_started"] = True
+            player.save(update_fields=["ability_cooldowns"])
         next_remaining = cast_rounds_remaining - 1
         encounter.pending_player_ability = {
             **pending,
@@ -5622,7 +5633,8 @@ def _execute_pending_player_ability(
                 )
             )
         return casting_events, AbilityRoundResult(
-            consumed_primary=_ability_consumes_primary_action_while_casting(ability)
+            consumed_primary=_ability_consumes_primary_action_while_casting(ability),
+            cooldown_exclude=ability.slug if cooldown_started else None,
         )
 
     try:
@@ -5632,6 +5644,9 @@ def _execute_pending_player_ability(
             _combat_failure_event(player, err.message, code=err.code)
         ], AbilityRoundResult(consumed_primary=False)
 
+    cooldown_started = not cast_cooldown_started and start_ability_cooldown(
+        player, ability, on_cast=True,
+    )
     events: list[GameEvent] = []
     hit_landed = False
     health_changed = False
@@ -5786,7 +5801,7 @@ def _execute_pending_player_ability(
         player,
         ability,
         hit_landed=hit_landed,
-    )
+    ) or cooldown_started
     update_fields: list[str] = []
     if cost_paid:
         resource = str((ability.cost or {}).get("resource") or "").strip().lower()
@@ -5824,7 +5839,11 @@ def _execute_pending_mob_ability(
     if not ability:
         return [], AbilityRoundResult(consumed_primary=False)
 
-    if _mob_ability_cooldown_remaining(target_mob, ability) > 0:
+    cast_cooldown_started = bool(pending.get("cast_cooldown_started"))
+    if (
+        _mob_ability_cooldown_remaining(target_mob, ability) > 0
+        and not cast_cooldown_started
+    ):
         return [], AbilityRoundResult(consumed_primary=False)
 
     target = pending.get("target") or {}
@@ -5837,6 +5856,15 @@ def _execute_pending_mob_ability(
 
     cast_rounds_remaining = _pending_cast_rounds_remaining(pending, ability)
     if cast_rounds_remaining > 0:
+        cooldown_started = not cast_cooldown_started and _start_mob_ability_cooldown(
+            target_mob,
+            ability,
+            cooldown_override=pending.get("cooldown"),
+            on_cast=True,
+        )
+        if cooldown_started:
+            pending["cast_cooldown_started"] = True
+            target_mob.save(update_fields=["ability_cooldowns"])
         next_remaining = cast_rounds_remaining - 1
         encounter.pending_mob_ability = {
             **pending,
@@ -5852,13 +5880,20 @@ def _execute_pending_mob_ability(
                 rounds_remaining=next_remaining,
             )
         ], AbilityRoundResult(
-            consumed_primary=_ability_consumes_primary_action_while_casting(ability)
+            consumed_primary=_ability_consumes_primary_action_while_casting(ability),
+            cooldown_exclude=ability.slug if cooldown_started else None,
         )
 
     paid_resource = _pay_mob_ability_cost(target_mob, ability)
     if paid_resource is None and not _mob_can_pay_ability_cost(target_mob, ability):
         return [], AbilityRoundResult(consumed_primary=False)
 
+    cooldown_started = not cast_cooldown_started and _start_mob_ability_cooldown(
+        target_mob,
+        ability,
+        cooldown_override=pending.get("cooldown"),
+        on_cast=True,
+    )
     events: list[GameEvent] = []
     hit_landed = False
     health_changed = False
@@ -5990,7 +6025,7 @@ def _execute_pending_mob_ability(
         ability,
         cooldown_override=pending.get("cooldown"),
         hit_landed=hit_landed,
-    )
+    ) or cooldown_started
     update_fields: list[str] = []
     if paid_resource:
         update_fields.append(paid_resource)

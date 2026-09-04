@@ -572,7 +572,7 @@ Each loadout entry supports:
 - `weight`: optional positive integer. Higher weights make the ability more
   likely when multiple entries pass their chance rolls.
 - `cooldown`: optional per-mob override using `rounds` and, optionally,
-  `trigger: on_resolve` or `trigger: on_hit`. Omitted fields inherit from the
+  `trigger: on_resolve`, `trigger: on_hit`, or `trigger: on_cast`. Omitted fields inherit from the
   ability definition. Set `rounds: 0` to disable the ability's default
   cooldown for this mob.
 - `when`: optional WR2 condition DSL gate. Use this for health thresholds,
@@ -585,6 +585,29 @@ among the entries that passed. If none pass, the mob uses its normal basic
 attack. A failed chance roll does not start the ability cooldown, so the mob can
 try again on its next turn. Cooldown overrides affect only that mob definition;
 they do not alter the reusable ability or player cooldowns.
+
+For an interruptible boss attack, use `on_cast` so beginning the windup spends
+that opportunity even when a player interrupts it:
+
+```yaml
+combat:
+  abilities:
+    - ability: mob-crush
+      chance: 50
+      weight: 1
+      cooldown:
+        rounds: 8
+        trigger: on_cast
+```
+
+The cooldown starts only after the entry is eligible, passes its chance roll,
+and is selected to begin casting. It keeps its full value on that turn and
+decreases at the end of subsequent rounds, including rounds spent casting.
+Interrupting cancels the cast but leaves the cooldown running; completing the
+cast does not restart it. With zero windup, it starts when the ability executes.
+A cooldown started in round 1 with `rounds: 8` allows another attempt in round
+10. Include the cast's windup when choosing the duration. The ordinary
+`on_resolve` and `on_hit` policies still start no cooldown for interrupted casts.
 
 Example self-heal that only becomes eligible when the mob is wounded:
 

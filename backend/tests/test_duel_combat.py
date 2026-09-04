@@ -915,6 +915,12 @@ class DuelCombatTests(WorldTestCase):
         )
 
     def test_kick_interrupts_duel_cast_and_hostile_cast_is_visible(self):
+        self._assert_kick_interrupts_duel_cast(cooldown_trigger="on_resolve")
+
+    def test_kick_preserves_duel_cast_cooldown(self):
+        self._assert_kick_interrupts_duel_cast(cooldown_trigger="on_cast")
+
+    def _assert_kick_interrupts_duel_cast(self, *, cooldown_trigger):
         kick = self._grant_ability(
             slug="kick",
             name="Kick",
@@ -955,7 +961,7 @@ class DuelCombatTests(WorldTestCase):
             requirements={},
             cost={"resource": "energy", "amount": 5, "calc": "fixed"},
             cast_time={"rounds": 1},
-            cooldown={"rounds": 7},
+            cooldown={"rounds": 7, "trigger": cooldown_trigger},
             components=[
                 {
                     "type": "damage",
@@ -1019,6 +1025,11 @@ class DuelCombatTests(WorldTestCase):
         caster.refresh_from_db()
         self.assertEqual(caster.pending_ability["status"], "casting")
         self.assertEqual(caster.pending_ability["cast_rounds_remaining"], 0)
+        self.opponent.refresh_from_db()
+        self.assertEqual(
+            self.opponent.ability_cooldowns.get(slow_cast.slug, 0),
+            7 if cooldown_trigger == "on_cast" else 0,
+        )
         hostile_cast_events = [
             event
             for event in charge_result.events
@@ -1054,7 +1065,10 @@ class DuelCombatTests(WorldTestCase):
         self.assertEqual(encounter.initiative_order, initiative_order)
         self.assertEqual(caster.pending_ability, {})
         self.assertEqual(self.player.ability_cooldowns.get(kick.slug), 12)
-        self.assertNotIn(slow_cast.slug, self.opponent.ability_cooldowns)
+        self.assertEqual(
+            self.opponent.ability_cooldowns.get(slow_cast.slug, 0),
+            6 if cooldown_trigger == "on_cast" else 0,
+        )
         self.assertEqual(self.opponent.energy, opponent_energy_before)
         interrupted_events = [
             event

@@ -441,8 +441,10 @@ component has a stable contract when channels are implemented, but builders
 cannot author or execute channel abilities yet.
 
 Interrupting clears the victim's committed ability before it resolves. The
-victim pays none of that ability's cost, starts none of its cooldown, and falls
-back to a basic attack on its turn when one is legal.
+victim pays none of that ability's cost and falls back to a basic attack on its
+turn when one is legal. The default cooldown does not start. If the ability uses
+`cooldown.trigger: on_cast`, its already-started cooldown continues after the
+interrupt, preventing another attempt until it expires.
 
 A ready hostile ability containing an interrupt component receives narrow
 primary-action priority when it is already pending as the step's primary order
@@ -541,6 +543,35 @@ cooldown:
   rounds: 6
   trigger: on_hit
 ```
+
+Use `trigger: on_cast` for an ability whose cooldown should begin as soon as its
+windup commits, even if it is later interrupted or stunned:
+
+```yaml
+cast_time:
+  rounds: 1
+cooldown:
+  rounds: 8
+  trigger: on_cast
+```
+
+Queueing or replacing an ability does not start this cooldown. It begins on the
+first casting turn, keeps its full value for that turn, and counts down at the
+end of each subsequent combat round, including windup rounds. The committed
+cast can still finish while its own cooldown is running. Finishing, canceling,
+or failing later does not restart or refund it. Resource costs are still paid
+only at resolution.
+
+For example, an eight-round cooldown started in round 1 prevents a new attempt
+in rounds 2–9; the ability becomes eligible again in round 10. An interrupt in
+round 2 cancels that cast but leaves the remaining cooldown running. Choose a
+duration that includes the windup: if the cooldown expires during a long cast,
+the ability can be attempted again on the turn after that cast ends.
+
+With zero windup, `on_cast` starts when the ability executes, regardless of
+whether it hits. Out-of-combat self abilities execute immediately and start
+their `on_cast` cooldown then. Mobs can override the cooldown trigger and
+duration in their [combat ability loadout](./mob-definition-builder-guide.md#combat-ability-loadouts).
 
 ## Damage Abilities
 

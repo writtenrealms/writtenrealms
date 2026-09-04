@@ -15,9 +15,12 @@ from core.combat_formulas import CombatAttackResult, normalize_combat_system, re
 from core.computations import compute_stats
 from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_value
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from spawns.actions.combat import (
     CombatStepResult,
+    _execute_pending_mob_ability,
     _start_mob_ability_cooldown,
     _with_ability_prepare_transition,
 )
@@ -217,13 +220,13 @@ class TestCombatAbilities(WorldTestCase):
             ],
         )
 
-    def _mob_with_cast_ability(self):
+    def _mob_with_cast_ability(self, *, cast_rounds=1, cooldown=None, loadout=None):
         ability = self._ability(
             slug="mob-hex",
             name="Mob Hex",
             verbs=["mobhex"],
-            cast_time={"rounds": 1},
-            cooldown={"rounds": 7},
+            cast_time={"rounds": cast_rounds},
+            cooldown=cooldown if cooldown is not None else {"rounds": 7},
             components=[
                 {
                     "type": "damage",
@@ -245,7 +248,7 @@ class TestCombatAbilities(WorldTestCase):
                 "weapon_damage": 0,
                 "fights_back": True,
             },
-            combat_abilities=[{"ability": ability.slug, "weight": 1}],
+            combat_abilities=[{"ability": ability.slug, "weight": 1, **(loadout or {})}],
         )
         return definition.spawn(self.room, self.spawn_world), ability
 
@@ -941,6 +944,165 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(
             interrupts[0]["data"]["round_id"],
             f"encounter:{encounter.id}:1",
+        )
+
+    def _resolve_ability_round(self, encounter):
+        # Make each scheduled round due without relying on wall-clock sleeps.
+        CombatEncounter.objects.filter(pk=encounter.pk).update(next_resolution_ts=None)
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as messages:
+                resolve_combat_encounter(encounter.id)
+        encounter.refresh_from_db()
+        return messages
+
+    def test_kick_preserves_mob_cast_cooldown_until_next_opportunity(self):
+        kick = self._kick_ability()
+        self.player.known_abilities = [kick.slug]
+        self.player.save(update_fields=["known_abilities"])
+        mob, ability = self._mob_with_cast_ability(
+            cooldown={"rounds": 0},
+            loadout={"cooldown": {"rounds": 3, "trigger": "on_cast"}},
+        )
+        ability.cost = {"resource": "energy", "amount": 5}
+        ability.save(update_fields=["cost"])
+        mob.energy = 10
+        mob.save(update_fields=["energy"])
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world, room=self.room, player=self.player, mob=mob,
+            resolution_interval=1,
+            initiative_order=self._mob_first_initiative(mob),
+        )
+
+        self._resolve_ability_round(encounter)
+        mob.refresh_from_db()
+        self.assertEqual(encounter.pending_mob_ability["status"], "casting")
+        self.assertEqual(mob.ability_cooldowns, {ability.slug: 3})
+        self.assertEqual(mob.energy, 10)
+
+        AbilityAction().execute(
+            self.player.id, ability=kick, command=kick.slug, args=[],
+        )
+        messages = self._resolve_ability_round(encounter)
+        mob.refresh_from_db()
+        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(mob.ability_cooldowns, {ability.slug: 2})
+        self.assertEqual(mob.energy, 10)
+        self.assertEqual(len(self._messages_by_type(
+            messages, "notification.combat.ability_interrupted",
+        )), 1)
+
+        for remaining in (1, 0):
+            self._resolve_ability_round(encounter)
+            mob.refresh_from_db()
+            self.assertEqual(encounter.pending_mob_ability, {})
+            self.assertEqual(mob.ability_cooldowns.get(ability.slug, 0), remaining)
+
+        self._resolve_ability_round(encounter)
+        mob.refresh_from_db()
+        self.assertEqual(encounter.pending_mob_ability["status"], "casting")
+        self.assertEqual(mob.ability_cooldowns, {ability.slug: 3})
+        ability.refresh_from_db()
+        self.assertEqual(ability.cooldown, {"rounds": 0})
+
+    def test_mob_cast_finishes_without_restarting_inherited_cast_cooldown(self):
+        mob, ability = self._mob_with_cast_ability(
+            cast_rounds=2,
+            cooldown={"rounds": 7, "trigger": "on_cast"},
+            loadout={"cooldown": {"rounds": 4}},
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world, room=self.room, player=self.player, mob=mob,
+        )
+        for remaining in (4, 3, 2):
+            messages = self._resolve_ability_round(encounter)
+            mob.refresh_from_db()
+            self.assertEqual(mob.ability_cooldowns, {ability.slug: remaining})
+        self.assertEqual(encounter.pending_mob_ability, {})
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(len([
+            attack for attack in attacks if attack["data"]["attack"] == ability.slug
+        ]), 1)
+
+    def test_mob_cast_cooldown_does_not_start_on_failed_chance_or_ineligibility(self):
+        mob, ability = self._mob_with_cast_ability(
+            cooldown={"rounds": 5, "trigger": "on_cast"},
+            loadout={"chance": 50},
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world, room=self.room, player=self.player, mob=mob,
+        )
+        with patch("spawns.actions.combat.random.randint", return_value=51):
+            self._resolve_ability_round(encounter)
+        mob.refresh_from_db()
+        self.assertEqual(mob.ability_cooldowns, {})
+        self.assertEqual(encounter.pending_mob_ability, {})
+
+        ability.cost = {"resource": "energy", "amount": 1000}
+        ability.save(update_fields=["cost"])
+        with patch("spawns.actions.combat.random.randint", return_value=1):
+            self._resolve_ability_round(encounter)
+        mob.refresh_from_db()
+        self.assertEqual(mob.ability_cooldowns, {})
+        self.assertEqual(encounter.pending_mob_ability, {})
+
+    def test_instant_mob_ability_starts_cast_cooldown(self):
+        mob, ability = self._mob_with_cast_ability(
+            cast_rounds=0, cooldown={"rounds": 4, "trigger": "on_cast"},
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world, room=self.room, player=self.player, mob=mob,
+        )
+        messages = self._resolve_ability_round(encounter)
+        mob.refresh_from_db()
+        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(mob.ability_cooldowns, {ability.slug: 4})
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertTrue(any(attack["data"]["attack"] == ability.slug for attack in attacks))
+
+    def test_mob_loadout_can_disable_inherited_cast_cooldown(self):
+        mob, ability = self._mob_with_cast_ability(
+            cooldown={"rounds": 7, "trigger": "on_cast"},
+            loadout={"cooldown": {"rounds": 0}},
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world, room=self.room, player=self.player, mob=mob,
+        )
+        for _ in range(2):
+            self._resolve_ability_round(encounter)
+            mob.refresh_from_db()
+            self.assertEqual(mob.ability_cooldowns, {})
+        self.assertEqual(encounter.pending_mob_ability, {})
+
+    def test_mob_cast_commit_adds_only_one_actor_update_and_no_reads(self):
+        mob, ability = self._mob_with_cast_ability()
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world, room=self.room, player=self.player, mob=mob,
+        )
+        query_sets = {}
+        for trigger in ("on_resolve", "on_cast"):
+            encounter.pending_mob_ability = {
+                "ability": ability.slug,
+                "target": {"type": "player", "id": self.player.id},
+                "status": "queued",
+                "cast_rounds_remaining": 1,
+                "cooldown": {"rounds": 4, "trigger": trigger},
+            }
+            with CaptureQueriesContext(connection) as queries:
+                _execute_pending_mob_ability(
+                    encounter=encounter, player=self.player, target_mob=mob,
+                    room=self.room, round_id="test:1",
+                    player_health_max=self.stats["health_max"],
+                )
+            query_sets[trigger] = [query["sql"] for query in queries]
+        extra_updates = [
+            sql for sql in query_sets["on_cast"] if sql.startswith("UPDATE")
+        ]
+        self.assertEqual(len(extra_updates), 1)
+        self.assertIn('UPDATE "spawns_mob"', extra_updates[0])
+        self.assertIn('"ability_cooldowns"', extra_updates[0])
+        self.assertEqual(
+            [sql for sql in query_sets["on_cast"] if not sql.startswith("UPDATE")],
+            query_sets["on_resolve"],
         )
 
     def test_kick_does_not_interrupt_an_ability_that_is_only_queued(self):
@@ -2329,6 +2491,84 @@ class TestCombatAbilities(WorldTestCase):
 
         errors = self._messages_by_type(messages, "cmd.ability.error")
         self.assertEqual(errors[0]["data"]["code"], "combat_in_progress")
+
+    def _queued_player_cast(self, *, cast_rounds=2, cooldown_rounds=4):
+        ability = self._ability(
+            slug="charged-strike", name="Charged Strike", verbs=["chargedstrike"],
+            cast_time={"rounds": cast_rounds},
+            cooldown={"rounds": cooldown_rounds, "trigger": "on_cast"},
+            cost={"resource": "energy", "amount": 5},
+            components=[{"type": "damage", "profile": "basic_physical"}],
+        )
+        self.player.known_abilities = [ability.slug]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob()
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world, room=self.room, player=self.player, mob=mob,
+            resolution_interval=1,
+        )
+        AbilityAction().execute(
+            self.player.id, ability=ability, command=ability.slug, args=[],
+        )
+        return ability, mob, encounter
+
+    def test_player_cast_cooldown_starts_on_commit_and_continues_through_resolution(self):
+        ability, mob, encounter = self._queued_player_cast()
+        self.player.refresh_from_db()
+        starting_energy = self.player.energy
+        starting_health = mob.health
+        self.assertEqual(self.player.ability_cooldowns, {})
+        for remaining in (4, 3):
+            self._resolve_ability_round(encounter)
+            self.player.refresh_from_db()
+            mob.refresh_from_db()
+            self.assertEqual(self.player.ability_cooldowns, {ability.slug: remaining})
+            self.assertEqual(self.player.energy, starting_energy)
+            self.assertEqual(mob.health, starting_health)
+
+        self._resolve_ability_round(encounter)
+        self.player.refresh_from_db()
+        mob.refresh_from_db()
+        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(self.player.ability_cooldowns, {ability.slug: 2})
+        self.assertEqual(self.player.energy, starting_energy - 5)
+        self.assertLess(mob.health, starting_health)
+
+    def test_cast_cooldown_expiring_during_windup_is_not_restarted(self):
+        ability, mob, encounter = self._queued_player_cast(cooldown_rounds=1)
+        for remaining in (1, 0, 0):
+            self._resolve_ability_round(encounter)
+            self.player.refresh_from_db()
+            self.assertEqual(self.player.ability_cooldowns.get(ability.slug, 0), remaining)
+        self.assertEqual(encounter.pending_player_ability, {})
+        mob.refresh_from_db()
+        self.assertLess(mob.health, mob.health_max)
+
+    def test_instant_player_ability_starts_cast_cooldown(self):
+        ability, mob, encounter = self._queued_player_cast(cast_rounds=0)
+        self._resolve_ability_round(encounter)
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.ability_cooldowns, {ability.slug: 4})
+        self.assertEqual(encounter.pending_player_ability, {})
+        mob.refresh_from_db()
+        self.assertLess(mob.health, mob.health_max)
+
+    def test_out_of_combat_self_ability_starts_cast_cooldown(self):
+        ability = self._ability(
+            slug="mend", name="Mend", verbs=["mend"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": True},
+            cooldown={"rounds": 4, "trigger": "on_cast"},
+            components=[{"type": "healing", "profile": "basic_heal"}],
+        )
+        self.player.known_abilities = [ability.slug]
+        self.player.health = 1
+        self.player.save(update_fields=["known_abilities", "health"])
+        AbilityAction().execute(
+            self.player.id, ability=ability, command=ability.slug, args=[],
+        )
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.ability_cooldowns, {ability.slug: 4})
+        self.assertGreater(self.player.health, 1)
 
     def test_cast_time_ability_charges_one_round_before_resolving(self):
         self._ability(
