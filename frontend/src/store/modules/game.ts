@@ -23,6 +23,7 @@ import {
   prepareEditRoomTab,
 } from "@/core/editRoomCommand";
 import { builderRoomIndexRoute } from "@/core/builderRoutes";
+import { playerRoundEffectSnapshot } from "@/core/roundEffects";
 import _ from "lodash";
 import router from "@/router";
 
@@ -662,15 +663,21 @@ const receiveMessage = async ({
     commit("player_active_effects_set", message_data.data.active_effects);
   }
 
-  if (
-    message_data.type === "player.combat_effects.update" &&
-    message_data.data &&
-    message_data.data.target &&
-    state.player &&
-    message_data.data.target.key === state.player.key &&
-    Array.isArray(message_data.data.active_effects)
-  ) {
-    commit("player_combat_effects_set", message_data.data.active_effects);
+  if (message_data.type === "player.combat_effects.update" && state.player) {
+    const playerEffects = playerRoundEffectSnapshot(
+      message_data.data?.combatants,
+      state.player.key,
+    );
+    if (playerEffects) {
+      const { characterEffects, encounterEffects } = playerEffects;
+      commit("player_active_effects_set", characterEffects);
+      commit("player_combat_effects_set", encounterEffects);
+    } else if (
+      message_data.data?.target?.key === state.player.key
+      && Array.isArray(message_data.data.active_effects)
+    ) {
+      commit("player_combat_effects_set", message_data.data.active_effects);
+    }
   }
 
   if (

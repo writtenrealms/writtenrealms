@@ -803,8 +803,10 @@ scope: character  # or encounter
 `character` effects follow either a player or mob across encounter boundaries.
 `encounter` effects are removed when their owning fight ends. When `scope` is
 omitted, DOTs, HOTs, ticking effects, room-wide player effects, and stat or
-combat modifiers default to `character`; other effects such as stun, root, and
-fight-specific barriers default to `encounter`.
+combat modifiers default to `character`. A self-targeted `damage_absorb` barrier
+also defaults to `character` when its ability allows out-of-combat use. Other
+effects such as stun, root, and fight-specific barriers default to `encounter`.
+An explicit `scope` always takes precedence over these defaults.
 
 Use `character` for poison, bleeding, curses, regeneration, and other effects
 that should survive fleeing. Use `encounter` for effects whose meaning depends
@@ -1044,6 +1046,13 @@ effect and resets its duration.
 
 Use a `damage_absorb` primitive when an effect should prevent incoming damage
 until either its duration expires or its absorb pool is depleted.
+
+Self and ally abilities allow out-of-combat use by default. A self-targeted
+barrier on one of those abilities therefore defaults to `scope: character`, so
+it can be applied before a fight and follows its target until its rounds or pool
+run out. For a barrier that exists only within its current fight, set
+`allow_out_of_combat: false` on the ability target and `scope: encounter` on the
+effect.
 
 ```yaml
 kind: ability

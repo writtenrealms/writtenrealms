@@ -8,20 +8,23 @@
           @click="onClickState"
         >{{ player_state }}</div>
       </div>
-      <div v-if="active_effects.length" class="own-effects-region">
+      <div
+        v-if="active_effects.length || player_effects.length"
+        class="own-effects-region"
+      >
         <div
           v-for="effect in active_effects"
           :key="effect.key"
           class="round-effect"
+          :class="[`effect-${effect.category}`]"
           :title="effect.title"
           :aria-label="effect.title"
-          :style="{ '--effect-fill': effect.fill_width }"
+          :style="{ '--effect-fill': effect.fillWidth }"
         >
           <span class="round-effect-fill"></span>
           <span class="round-effect-label">{{ effect.label }}</span>
+          <span class="round-effect-remaining">{{ effect.roundsLabel }}</span>
         </div>
-      </div>
-      <div v-else class="own-effects-region">
         <ProgressBar
           v-for="effect in player_effects"
           :key="effect.expires"
@@ -39,22 +42,13 @@
 import { computed } from "vue";
 import { useStore } from 'vuex';
 import { capfirst } from "@/core/utils";
+import {
+  presentRoundEffects,
+  type ActiveRoundEffect,
+} from "@/core/roundEffects";
 import ProgressBar from "@/components/game/ProgressBar.vue";
 
 const store = useStore();
-
-type ActiveEffect = {
-  effect?: string;
-  label?: string;
-  stack_key?: string;
-  remaining_rounds?: number | string;
-  duration_rounds?: number | string;
-  source?: {
-    type?: string;
-    id?: number | string;
-  };
-  encounter_id?: number | string;
-};
 
 const player = computed(() => store.state.game.player);
 const player_effects = computed(() => {
@@ -69,38 +63,9 @@ const active_effects = computed(() => {
   const combat_effects = Array.isArray(player.value?.combat_effects)
     ? player.value.combat_effects
     : [];
-  const effects = [...character_effects, ...combat_effects];
-
-  return effects
-    .map((effect: ActiveEffect, index: number) => {
-      const remaining_rounds = Number(effect.remaining_rounds || 0);
-      const duration_rounds = Math.max(
-        remaining_rounds,
-        Number(effect.duration_rounds || remaining_rounds || 1)
-      );
-      const fill_percent = Math.min(
-        100,
-        Math.max(0, Math.round((remaining_rounds / duration_rounds) * 100))
-      );
-      const label = effect.label || effect.effect || "Effect";
-      const source = effect.source || {};
-      const key = [
-        effect.stack_key || effect.effect || label,
-        effect.encounter_id || "character",
-        source.type || "source",
-        source.id || index,
-        index,
-      ].join(":");
-      const roundLabel = duration_rounds === 1 ? "round" : "rounds";
-      return {
-        key,
-        label: capfirst(label),
-        remaining_rounds,
-        fill_width: `${fill_percent}%`,
-        title: `${capfirst(label)}: ${remaining_rounds} of ${duration_rounds} ${roundLabel} remaining`,
-      };
-    })
-    .filter((effect) => effect.remaining_rounds > 0);
+  return presentRoundEffects(
+    [...character_effects, ...combat_effects] as ActiveRoundEffect[],
+  );
 });
 const effect_duration = (effect) => {
   const current = new Date().getTime();
@@ -193,11 +158,28 @@ const onClickState = () => {
         background: $color-green;
       }
 
+      .round-effect.effect-debuff {
+        border-color: $color-red;
+        background: $color-red-70;
+
+        .round-effect-fill {
+          background: $color-red;
+        }
+      }
+
       .round-effect-label {
         position: relative;
         z-index: 1;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+
+      .round-effect-remaining {
+        position: relative;
+        z-index: 1;
+        margin-left: 6px;
+        color: $color-text-70;
+        font-size: 10px;
       }
     }
   }

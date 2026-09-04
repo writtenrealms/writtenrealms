@@ -68,7 +68,11 @@ from fleeing.
 Your active round-based effects appear beside your current posture in the
 status panel. This includes both character effects, such as buffs that can span
 encounters, and encounter-scoped effects such as stun. The display updates as
-rounds advance and removes an effect when its remaining duration is consumed.
+rounds advance, shows the exact rounds remaining on each badge, and removes an
+effect when its remaining duration is consumed. Beneficial barriers such as
+**Crest** appear there as buffs; their details include the remaining absorb
+pool, and the badge disappears immediately when that pool is spent even if the
+effect had rounds left.
 The Combat panel also marks your current target with its active round-based
 effects. Statuses use combat-facing labels such as **Stunned** and update or
 disappear as each round is resolved.

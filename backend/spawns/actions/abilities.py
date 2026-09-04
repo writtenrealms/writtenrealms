@@ -1851,6 +1851,21 @@ class SetAbilityHotkeyAction:
 
 class AbilityAction:
     def _resolve_self_utility(self, *, player: Player, ability: AbilityDefinition) -> ActionResult:
+        has_out_of_combat_component = any(
+            component.get("type") in {"healing", "state"}
+            or (
+                component.get("type") == "effect"
+                and component_targets_character_effect(component, ability=ability)
+            )
+            for component in ability.components or []
+            if isinstance(component, dict)
+        )
+        if not has_out_of_combat_component:
+            raise ActionError(
+                f"{ability.name} can only be used in combat.",
+                code="combat_required",
+            )
+
         validate_ability_ready(player, ability)
         paid = pay_ability_cost(player, ability)
 

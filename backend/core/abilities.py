@@ -766,6 +766,7 @@ def _normalize_effect_component(
     *,
     field_name: str,
     default_label: str,
+    ability_target: dict[str, Any],
 ) -> dict[str, Any]:
     raw_effect = value.get("effect")
     effect_type = _coerce_slug(
@@ -790,12 +791,24 @@ def _normalize_effect_component(
         if isinstance(primitive, dict)
     }
     target_selector = str(value.get("target") or "ability.target").strip().lower()
+    out_of_combat_self_barrier = (
+        "damage_absorb" in primitive_types
+        and bool(ability_target.get("allow_out_of_combat"))
+        and (
+            target_selector in {"actor", "self", "effect.source"}
+            or (
+                target_selector == "ability.target"
+                and ability_target.get("type") in {"self", "ally"}
+            )
+        )
+    )
     default_scope = (
         "character"
         if effect_type in {"dot", "hot"}
         or "tick" in value
         or target_selector in {"room.allies", "room.players"}
         or bool(primitive_types & {"combat_modifier", "stat_modifier"})
+        or out_of_combat_self_barrier
         else "encounter"
     )
     normalized: dict[str, Any] = {
@@ -1275,7 +1288,13 @@ def _normalize_proc_primitive(value: dict[str, Any], *, field_name: str) -> dict
     }
 
 
-def _normalize_component(value: Any, *, field_name: str, default_label: str) -> dict[str, Any]:
+def _normalize_component(
+    value: Any,
+    *,
+    field_name: str,
+    default_label: str,
+    ability_target: dict[str, Any],
+) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise AbilityValidationError(f"{field_name} must be a mapping.")
     component_type = str(value.get("type") or "").strip().lower()
@@ -1310,6 +1329,7 @@ def _normalize_component(value: Any, *, field_name: str, default_label: str) -> 
         value,
         field_name=field_name,
         default_label=default_label,
+        ability_target=ability_target,
     )
 
 
@@ -1346,6 +1366,7 @@ def normalize_ability_definition(
             component,
             field_name=f"spec.components[{index}]",
             default_label=label,
+            ability_target=target,
         )
         for index, component in enumerate(components)
     ]

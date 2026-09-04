@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from copy import deepcopy
 from datetime import timedelta
+import math
 from typing import Any
 
 from django.db.models import F, Q, QuerySet
@@ -293,6 +294,14 @@ def _stat_modifier_primitives(component: dict[str, Any]) -> list[dict[str, Any]]
     ]
 
 
+def _damage_absorb_primitives(component: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        primitive
+        for primitive in component.get("primitives") or []
+        if isinstance(primitive, dict) and primitive.get("type") == "damage_absorb"
+    ]
+
+
 def component_targets_character_effect(
     component: dict[str, Any],
     *,
@@ -303,11 +312,24 @@ def component_targets_character_effect(
         return explicit_scope == ActiveEffect.SCOPE_CHARACTER
     if component.get("tick") or component.get("effect") in {"dot", "hot"}:
         return True
-    target_selector = str(component.get("target") or "").strip().lower()
+    target_selector = str(component.get("target") or "ability.target").strip().lower()
     if target_selector in ROOM_ALLY_TARGETS:
         return True
     if _combat_modifier_primitives(component):
         return True
+    if _damage_absorb_primitives(component):
+        ability_target = getattr(ability, "target", None) or {}
+        allows_out_of_combat = ability_target.get("allow_out_of_combat")
+        if allows_out_of_combat is None:
+            allows_out_of_combat = ability_target.get("type") in {"self", "ally"}
+        if bool(allows_out_of_combat) and (
+            target_selector in CHARACTER_SELF_TARGETS
+            or (
+                target_selector == "ability.target"
+                and ability_target.get("type") in {"self", "ally"}
+            )
+        ):
+            return True
     if not _stat_modifier_primitives(component):
         return False
     if target_selector in CHARACTER_SELF_TARGETS:
@@ -375,6 +397,81 @@ def _source_snapshot(source: Player | Mob) -> dict[str, Any]:
     }
 
 
+def damage_absorb_amount(
+    primitive: dict[str, Any],
+    *,
+    target: Player | Mob,
+    source: Player | Mob | None = None,
+    source_snapshot: dict[str, Any] | None = None,
+) -> int:
+    try:
+        amount = float(primitive.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+
+    if str(primitive.get("calc") or "fixed").strip().lower() == "percent_max":
+        target_snapshot = (
+            source_snapshot
+            if source is not None and source == target and source_snapshot is not None
+            else _source_snapshot(target)
+        )
+        amount = float((target_snapshot.get("stats") or {}).get("health_max") or 1) * (
+            amount / 100
+        )
+
+    if source is not None:
+        snapshot = source_snapshot or _source_snapshot(source)
+        source_stats = snapshot.get("stats") or {}
+        for scaling in primitive.get("scaling") or []:
+            stat_key = str(scaling.get("source") or "").strip()
+            try:
+                multiplier = float(scaling.get("multiplier") or 0)
+            except (TypeError, ValueError):
+                multiplier = 0.0
+            amount += float(source_stats.get(stat_key, 0.0) or 0.0) * multiplier
+    return max(0, int(math.ceil(amount)))
+
+
+def initialize_effect_primitives(
+    primitives: list[dict[str, Any]],
+    *,
+    target: Player | Mob,
+    source: Player | Mob | None,
+    source_snapshot: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    initialized: list[dict[str, Any]] = []
+    for primitive in primitives:
+        if primitive.get("type") != "damage_absorb" or "remaining" in primitive:
+            initialized.append(deepcopy(primitive))
+            continue
+        initialized.append(
+            {
+                **deepcopy(primitive),
+                "remaining": damage_absorb_amount(
+                    primitive,
+                    target=target,
+                    source=source,
+                    source_snapshot=source_snapshot,
+                ),
+            }
+        )
+    return initialized
+
+
+def effect_absorb_pool_depleted(effect: dict[str, Any]) -> bool:
+    absorb_primitives = [
+        primitive
+        for primitive in effect.get("primitives") or []
+        if isinstance(primitive, dict) and primitive.get("type") == "damage_absorb"
+    ]
+    if not absorb_primitives:
+        return False
+    return all(
+        _positive_int(primitive.get("remaining"), default=0) <= 0
+        for primitive in absorb_primitives
+    )
+
+
 def build_character_effect(
     *,
     component: dict[str, Any],
@@ -386,6 +483,7 @@ def build_character_effect(
     duration = _positive_int((component.get("duration") or {}).get("rounds"), default=1) or 1
     text = component.get("text") or {}
     effect_key = str(component.get("effect") or "").strip().lower()
+    source_snapshot = _source_snapshot(source)
     effect = {
         "effect": effect_key,
         "category": str(component.get("category") or "neutral").strip().lower(),
@@ -397,9 +495,14 @@ def build_character_effect(
         "rounds_elapsed": 0,
         "started_round": max(0, int(started_round or 0)),
         "label": str(text.get("label") or effect_key or "Effect").strip(),
-        "primitives": deepcopy(component.get("primitives") or []),
+        "primitives": initialize_effect_primitives(
+            component.get("primitives") or [],
+            target=target,
+            source=source,
+            source_snapshot=source_snapshot,
+        ),
         "tick": deepcopy(component.get("tick") or {}),
-        "source_snapshot": _source_snapshot(source),
+        "source_snapshot": source_snapshot,
     }
     stack_key = str(component.get("stack_key") or "").strip().lower()
     if stack_key:
@@ -474,6 +577,12 @@ def refresh_or_add_character_effect(
             .order_by("id")
             .first()
         )
+
+    if effect_absorb_pool_depleted(effect):
+        if existing is not None:
+            existing.delete()
+        clear_actor_effect_cache(target)
+        return "expired"
 
     values = {
         "world": target.world,

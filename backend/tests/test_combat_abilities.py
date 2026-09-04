@@ -3412,6 +3412,255 @@ class TestCombatAbilities(WorldTestCase):
             unbuffed.armor_mitigation,
         )
 
+    def test_self_barrier_applies_outside_combat_with_initialized_pool(self):
+        self.player.attributes = {
+            **(self.player.attributes or {}),
+            "focus": 30,
+        }
+        self.player.save(update_fields=["attributes"])
+        crest_stats = compute_stats(
+            self.player.level,
+            self.player.archetype,
+            char=self.player,
+            world=self.player.world,
+        )
+        self._ability(
+            slug="crest",
+            name="Crest",
+            verbs=["crest"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": True},
+            cooldown={"rounds": 3},
+            consumes_primary_action_on_resolve=False,
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "crest",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 3},
+                    "text": {"label": "Crest"},
+                    "primitives": [
+                        {
+                            "type": "damage_absorb",
+                            "scaling": [
+                                {"source": "ability_power", "multiplier": 0.3},
+                            ],
+                            "damage_types": ["physical", "ability"],
+                        }
+                    ],
+                }
+            ],
+        )
+        self.player.known_abilities = ["crest"]
+        self.player.save(update_fields=["known_abilities"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "crest")
+
+        self.player.refresh_from_db()
+        expected_absorb = math.ceil(crest_stats["ability_power"] * 0.3)
+        self.assertGreater(expected_absorb, 1)
+        effect = ActiveEffect.objects.get(
+            target_player=self.player,
+            effect="crest",
+        )
+        self.assertEqual(effect.scope, ActiveEffect.SCOPE_CHARACTER)
+        self.assertEqual(effect.category, "buff")
+        self.assertEqual(effect.remaining_rounds, 3)
+        self.assertEqual(effect.duration_rounds, 3)
+        self.assertEqual(effect.primitives[0]["remaining"], expected_absorb)
+        self.assertEqual(self.player.ability_cooldowns, {"crest": 3})
+        self.assertFalse(
+            CombatEncounter.objects.filter(
+                player=self.player,
+                status=CombatEncounter.STATUS_ACTIVE,
+            ).exists()
+        )
+
+        effect_messages = self._messages_by_type(messages, "notification.ability.effect")
+        self.assertEqual(len(effect_messages), 1)
+        payload = effect_messages[0]["data"]["active_effects"][0]
+        self.assertEqual(payload["label"], "Crest")
+        self.assertEqual(payload["remaining_rounds"], 3)
+        self.assertEqual(payload["duration_rounds"], 3)
+        self.assertEqual(payload["primitives"][0]["remaining"], expected_absorb)
+
+        mob = self._mob(
+            health=10_000,
+            attack_power=expected_absorb - 1,
+            fights_back=True,
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+        )
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as combat_messages:
+                resolve_combat_encounter(encounter.id)
+
+        effect.refresh_from_db()
+        self.assertEqual(effect.primitives[0]["remaining"], 1)
+        self.assertEqual(effect.remaining_rounds, 2)
+        effect_updates = self._messages_by_type(
+            combat_messages,
+            "player.combat_effects.update",
+        )
+        player_snapshot = next(
+            combatant
+            for combatant in effect_updates[-1]["data"]["combatants"]
+            if combatant["target"]["key"] == self.player.key
+        )
+        crest_snapshot = player_snapshot["active_effects"][0]
+        self.assertEqual(crest_snapshot["effect"], "crest")
+        self.assertEqual(crest_snapshot["remaining_rounds"], 2)
+        self.assertEqual(crest_snapshot["primitives"][0]["remaining"], 1)
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as depletion_messages:
+                resolve_combat_encounter(encounter.id)
+
+        self.assertFalse(
+            ActiveEffect.objects.filter(
+                target_player=self.player,
+                effect="crest",
+            ).exists()
+        )
+        depleted_updates = self._messages_by_type(
+            depletion_messages,
+            "player.combat_effects.update",
+        )
+        player_snapshot = next(
+            combatant
+            for combatant in depleted_updates[-1]["data"]["combatants"]
+            if combatant["target"]["key"] == self.player.key
+        )
+        self.assertEqual(player_snapshot["active_effects"], [])
+
+    def test_explicit_encounter_barrier_rejects_out_of_combat_without_cooldown(self):
+        self._ability(
+            slug="battle-crest",
+            name="Battle Crest",
+            verbs=["battlecrest"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": True},
+            cooldown={"rounds": 3},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "battle-crest",
+                    "scope": "encounter",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 3},
+                    "primitives": [
+                        {
+                            "type": "damage_absorb",
+                            "amount": 10,
+                            "calc": "fixed",
+                        }
+                    ],
+                }
+            ],
+        )
+        self.player.known_abilities = ["battle-crest"]
+        self.player.save(update_fields=["known_abilities"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "battlecrest")
+
+        self.player.refresh_from_db()
+        errors = self._messages_by_type(messages, "cmd.ability.error")
+        self.assertEqual(errors[0]["data"]["code"], "combat_required")
+        self.assertEqual(self.player.ability_cooldowns, {})
+        self.assertFalse(
+            ActiveEffect.objects.filter(
+                target_player=self.player,
+                effect="battle-crest",
+            ).exists()
+        )
+
+    def test_out_of_combat_percent_max_barrier_freezes_effective_health_pool(self):
+        self._ability(
+            slug="aegis",
+            name="Aegis",
+            verbs=["aegis"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": True},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "aegis",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 3},
+                    "primitives": [
+                        {
+                            "type": "damage_absorb",
+                            "amount": 25,
+                            "calc": "percent_max",
+                        }
+                    ],
+                }
+            ],
+        )
+        self.player.known_abilities = ["aegis"]
+        self.player.save(update_fields=["known_abilities"])
+        expected_absorb = math.ceil(self.stats["health_max"] * 0.25)
+
+        dispatch_text_command(self.player.id, "aegis")
+
+        effect = ActiveEffect.objects.get(
+            target_player=self.player,
+            effect="aegis",
+        )
+        self.assertEqual(effect.primitives[0]["remaining"], expected_absorb)
+        self.player.attributes = {
+            **(self.player.attributes or {}),
+            "grit": 100,
+        }
+        self.player.save(update_fields=["attributes"])
+        effect.refresh_from_db()
+        self.assertEqual(effect.primitives[0]["remaining"], expected_absorb)
+
+    def test_zero_capacity_barrier_does_not_persist(self):
+        self._ability(
+            slug="empty-ward",
+            name="Empty Ward",
+            verbs=["emptyward"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": True},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "empty-ward",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 3},
+                    "primitives": [
+                        {
+                            "type": "damage_absorb",
+                            "amount": 0,
+                            "calc": "fixed",
+                        }
+                    ],
+                }
+            ],
+        )
+        self.player.known_abilities = ["empty-ward"]
+        self.player.save(update_fields=["known_abilities"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.id, "emptyward")
+
+        self.assertFalse(
+            ActiveEffect.objects.filter(
+                target_player=self.player,
+                effect="empty-ward",
+            ).exists()
+        )
+        effect_messages = self._messages_by_type(messages, "notification.ability.effect")
+        self.assertEqual(effect_messages[0]["data"]["active_effects"], [])
+
     def test_self_barrier_absorbs_incoming_physical_damage_until_depleted(self):
         self._ability(
             slug="ward",
@@ -3473,6 +3722,63 @@ class TestCombatAbilities(WorldTestCase):
         attacks = self._messages_by_type(messages, "notification.combat.attack")
         self.assertEqual(attacks[-1]["data"]["damage_taken"], 4)
         self.assertEqual(attacks[-1]["data"]["damage_absorbed"], 3)
+
+    def test_barrier_with_trailing_zero_pool_is_deleted_when_spent(self):
+        self._ability(
+            slug="layered-ward",
+            name="Layered Ward",
+            verbs=["layeredward"],
+            target={"type": "self", "default": "self", "allow_out_of_combat": False},
+            components=[
+                {
+                    "type": "effect",
+                    "effect": "layered-ward",
+                    "category": "buff",
+                    "target": "self",
+                    "duration": {"rounds": 3},
+                    "primitives": [
+                        {
+                            "type": "damage_absorb",
+                            "amount": 5,
+                            "calc": "fixed",
+                            "damage_types": ["physical"],
+                        },
+                        {
+                            "type": "damage_absorb",
+                            "amount": 0,
+                            "calc": "fixed",
+                            "damage_types": ["physical"],
+                        },
+                    ],
+                }
+            ],
+        )
+        self.player.known_abilities = ["layered-ward"]
+        self.player.health = 50
+        self.player.save(update_fields=["known_abilities", "health"])
+        mob = self._mob(
+            health=self.stats["attack_power"] * 20,
+            attack_power=5,
+            fights_back=True,
+        )
+        encounter = CombatEncounter.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            player=self.player,
+            mob=mob,
+            initiative_order=self._player_first_initiative(mob),
+        )
+
+        with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
+            with capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, "layeredward")
+                resolve_combat_encounter(encounter.id)
+
+        encounter.refresh_from_db()
+        self.assertEqual(encounter.active_effects, [])
+        attacks = self._messages_by_type(messages, "notification.combat.attack")
+        self.assertEqual(attacks[-1]["data"]["damage_taken"], 0)
+        self.assertEqual(attacks[-1]["data"]["damage_absorbed"], 5)
 
     def test_barrier_damage_type_filter_allows_unmatched_damage_through(self):
         self._ability(

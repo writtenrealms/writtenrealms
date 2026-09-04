@@ -6,7 +6,6 @@ from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
 import logging
-import math
 import random
 from typing import Any, Iterable
 import uuid
@@ -50,6 +49,8 @@ from spawns.actions.effects import (
     build_character_effect,
     clear_actor_effect_cache,
     component_targets_character_effect,
+    damage_absorb_amount,
+    effect_absorb_pool_depleted,
     encounter_effects,
     next_character_effect_tick_ts,
     preventing_action_effect,
@@ -3930,6 +3931,8 @@ def _append_effect(
         target=target,
         started_round=int(encounter.round_number or 0),
     )
+    if effect_absorb_pool_depleted(payload):
+        return
     ActiveEffect.objects.create(
         world=encounter.world,
         encounter=encounter,
@@ -3986,54 +3989,6 @@ def _apply_character_scoped_effect(
         duration_rounds=int(((component.get("duration") or {}).get("rounds")) or 1),
         round_id=round_id,
     )
-
-
-def _damage_absorb_amount(
-    primitive: dict,
-    *,
-    target: Player | Mob,
-    source: Player | Mob | None = None,
-) -> int:
-    try:
-        amount = float(primitive.get("amount") or 0)
-    except (TypeError, ValueError):
-        amount = 0.0
-    if str(primitive.get("calc") or "fixed").strip().lower() == "percent_max":
-        amount = _resource_limit(target, "health") * (amount / 100)
-    if source is not None:
-        snapshot = combatant_snapshot(source, world=getattr(source, "world", None))
-        for scaling in primitive.get("scaling") or []:
-            stat_key = str(scaling.get("source") or "").strip()
-            try:
-                multiplier = float(scaling.get("multiplier") or 0)
-            except (TypeError, ValueError):
-                multiplier = 0.0
-            amount += float(snapshot.stats.get(stat_key, 0.0) or 0.0) * multiplier
-    return max(0, int(math.ceil(amount)))
-
-
-def _initialize_effect_primitives(
-    primitives: list[dict],
-    *,
-    target: Player | Mob,
-    source: Player | Mob | None,
-) -> list[dict]:
-    initialized: list[dict] = []
-    for primitive in primitives:
-        if primitive.get("type") != "damage_absorb":
-            initialized.append(primitive)
-            continue
-        initialized.append(
-            {
-                **primitive,
-                "remaining": _damage_absorb_amount(
-                    primitive,
-                    target=target,
-                    source=source,
-                ),
-            }
-        )
-    return initialized
 
 
 def _consume_stun(
@@ -4466,7 +4421,7 @@ def _apply_damage_absorption(
             remaining_absorb = int(
                 primitive.get(
                     "remaining",
-                    _damage_absorb_amount(
+                    damage_absorb_amount(
                         primitive,
                         target=target,
                         source=_actor_for_effect_ref(
@@ -4491,6 +4446,10 @@ def _apply_damage_absorption(
 
         has_remaining_absorb = any(
             primitive.get("type") == "damage_absorb"
+            and (
+                "remaining" not in primitive
+                or max(0, _safe_int(primitive.get("remaining"))) > 0
+            )
             for primitive in next_primitives
         )
         if had_absorb:
@@ -5728,18 +5687,10 @@ def _execute_pending_player_ability(
                     player=player,
                     target_mob=target_mob,
                 )
-                scoped_component = {
-                    **scoped_target_component,
-                    "primitives": _initialize_effect_primitives(
-                        scoped_target_component.get("primitives") or [],
-                        target=effect_target,
-                        source=player,
-                    ),
-                }
                 events.extend(
                     _apply_character_scoped_effect(
                         encounter=encounter,
-                        component=scoped_component,
+                        component=scoped_target_component,
                         source=player,
                         target=effect_target,
                         viewer=player,
@@ -5766,11 +5717,7 @@ def _execute_pending_player_ability(
             duration_rounds=duration,
             label=_component_label(component, ability),
             category=component.get("category") or "neutral",
-            primitives=_initialize_effect_primitives(
-                component.get("primitives") or [],
-                target=effect_target,
-                source=player,
-            ),
+            primitives=component.get("primitives") or [],
             tick=component.get("tick") or {},
         )
         events.extend(
@@ -5941,18 +5888,10 @@ def _execute_pending_mob_ability(
                 actor=target_mob,
                 default_target=player,
             )
-            scoped_component = {
-                **component,
-                "primitives": _initialize_effect_primitives(
-                    component.get("primitives") or [],
-                    target=effect_target,
-                    source=target_mob,
-                ),
-            }
             events.extend(
                 _apply_character_scoped_effect(
                     encounter=encounter,
-                    component=scoped_component,
+                    component=component,
                     source=target_mob,
                     target=effect_target,
                     viewer=player,
@@ -5981,11 +5920,7 @@ def _execute_pending_mob_ability(
             duration_rounds=duration,
             label=_component_label(component, ability),
             category=component.get("category") or "neutral",
-            primitives=_initialize_effect_primitives(
-                component.get("primitives") or [],
-                target=effect_target,
-                source=target_mob,
-            ),
+            primitives=component.get("primitives") or [],
             tick=component.get("tick") or {},
         )
         events.extend(

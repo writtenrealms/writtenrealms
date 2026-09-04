@@ -985,6 +985,76 @@ spec:
             },
         )
 
+    def test_out_of_combat_self_barrier_defaults_to_character_scope(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: crest
+  name: Crest
+spec:
+  command:
+    verbs: [crest]
+  consumes_primary_action_on_resolve: false
+  target:
+    type: self
+    default: self
+  cooldown:
+    rounds: 3
+  components:
+    - type: effect
+      effect: crest
+      category: buff
+      target: self
+      duration:
+        rounds: 3
+      primitives:
+        - type: damage_absorb
+          scaling:
+            - source: ability_power
+              multiplier: 0.3
+          damage_types: [physical, ability]
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="crest")
+        self.assertTrue(ability.target["allow_out_of_combat"])
+        self.assertEqual(ability.components[0]["scope"], "character")
+
+    def test_out_of_combat_self_barrier_preserves_explicit_encounter_scope(self):
+        manifest = f"""
+kind: ability
+metadata:
+  world: world.{self.world.id}
+  slug: battle-crest
+  name: Battle Crest
+spec:
+  command:
+    verbs: [battlecrest]
+  target:
+    type: self
+    default: self
+    allow_out_of_combat: true
+  components:
+    - type: effect
+      effect: battle-crest
+      scope: encounter
+      category: buff
+      target: self
+      duration:
+        rounds: 3
+      primitives:
+        - type: damage_absorb
+          amount: 25
+          calc: fixed
+"""
+        resp = self.client.post(self.apply_ep, {"manifest": manifest}, format="json")
+
+        self.assertEqual(resp.status_code, 201, resp.data)
+        ability = AbilityDefinition.objects.get(world=self.world, slug="battle-crest")
+        self.assertEqual(ability.components[0]["scope"], "encounter")
+
     def test_apply_ability_manifest_accepts_combat_modifier_effects(self):
         manifest = f"""
 kind: ability

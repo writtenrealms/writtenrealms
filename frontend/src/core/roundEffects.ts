@@ -3,9 +3,14 @@ export type ActiveRoundEffect = {
   effect?: string;
   label?: string;
   category?: string;
+  scope?: string;
   stack_key?: string;
   remaining_rounds?: number | string;
   duration_rounds?: number | string;
+  primitives?: Array<{
+    type?: string;
+    remaining?: number | string;
+  }>;
   encounter_id?: number | string;
   source?: {
     type?: string;
@@ -18,8 +23,20 @@ export type RoundEffectPresentation = {
   label: string;
   category: string;
   remainingRounds: number;
+  roundsLabel: string;
+  barrierRemaining: number | null;
   fillWidth: string;
   title: string;
+};
+
+export type RoundEffectsByScope = {
+  characterEffects: ActiveRoundEffect[];
+  encounterEffects: ActiveRoundEffect[];
+};
+
+type CombatantEffectSnapshot = {
+  target?: { key?: string };
+  active_effects?: ActiveRoundEffect[];
 };
 
 const EFFECT_STATUS_LABELS: Record<string, string> = {
@@ -59,14 +76,53 @@ export const presentRoundEffects = (
         index,
       ].join(":"));
       const roundLabel = durationRounds === 1 ? "round" : "rounds";
+      const barrierValues = (effect.primitives || [])
+        .filter(primitive => primitive?.type === "damage_absorb")
+        .map(primitive => Number(primitive.remaining))
+        .filter(remaining => Number.isFinite(remaining) && remaining >= 0);
+      const barrierRemaining = barrierValues.length
+        ? barrierValues.reduce((total, remaining) => total + remaining, 0)
+        : null;
+      const barrierTitle = barrierRemaining === null
+        ? ""
+        : `; ${barrierRemaining} barrier remaining`;
       return {
         key,
         label,
         category: String(effect.category || "neutral").toLowerCase(),
         remainingRounds,
+        roundsLabel: `${remainingRounds} ${remainingRounds === 1 ? "rd" : "rds"}`,
+        barrierRemaining,
         fillWidth: `${fillPercent}%`,
-        title: `${label}: ${remainingRounds} of ${durationRounds} ${roundLabel} remaining`,
+        title: `${label}: ${remainingRounds} of ${durationRounds} ${roundLabel} remaining${barrierTitle}`,
       };
     })
     .filter(effect => effect.remainingRounds > 0)
 );
+
+export const splitRoundEffectsByScope = (
+  effects: ActiveRoundEffect[] | null | undefined,
+): RoundEffectsByScope => {
+  const characterEffects: ActiveRoundEffect[] = [];
+  const encounterEffects: ActiveRoundEffect[] = [];
+  for (const effect of Array.isArray(effects) ? effects : []) {
+    if (String(effect?.scope || "").toLowerCase() === "character") {
+      characterEffects.push(effect);
+    } else {
+      encounterEffects.push(effect);
+    }
+  }
+  return { characterEffects, encounterEffects };
+};
+
+export const playerRoundEffectSnapshot = (
+  combatants: CombatantEffectSnapshot[] | null | undefined,
+  playerKey: string | null | undefined,
+): RoundEffectsByScope | null => {
+  if (!playerKey || !Array.isArray(combatants)) return null;
+  const playerSnapshot = combatants.find(
+    combatant => combatant?.target?.key === playerKey,
+  );
+  if (!playerSnapshot || !Array.isArray(playerSnapshot.active_effects)) return null;
+  return splitRoundEffectsByScope(playerSnapshot.active_effects);
+};
