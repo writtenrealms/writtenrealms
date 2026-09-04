@@ -23,9 +23,15 @@ Numbers refer to positions in the current local training list, not permanent
 ability identifiers. Learning, unlearning, or a provider arriving or leaving
 can change the list, so use bare `learn` again when in doubt.
 
-A training room shows a **LEARN** action and remains available without an NPC.
+The room display shows **LEARN** and **UNLEARN** actions whenever the room
+itself provides training or an available NPC trainer is present. NPC trainers
+also show these actions when inspected. The room buttons update as trainers
+arrive, leave, or become unavailable, and multiple trainers share one pair of
+buttons.
+
+A room that provides training directly remains available without an NPC.
 An NPC trainer must be present in your current room and, depending on the
-world's authoring, may stop teaching after leaving or being defeated.
+world's authoring, may stop teaching after being defeated.
 
 If an ability is offered by a training room or NPC anywhere in the world, you
 must be at an eligible local provider to learn it. Abilities with no attached

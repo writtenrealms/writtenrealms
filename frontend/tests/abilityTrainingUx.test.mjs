@@ -173,6 +173,74 @@ test("trainer NPCs expose bare learn and unlearn interactions", () => {
   assert.match(lookupCharSource, /if \(action\?\.exact \|\| rawAction\.includes\(" "\)\)/);
 });
 
+test("NPC training is discoverable in room actions without a room profile", () => {
+  for (const name of ["Othryades", "Demeas the Hoplomachos"]) {
+    const room = {
+      training_provider: null,
+      chars: [{ key: "mob.9", name, is_trainer: true }],
+      actions: ["inspect tablets"],
+    };
+    assert.deepEqual(
+      providers.roomActionsForTrainingProvider(room),
+      ["inspect tablets", "learn", "unlearn"],
+    );
+    assert.deepEqual(room.actions, ["inspect tablets"]);
+  }
+});
+
+test("room training follows NPC arrival, departure, and server availability", () => {
+  const room = { chars: [], actions: ["craft"] };
+  assert.deepEqual(providers.roomActionsForTrainingProvider(room), ["craft"]);
+
+  room.chars.push({ key: "mob.9", is_trainer: true, health: 30 });
+  assert.deepEqual(
+    providers.roomActionsForTrainingProvider(room),
+    ["craft", "learn", "unlearn"],
+  );
+
+  // A defeated trainer can remain available under the 'present' policy.
+  room.chars[0].health = 0;
+  assert.deepEqual(
+    providers.roomActionsForTrainingProvider(room),
+    ["craft", "learn", "unlearn"],
+  );
+  room.chars[0].is_trainer = false;
+  assert.deepEqual(providers.roomActionsForTrainingProvider(room), ["craft"]);
+
+  room.chars[0].is_trainer = true;
+  room.chars = [];
+  assert.deepEqual(providers.roomActionsForTrainingProvider(room), ["craft"]);
+
+  assert.match(lookRoomSource, /store\.state\.game\.room\?\.id === room\.value\.id/);
+  assert.match(lookRoomSource, /roomActionsForTrainingProvider\(\s*roomTrainingContext\.value/);
+});
+
+test("multiple room and NPC trainers share one pair of training actions", () => {
+  const chars = [
+    { key: "mob.9", is_trainer: true },
+    { key: "mob.10", is_trainer: true },
+  ];
+  for (const training_provider of [
+    null,
+    { type: "room", key: "room.42" },
+    { type: "mob", key: "mob.departed" },
+  ]) {
+    const sourceActions = ["list", " LEARN ", "learn", "offer", "UNLEARN"];
+    assert.deepEqual(
+      providers.roomActionsForTrainingProvider({ training_provider, chars }, sourceActions),
+      ["list", "LEARN", "offer", "UNLEARN"],
+    );
+    assert.deepEqual(sourceActions, ["list", " LEARN ", "learn", "offer", "UNLEARN"]);
+  }
+  assert.deepEqual(
+    providers.roomActionsForTrainingProvider({
+      training_provider: { type: "room", key: "room.42" },
+      chars: [],
+    }),
+    ["learn", "unlearn"],
+  );
+});
+
 test("combined merchant trainers keep every service action discoverable", () => {
   const actions = charActions.buildCharActions(
     { char_type: "mob", is_trainer: true, is_merchant: true },

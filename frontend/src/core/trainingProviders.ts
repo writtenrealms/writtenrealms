@@ -97,10 +97,14 @@ export const roomActionsForTrainingProvider = (
     ? [...sourceActions]
     : Array.isArray(room?.actions) ? [...room.actions] : [];
   const provider = getRoomTrainingProvider(room);
-  if (!provider) return actions;
+  // is_trainer already includes the server's presence/defeat policy. Reuse
+  // the room's character payload instead of fetching another trainer catalog.
+  const hasNpcTrainer = (room?.chars || []).some((char: any) => char?.is_trainer);
+  if (!provider && !hasNpcTrainer) return actions;
   if (
-    String(provider.type || "").trim().toLowerCase() === "mob"
+    String(provider?.type || "").trim().toLowerCase() === "mob"
     && !trainingProviderIsAvailableInRoom(provider, room)
+    && !hasNpcTrainer
   ) {
     return actions.filter(action => !["learn", "unlearn"].includes(
       String(action || "").trim().toLowerCase(),

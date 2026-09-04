@@ -371,6 +371,11 @@ available provider without a mob or Spawn Plan. Trainer `availability` belongs
 only on mob-definition attachments and is rejected on a room. A decorative NPC
 may still be placed here without a Trainer Profile.
 
+An available NPC trainer also adds Learn and Unlearn buttons to the room
+display, as well as its own inspection panel. These buttons follow the NPC's
+presence and configured availability; no room profile is needed. Multiple
+providers share one pair of room buttons that open the local training lists.
+
 Only profiles attached to at least one room or mob definition gate their
 abilities. An unattached profile is a safe draft and does not change where
 players can learn or unlearn anything.

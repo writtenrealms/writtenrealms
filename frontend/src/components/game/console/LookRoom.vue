@@ -159,8 +159,15 @@ interface Room {
 const props = defineProps<{ message: any }>();
 const room = ref<Room>(props.message.data.room);
 const roomMerchantProvider = computed(() => getRoomMerchantProvider(room.value));
+// Console messages preserve their original room snapshot; trainer arrivals,
+// departures, and availability updates live in the current room state.
+const roomTrainingContext = computed(() => (
+  store.state.game.room?.id === room.value.id
+    ? store.state.game.room
+    : room.value
+));
 const roomActions = computed(() => roomActionsForTrainingProvider(
-  room.value,
+  roomTrainingContext.value,
   roomActionsForMerchantProvider(room.value),
 ));
 const penaltyDisplay = computed(() => {
