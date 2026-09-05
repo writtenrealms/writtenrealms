@@ -571,6 +571,10 @@ class MobDefinition(AdventBaseModel):
     traits = models.JSONField(default=list, blank=True)
     loot = models.JSONField(default=dict, blank=True)
     combat_abilities = models.JSONField(default=list, blank=True)
+    combat_assist = models.CharField(max_length=24, default='none',
+                                   choices=list_to_choice(('none', 'same_spawn_cohort', 'allies')))
+    combat_engage_when = models.JSONField(default=dict, blank=True)
+
     attackable = models.BooleanField(default=True)
     merchant_profile = models.ForeignKey(
         'builders.MerchantProfile',
@@ -606,6 +610,15 @@ class MobDefinition(AdventBaseModel):
 
     class Meta(AdventBaseModel.Meta):
         unique_together = [('world', 'slug')]
+
+    def clean(self):
+        super().clean()
+        from core.condition_dsl import validate_candidate_condition_payload
+        try:
+            validate_candidate_condition_payload(self.combat_engage_when or {}, field_name='combat_engage_when')
+        except ValueError as exc:
+            from django.core.exceptions import ValidationError
+            raise ValidationError({'combat_engage_when': str(exc)}) from exc
 
     def save(self, *args, **kwargs):
         sync_spawned = kwargs.pop("sync_spawned", True)

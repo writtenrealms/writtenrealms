@@ -1,3 +1,5 @@
+from tests.combat_fixtures import dispatch_and_drain_combat
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture
 from datetime import timedelta
 
 from django.utils import timezone
@@ -44,7 +46,7 @@ class TestCombatDisengage(WorldTestCase):
         )
 
     def _encounter(self, mob, **kwargs):
-        return CombatEncounter.objects.create(
+        return create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -114,18 +116,18 @@ class TestCombatDisengage(WorldTestCase):
         original_health = mob.health
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "disengage")
+            dispatch_and_drain_combat(self.player.id, "disengage")
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.player.refresh_from_db()
         mob.refresh_from_db()
         player_effect.refresh_from_db()
         mob_effect.refresh_from_db()
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertIsNone(encounter.next_resolution_ts)
-        self.assertEqual(encounter.pending_player_ability, {})
-        self.assertEqual(encounter.pending_mob_ability, {})
-        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
         self.assertFalse(ActiveEffect.objects.filter(pk=encounter_effect.id).exists())
         self.assertEqual(self.player.room_id, original_room_id)
         self.assertEqual(mob.room_id, original_room_id)
@@ -141,31 +143,9 @@ class TestCombatDisengage(WorldTestCase):
         self.assertEqual(success[0]["data"]["encounter_id"], encounter.id)
         self.assertFalse(success[0]["data"]["still_in_combat"])
         self.assertIsNone(success[0]["data"]["actor"]["target"])
-        self.assertEqual(success[0]["data"]["target"]["state"], "standing")
-        observer_events = [
-            entry["message"]
-            for entry in messages
-            if entry["player_key"] == observer.key
-            and entry["message"].get("type")
-            == "notification.combat.disengage"
-        ]
-        self.assertEqual(len(observer_events), 1)
-        self.assertIsNone(observer_events[0]["data"]["actor"]["target"])
-        self.assertIsNone(observer_events[0]["data"]["target"]["target"])
-        self.assertEqual(
-            self._player_messages(
-                messages,
-                "player.ability_preparations.update",
-            )[0]["data"]["abilities"],
-            [],
-        )
-        self.assertEqual(
-            self._player_messages(
-                messages,
-                "player.combat_effects.update",
-            )[0]["data"]["active_effects"],
-            [],
-        )
+        snapshots = self._player_messages(messages, 'notification.combat.snapshot')
+        self.assertEqual(snapshots[-1]['data']['status'], 'finished')
+        self.assertEqual(snapshots[-1]['data']['participants'], [])
         message_types = {entry["message"].get("type") for entry in messages}
         self.assertNotIn("cmd.flee.success", message_types)
         self.assertFalse(
@@ -192,9 +172,9 @@ class TestCombatDisengage(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "disengage")
+            dispatch_and_drain_combat(self.player.id, "disengage")
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.player.refresh_from_db()
         error = self._player_messages(messages, "cmd.disengage.error")
         self.assertEqual(len(error), 1)
@@ -206,63 +186,38 @@ class TestCombatDisengage(WorldTestCase):
         self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
         self.assertEqual(encounter.next_resolution_ts, next_resolution_ts)
         self.assertEqual(
-            encounter.pending_player_ability,
+            combat_member(encounter, "player").pending_ability,
             {"ability": "heavy-blow", "status": "casting"},
         )
         self.assertEqual(
-            encounter.pending_mob_ability,
+            combat_member(encounter, "mob").pending_ability,
             {"ability": "bite", "status": "queued"},
         )
         self.assertEqual(
-            encounter.pending_flee,
+            combat_member(encounter, "player").pending_flee,
             {"status": "preparing", "movement_cost": 7},
         )
         self.assertEqual(self.player.stamina, 33)
 
-    def test_disengage_finishes_only_the_primary_passive_encounter(self):
-        passive_mob = self._mob(target_priority=10)
-        hostile_mob = self._mob(name="an angry wolf", fights_back=True)
-        passive_encounter = self._encounter(passive_mob)
-        hostile_encounter = self._encounter(
-            hostile_mob,
-            pending_player_ability={"ability": "counter", "status": "queued"},
-        )
-
+    def test_disengage_removes_passive_target_and_preserves_other_opponents(self):
+        passive = self._mob(target_priority=10)
+        hostile = self._mob(name='an angry wolf', fights_back=True)
+        encounter = self._encounter(passive)
+        self._encounter(hostile)
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "disengage")
+            dispatch_and_drain_combat(self.player.id, 'disengage')
+        encounter.refresh_from_db()
+        self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
+        self.assertFalse(encounter.participants.get(mob=passive).is_active)
+        self.assertTrue(encounter.participants.get(mob=hostile).is_active)
+        snapshot = self._player_messages(messages, 'notification.combat.snapshot')[-1]['data']
+        self.assertEqual({p['key'] for p in snapshot['participants']}, {self.player.key, hostile.key})
+        self.assertTrue(self._player_messages(messages, 'cmd.disengage.success')[0]['data']['still_in_combat'])
 
-        passive_encounter.refresh_from_db()
-        hostile_encounter.refresh_from_db()
-        self.assertEqual(passive_encounter.status, CombatEncounter.STATUS_FINISHED)
-        self.assertEqual(hostile_encounter.status, CombatEncounter.STATUS_ACTIVE)
-        self.assertEqual(
-            hostile_encounter.pending_player_ability,
-            {"ability": "counter", "status": "queued"},
-        )
-        success = self._player_messages(messages, "cmd.disengage.success")[0]
-        self.assertTrue(success["data"]["still_in_combat"])
-        self.assertEqual(success["data"]["actor"]["state"], "combat")
-        self.assertEqual(
-            success["data"]["actor"]["target"]["key"],
-            hostile_mob.key,
-        )
-        self.assertEqual(success["data"]["next_target"]["key"], hostile_mob.key)
-        self.assertEqual(success["data"]["next_target"]["state"], "combat")
-        self.assertEqual(
-            success["data"]["next_target"]["target"]["key"],
-            self.player.key,
-        )
-        self.assertEqual(
-            self._player_messages(
-                messages,
-                "player.ability_preparations.update",
-            )[0]["data"]["abilities"],
-            ["counter"],
-        )
 
     def test_disengage_requires_active_pve_combat(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "disengage")
+            dispatch_and_drain_combat(self.player.id, "disengage")
 
         error = self._player_messages(messages, "cmd.disengage.error")
         self.assertEqual(len(error), 1)
@@ -278,7 +233,7 @@ class TestCombatDisengage(WorldTestCase):
         self.assertEqual(down_handler.command_type, "move")
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "help disengage")
+            dispatch_and_drain_combat(self.player.id, "help disengage")
 
         help_message = self._player_messages(messages, "cmd.help.success")[0]
         self.assertEqual(help_message["data"]["command"]["name"], "Disengage")

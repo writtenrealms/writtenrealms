@@ -331,6 +331,8 @@ def run_due_combat_encounters(limit: int = 100):
         return {"skipped": True}
     try:
         result = process_due_combat_encounters(limit=limit)
+        from spawns.combat_reconciliation import recover_due_reconciliations
+        result['rooms_enqueued'] = recover_due_reconciliations(limit=limit)
         flush_game_event_outbox(publisher=publish_events)
         return result
     finally:
@@ -1201,31 +1203,13 @@ def run_game_heartbeat() -> dict[str, int]:
         "ability_cooldowns",
     )
     active_world_ids = list(active_players.values_list("world_id", flat=True).distinct())
-    active_combat_player_ids = set(
-        CombatEncounter.objects.filter(
-            status=CombatEncounter.STATUS_ACTIVE,
-            player__in_game=True,
-            player__world__lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
-        ).values_list("player_id", flat=True)
+    memberships = CombatParticipant.objects.filter(
+        is_active=True, encounter__world_id__in=active_world_ids,
     )
-    active_combat_player_ids.update(
-        CombatParticipant.objects.filter(
-            player_id__isnull=False,
-            is_active=True,
-            encounter__status=CombatEncounter.STATUS_ACTIVE,
-            encounter__duel_match_id__isnull=False,
-            player__in_game=True,
-            player__world__lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
-        ).values_list("player_id", flat=True)
-    )
-    active_combat_mob_ids = set(
-        CombatEncounter.objects.filter(
-            status=CombatEncounter.STATUS_ACTIVE,
-            player__in_game=True,
-            player__world__lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
-            mob_id__isnull=False,
-        ).values_list("mob_id", flat=True)
-    )
+    active_combat_player_ids = set(memberships.filter(player_id__isnull=False)
+                                    .values_list('player_id', flat=True))
+    active_combat_mob_ids = set(memberships.filter(mob_id__isnull=False)
+                               .values_list('mob_id', flat=True))
     tagged_player_ids, tagged_mob_ids = combat_tagged_actor_ids()
     active_combat_player_ids.update(tagged_player_ids)
     active_combat_mob_ids.update(tagged_mob_ids)
@@ -1606,7 +1590,8 @@ def execute_trigger_script_segments(
     reject_on_worker_lost=True,
     max_retries=5,
 )
-def resolve_combat_encounter(self, encounter_id: int):
+def resolve_combat_encounter(self, encounter_id: int, expected_round: int | None = None,
+                             expected_generation: int | None = None):
     from spawns.actions.combat import resolve_combat_encounter_step
 
     try:
@@ -1614,6 +1599,8 @@ def resolve_combat_encounter(self, encounter_id: int):
             encounter_id,
             auto_advance=True,
             durable_events=True,
+            expected_round=expected_round,
+            expected_generation=expected_generation,
         )
     except OperationalError as exc:
         if _database_sqlstate(exc) not in {"40P01", "40001"}:
@@ -1718,3 +1705,18 @@ def handle_game_command(
         # Keep the task visibly failed for Celery monitoring. Commands are not
         # retried here because a handler may have mutated state before raising.
         raise
+
+
+@shared_task(name="spawns.tasks.reconcile_combat_room", ignore_result=True)
+def reconcile_combat_room(state_id: int):
+    from spawns.combat_reconciliation import reconcile
+
+    return reconcile(state_id)
+
+
+@shared_task
+def resolve_combat_tracker_chase(payload):
+    from spawns.actions.mob_movement import ResolveTrackerChaseAction
+    from spawns.events import publish_events
+    result = ResolveTrackerChaseAction().execute(**payload)
+    publish_events(result.events)

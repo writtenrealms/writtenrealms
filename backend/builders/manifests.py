@@ -1643,7 +1643,10 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
     spec["aggression"] = _mob_definition_aggression(mob_definition)
     spec["combat"] = {
         "attackable": bool(mob_definition.attackable),
+        "assist": mob_definition.combat_assist,
     }
+    if mob_definition.combat_engage_when:
+        spec["combat"]["engage_when"] = mob_definition.combat_engage_when
     if mob_definition.combat_abilities:
         spec["combat"]["abilities"] = mob_definition.combat_abilities or []
     if mob_definition.merchant_profile_id:
@@ -1749,6 +1752,8 @@ def serialize_mob_definition_payload(
         "loot": mob_definition.loot or {},
         "factions": faction_assignments_to_manifest_spec(mob_definition),
         "combat_abilities": mob_definition.combat_abilities or [],
+        "combat_assist": mob_definition.combat_assist,
+        "combat_engage_when": mob_definition.combat_engage_when,
         "attackable": bool(mob_definition.attackable),
         "trainer": (
             {
@@ -4984,13 +4989,13 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         combat = {}
     if not isinstance(combat, dict):
         raise serializers.ValidationError("spec.combat must be a mapping.")
-    combat_unknown = sorted(set(combat.keys()) - {"attackable", "health", "abilities", *_MOB_DEFINITION_BASE_PROPERTY_FIELDS})
+    combat_unknown = sorted(set(combat.keys()) - {"attackable", "health", "abilities", "assist", "engage_when", *_MOB_DEFINITION_BASE_PROPERTY_FIELDS})
     if combat_unknown:
         raise serializers.ValidationError(
             f"Unsupported spec.combat field(s): {', '.join(combat_unknown)}."
         )
     for field_name, value in combat.items():
-        if field_name in {"attackable", "abilities"}:
+        if field_name in {"attackable", "abilities", "assist", "engage_when"}:
             continue
         if field_name == "health":
             base_properties["health_max"] = value
@@ -5102,6 +5107,18 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         combat=combat,
         existing=existing,
     )
+    combat_assist = _coerce_choice(
+        combat.get('assist', existing.combat_assist if existing else 'none'),
+        choices=('none', 'same_spawn_cohort', 'allies'), field_name='spec.combat.assist',
+    )
+    combat_engage_when = combat.get('engage_when', existing.combat_engage_when if existing else {})
+    from core.condition_dsl import validate_candidate_condition_payload
+
+    try:
+        if combat_engage_when:
+            validate_candidate_condition_payload(combat_engage_when, field_name='spec.combat.engage_when')
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc)) from exc
     try:
         traits = (
             normalize_trait_list(spec_patch.get("traits"), field_name="spec.traits")
@@ -5158,6 +5175,8 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         "traits": traits,
         "loot": loot,
         "combat_abilities": combat_abilities,
+        "combat_assist": combat_assist,
+        "combat_engage_when": combat_engage_when,
         "attackable": attackable,
         "merchant_profile": merchant_profile,
         "merchant_availability": merchant_availability,

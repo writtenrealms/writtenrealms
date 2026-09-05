@@ -175,7 +175,8 @@ class MoveHandler(CommandHandler):
         post_move_callbacks = []
 
         try:
-            with transaction.atomic():
+            from spawns.combat_encounters import locked_combat
+            with locked_combat(keys=[ctx.player.key]):
                 try:
                     player = (
                         Player.objects.select_for_update(
@@ -391,15 +392,7 @@ class MoveHandler(CommandHandler):
                             "Failed to resolve tracker chase %s.",
                             tracker_plan.chase_key,
                         )
-                        from spawns.ability_prepare_state import (
-                            ability_prepare_state_events_for_players,
-                        )
 
-                        resolved_events.extend(
-                            ability_prepare_state_events_for_players(
-                                [ctx.player.id]
-                            )
-                        )
                     else:
                         resolved_events.extend(tracker_result.events)
                         snapshot = tracker_result.data.get(

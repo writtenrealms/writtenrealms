@@ -113,9 +113,9 @@ def _open_match_for_players(player_ids: list[int]):
 
 
 def _validate_duel_entry_state(player_ids: list[int]) -> None:
-    if CombatEncounter.objects.filter(
+    if CombatParticipant.objects.filter(
         player_id__in=player_ids,
-        status=CombatEncounter.STATUS_ACTIVE,
+        is_active=True,
     ).exists():
         raise ActionError(
             "Both players must leave combat before the duel can begin.",

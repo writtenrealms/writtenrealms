@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 from unittest.mock import patch
 
 from django.contrib.contenttypes.models import ContentType
@@ -366,9 +367,9 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
             with self.captureOnCommitCallbacks(execute=True):
                 with capture_game_messages() as messages:
-                    dispatch_text_command(self.player.id, "kill rat")
+                    dispatch_and_drain_combat(self.player.id, "kill rat")
 
-        encounter = CombatEncounter.objects.get(player=self.player, mob=mob)
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get()
         mob.refresh_from_db()
         self.assertEqual(encounter.resolution_interval, 1.5)
         self.assertEqual(mob.health, 50)
@@ -926,7 +927,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             health=10,
             health_max=10,
         )
-        base_encounter = CombatEncounter.objects.create(
+        base_encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -957,14 +958,14 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
 
         spawned_instance = self._enter()
 
-        base_encounter.refresh_from_db()
+        refresh_combat_fixture(base_encounter, )
         self.player.refresh_from_db()
         character_effect.refresh_from_db()
         self.assertEqual(base_encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertIsNone(base_encounter.next_resolution_ts)
-        self.assertEqual(base_encounter.pending_player_ability, {})
-        self.assertEqual(base_encounter.pending_mob_ability, {})
-        self.assertEqual(base_encounter.pending_flee, {})
+        self.assertEqual(combat_member(base_encounter, "player").pending_ability, {})
+        self.assertEqual(combat_member(base_encounter, "mob").pending_ability, {})
+        self.assertEqual(combat_member(base_encounter, "player").pending_flee, {})
         self.assertEqual(self.player.stamina, 7)
         self.assertFalse(ActiveEffect.objects.filter(pk=base_effect.pk).exists())
         self.assertEqual(character_effect.world, spawned_instance)
@@ -976,7 +977,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             health=10,
             health_max=10,
         )
-        instance_encounter = CombatEncounter.objects.create(
+        instance_encounter = create_combat_encounter(
             world=spawned_instance,
             room=self.instance_room,
             player=self.player,
@@ -997,11 +998,11 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
 
         World.leave_instance(player=self.player)
 
-        instance_encounter.refresh_from_db()
+        refresh_combat_fixture(instance_encounter, )
         self.player.refresh_from_db()
         character_effect.refresh_from_db()
         self.assertEqual(instance_encounter.status, CombatEncounter.STATUS_FINISHED)
-        self.assertEqual(instance_encounter.pending_flee, {})
+        self.assertEqual(combat_member(instance_encounter, "player").pending_flee, {})
         self.assertEqual(self.player.stamina, 10)
         self.assertFalse(ActiveEffect.objects.filter(pk=instance_effect.pk).exists())
         self.assertEqual(character_effect.world, self.spawn_world)
@@ -1015,7 +1016,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             health=10,
             health_max=10,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=first_runtime,
             room=self.instance_room,
             player=self.player,
@@ -1064,7 +1065,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         health_before = self.player.health
         result = resolve_combat_encounter_step(encounter.id, auto_advance=True)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.player.refresh_from_db()
         self.assertFalse(result.encounter_active)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
@@ -1262,7 +1263,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             room=self.instance_room,
             name="Exit Guard",
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=spawned_instance,
             room=self.instance_room,
             player=self.player,
@@ -1311,7 +1312,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.player.refresh_from_db()
         participant.refresh_from_db()
         run.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         character_effect.refresh_from_db()
         duel_participant.refresh_from_db()
         bag.refresh_from_db()
@@ -1329,9 +1330,9 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertIsNotNone(duel_participant.exited_at)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertIsNone(encounter.next_resolution_ts)
-        self.assertEqual(encounter.pending_player_ability, {})
-        self.assertEqual(encounter.pending_mob_ability, {})
-        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
         self.assertFalse(
             ActiveEffect.objects.filter(pk=encounter_effect.pk).exists()
         )
@@ -1369,7 +1370,9 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             result.events[1].data["runtime_world_id"],
             alternate_runtime.id,
         )
-        self.assertEqual(GameEventOutbox.objects.count(), outbox_count)
+        self.assertEqual(GameEventOutbox.objects.count(), outbox_count + 2)
+        self.assertTrue(GameEventOutbox.objects.filter(event_type='notification.combat.snapshot',
+            data__encounter_id=encounter.pk, data__status='finished').exists())
 
     def test_forced_exit_rejects_active_duel_without_partial_exit(self):
         destination = self.room.create_at(adv_consts.DIRECTION_NORTH)
@@ -1504,7 +1507,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self._link_current_room_to_instance()
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "enter")
+            dispatch_and_drain_combat(self.player.id, "enter")
 
         self.player.refresh_from_db()
         run = InstanceRun.objects.get()
@@ -1521,7 +1524,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self._link_current_room_to_instance()
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         look_message = self._message_by_type(messages, "cmd.look.success")
 
@@ -1531,7 +1534,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
 
     def test_enter_command_without_instance_link_returns_error(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "enter")
+            dispatch_and_drain_combat(self.player.id, "enter")
 
         self.player.refresh_from_db()
         message = self._message_by_type(messages, "cmd.enter.error")
@@ -1547,7 +1550,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.instance_template.config.save(update_fields=["pvp_mode"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "enter")
+            dispatch_and_drain_combat(self.player.id, "enter")
 
         self.player.refresh_from_db()
         message = self._message_by_type(messages, "cmd.enter.error")
@@ -1564,7 +1567,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         ref = leader_instance.instance_run.ref
 
         with capture_game_messages() as messages:
-            dispatch_text_command(member.id, "enter %s" % ref)
+            dispatch_and_drain_combat(member.id, "enter %s" % ref)
 
         member.refresh_from_db()
         state_message = self._message_by_type(messages, "cmd.state.sync.success")
@@ -1584,7 +1587,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         spawned_instance = self._enter()
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "leave")
+            dispatch_and_drain_combat(self.player.id, "leave")
 
         self.player.refresh_from_db()
         state_message = self._message_by_type(messages, "cmd.state.sync.success")
@@ -1598,7 +1601,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
 
     def test_leave_command_outside_instance_returns_error(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "leave")
+            dispatch_and_drain_combat(self.player.id, "leave")
 
         message = self._message_by_type(messages, "cmd.leave.error")
 
@@ -1615,7 +1618,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "/reset")
+            dispatch_and_drain_combat(self.player.id, "/reset")
 
         message = self._message_by_type(messages, "cmd./reset.error")
 
@@ -1675,7 +1678,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             container=bag,
             name="Blue Gem",
         )
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=spawned_instance,
             room=self.instance_room,
             player=self.player,
@@ -1698,7 +1701,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.player.save(update_fields=["room"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "/reset")
+            dispatch_and_drain_combat(self.player.id, "/reset")
 
         self.player.refresh_from_db()
         reset_message = self._message_by_type(messages, "cmd./reset.success")
@@ -1841,7 +1844,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self._link_current_room_to_instance()
 
         with capture_game_messages() as entrance_messages:
-            dispatch_text_command(self.player.id, "instance")
+            dispatch_and_drain_combat(self.player.id, "instance")
 
         entrance_message = self._message_by_type(entrance_messages, "cmd.instance.success")
         self.assertEqual(entrance_message["data"]["status"], "entrance")
@@ -1850,7 +1853,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         spawned_instance = self._enter()
 
         with capture_game_messages() as active_messages:
-            dispatch_text_command(self.player.id, "instance")
+            dispatch_and_drain_combat(self.player.id, "instance")
 
         active_message = self._message_by_type(active_messages, "cmd.instance.success")
         self.assertEqual(active_message["data"]["status"], "inside")

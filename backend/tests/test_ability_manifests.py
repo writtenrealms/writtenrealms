@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 import yaml
 
 from rest_framework.reverse import reverse
@@ -1819,17 +1820,17 @@ class TestActionRuleEffectLookup(WorldTestCase):
             user=self.create_user("ally@example.com"),
         )
         mob = self._mob("Spider")
-        finished_encounter = CombatEncounter.objects.create(
+        finished_encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=ally,
             mob=mob,
             status=CombatEncounter.STATUS_FINISHED,
         )
-        active_encounter = CombatEncounter.objects.create(
+        active_encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
-            player=ally,
+            player=self.player,
             mob=mob,
             status=CombatEncounter.STATUS_ACTIVE,
         )

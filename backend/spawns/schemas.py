@@ -588,6 +588,7 @@ class StateSyncData(BaseModel):
     world: World
     who_list: List[WhoListEntry] = Field(default_factory=list)
     prepared_abilities: List[str] = Field(default_factory=list)
+    combat_snapshot: Optional[dict] = None
 
 
 # Enable forward references

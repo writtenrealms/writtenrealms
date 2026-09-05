@@ -141,7 +141,8 @@ alias `aggressive` is accepted for `all`.
 Use `fights_back: true` when a mob should take its normal turns after combat
 starts. Set `fights_back: false` for an attackable mob that never retaliates.
 Players can immediately use `disengage` against such a mob to end only that
-encounter while both remain in the room. They cannot disengage from a mob with
+opponent's participation while both remain in the room, provided no other
+combatant or hostile effect keeps the target engaged. They cannot disengage from a mob with
 `fights_back: true`; leaving that fight requires the normal movement or `flee`
 rules. The `fights_back` setting is independent of `aggression`, which controls
 how encounters begin rather than what the mob does once engaged.
@@ -162,6 +163,58 @@ explicitly disables roaming. Mobs only roam when the spawn plan gives them a
 zone or path target; mobs loaded into a fixed room stay static. If a roaming
 mob enters a room with an eligible player, its normal `aggression` rules are
 checked just as they are when the player enters the mob's room.
+
+## Combat Admission And Assistance
+
+Aggression evaluates player and mob candidates. `passive` never starts a fight;
+`players` targets players; `all` can target non-allied actors; `normal` and
+`friendly` start fights against actors their faction policy treats as hostile.
+`fights_back` independently controls the mob's turns after admission.
+
+Configure automatic assistance and its condition in `spec.combat`:
+
+```yaml
+spec:
+  initial_state:
+    captive: true
+  combat:
+    assist: allies
+    engage_when:
+      eq: [state.character.captive, false]
+```
+
+`assist` accepts `none` (the default), `same_spawn_cohort`, or `allies`.
+`same_spawn_cohort` requires both an allied relationship and the same nonempty
+spawn group. `allies` allows the mob to join an allied actor's existing fight.
+Neither setting establishes a faction alliance or permits an unauthorized
+player attack. An omitted field preserves its current value on update.
+
+`engage_when` uses the existing condition DSL and the mob as `actor`.
+`state.character` refers to that mob's runtime state. The condition gates both
+automatic aggression and assistance; it does not prevent retaliation after
+another actor attacks the mob. Set `attackable: false` as well when a captive
+must be protected from attacks. Restore attackability when releasing it.
+
+For a freed Greek commander, assign a Greek core faction, give the headsman an
+opposing core faction, and clear the commander's `captive` state when released.
+The commander can then initiate against the headsman or assist a Greek player
+already fighting him. The same rules work when the headsman arrives later.
+There is no special combat command required in the release Trigger.
+
+Movement, scoped character-state changes, and runtime faction or aggression
+changes queue room reconciliation. This is asynchronous: the state change
+commits before the room is checked. Admission and conditions are checked again
+under the encounter locks. A false condition is reconsidered when its inputs
+change; it does not create a polling loop.
+
+The initial runtime supports two opposing sides with at most 32 participants.
+A join requiring incompatible allies or a third side is refused. NPC-only
+fights use a 30-second activity lease renewed by observers; unattended fights
+pause without recurring round tasks. In a manual world, NPC-only rounds also
+need explicit advancement. Character-scoped effects on participants count
+toward the encounter's 256-effect budget. Keep area abilities and reactive
+effects small: room selectors are bounded to 32 candidate actors, and a round
+has a 16-reaction budget.
 
 ## Factions
 

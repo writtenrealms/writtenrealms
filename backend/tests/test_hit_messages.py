@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 import yaml
 
 from rest_framework.reverse import reverse
@@ -115,7 +116,7 @@ class TestCombatHitMessages(WorldTestCase):
         })
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill dog")
+            dispatch_and_drain_combat(self.player.id, "kill dog")
 
         player_attacks = self._attack_messages(messages, self.player.key)
         watcher_attacks = self._attack_messages(messages, self.watcher.key)
@@ -170,7 +171,7 @@ class TestCombatHitMessages(WorldTestCase):
         self._spawn_dog(base_properties={})
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill dog")
+            dispatch_and_drain_combat(self.player.id, "kill dog")
 
         player_strike = self._attack_by_actor(
             self._attack_messages(messages, self.player.key),
@@ -242,7 +243,7 @@ class TestCombatHitMessages(WorldTestCase):
         self._spawn_dog(base_properties={})
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill dog")
+            dispatch_and_drain_combat(self.player.id, "kill dog")
 
         player_strikes = [
             message
@@ -314,7 +315,7 @@ class TestCombatHitMessages(WorldTestCase):
         dog = self._spawn_dog(base_properties={})
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill dog")
+            dispatch_and_drain_combat(self.player.id, "kill dog")
 
         player_attacks = self._attack_messages(messages, self.player.key)
         watcher_attacks = self._attack_messages(messages, self.watcher.key)
@@ -361,7 +362,7 @@ class TestCombatHitMessages(WorldTestCase):
         self._spawn_dog(base_properties={})
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill dog")
+            dispatch_and_drain_combat(self.player.id, "kill dog")
 
         player_strike = self._attack_by_actor(
             self._attack_messages(messages, self.player.key),

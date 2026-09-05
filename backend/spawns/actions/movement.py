@@ -16,7 +16,7 @@ from spawns.events import (
     persist_follow_dependent_game_events,
     player_room_enter_event,
 )
-from spawns.models import CombatEncounter, Mob, Player
+from spawns.models import CombatEncounter, CombatParticipant, Mob, Player
 from spawns.state_payloads import (
     build_map_payload,
     collect_map_room_ids,
@@ -253,7 +253,8 @@ class MoveMobAction:
                 code="no_world",
             )
 
-        with transaction.atomic():
+        from spawns.combat_encounters import locked_combat
+        with locked_combat(keys=[f'mob.{mob_id}']):
             mob = (
                 Mob.objects.select_for_update(of=("self",))
                 .select_related("definition", "room", "world")
@@ -304,9 +305,8 @@ class MoveMobAction:
                     "The destination is outside this runtime world.",
                     code="invalid_world_context",
                 )
-            if CombatEncounter.objects.filter(
-                mob_id=mob.id,
-                status=CombatEncounter.STATUS_ACTIVE,
+            if CombatParticipant.objects.filter(
+                mob_id=mob.id, is_active=True,
             ).exists():
                 raise ActionError(
                     "The mob is in combat and cannot move.",

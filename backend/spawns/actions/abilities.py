@@ -63,7 +63,9 @@ from spawns.ability_intents import (
 from spawns.events import GameEvent, persist_follow_dependent_game_events
 from spawns.models import CombatEncounter, CombatParticipant, Mob, Player
 from spawns.state_payloads import serialize_char_from_mob, serialize_char_from_player
-from spawns.triggers import evaluate_movement_policies
+def evaluate_movement_policies(*args, **kwargs):
+    from spawns.triggers import evaluate_movement_policies as evaluate
+    return evaluate(*args, **kwargs)
 from spawns.trainers import (
     TRAINER_CATALOG_LIMIT,
     TrainingProvider,
@@ -696,6 +698,7 @@ def execute_character_effect_component(
     if component.get("apply") == "on_hit" and not hit_landed:
         return []
 
+    from spawns.actions.combat import _serialize_combat_char
     events: list[GameEvent] = []
     targets = targets_for_character_effect_component(
         actor=player,
@@ -732,7 +735,8 @@ def execute_character_effect_component(
                     "action": action,
                     "duration_rounds": duration,
                     "active_effects": active_character_effects(target),
-                    "target": serialize_char_from_player(target).model_dump(),
+                    "target": (serialize_char_from_player(target).model_dump() if isinstance(target, Player)
+                               else _serialize_combat_char(target)),
                     "round_id": round_id,
                 },
                 text=(
@@ -1340,29 +1344,6 @@ def _ability_ack(
     )
 
 
-def _active_player_encounter(player: Player) -> CombatEncounter | None:
-    room = Room.objects.filter(pk=player.room_id).first() if player.room_id else None
-    from spawns.actions.combat import primary_active_encounter_for_player
-
-    return primary_active_encounter_for_player(player, room=room, lock=True)
-
-
-def _active_player_encounter_for_mob(
-    player: Player,
-    *,
-    mob_id: int,
-) -> CombatEncounter | None:
-    room = Room.objects.filter(pk=player.room_id).first() if player.room_id else None
-    from spawns.actions.combat import active_player_encounter_for_mob
-
-    return active_player_encounter_for_mob(
-        player,
-        mob_id=mob_id,
-        room=room,
-        lock=True,
-    )
-
-
 def _pending_payload(
     *,
     ability: AbilityDefinition,
@@ -1643,16 +1624,16 @@ class UnlearnAbilityAction:
                 "You cannot unlearn abilities during duel combat.",
                 code="combat_in_progress",
             )
-        with transaction.atomic():
+        from spawns.combat_encounters import locked_combat
+        with locked_combat(keys=[f'player.{player_id}']) as combat_context:
             player = Player.objects.select_for_update(of=("self",)).select_related(
                 "world",
                 "world__context",
                 "world__context__instance_of",
                 "world__instance_of",
             ).get(pk=player_id)
-            # Recheck after taking the player lock without ever updating a
-            # CombatParticipant while holding that lock. PvP resolution uses
-            # the inverse canonical order (participant, then player).
+            # The coordinator locks membership before the player and guards
+            # the duel authority while we recheck and replace a queued intent.
             if _active_duel_combat_participation_exists(player_id):
                 raise ActionError(
                     "You cannot unlearn abilities during duel combat.",
@@ -1759,13 +1740,12 @@ class UnlearnAbilityAction:
                         trainer_learning,
                         -1,
                     )
-                pending_encounters = CombatEncounter.objects.filter(
-                    player=player,
-                    status=CombatEncounter.STATUS_ACTIVE,
-                    pending_player_ability__ability=ability.slug,
+                pending_encounters = CombatParticipant.objects.filter(
+                    player=player, is_active=True,
+                    pending_ability__ability=ability.slug,
                 )
                 cleared_prepared_ability = pending_encounters.exists()
-                pending_encounters.update(pending_player_ability={})
+                pending_encounters.update(pending_ability={})
                 text = f"You unlearn {ability.name}."
 
         events = [
@@ -1959,515 +1939,18 @@ class AbilityAction:
             events.append(ability_state_event(player))
         return ActionResult(events=events)
 
-    def _resolve_immediately(
-        self,
-        *,
-        player: Player,
-        target_mob: Mob,
-        ability: AbilityDefinition,
-        command: str,
-        config,
-        opening_priority: list[dict[str, Any]] | None = None,
-    ) -> ActionResult:
-        from spawns.actions import combat as combat_actions
 
-        events: list[GameEvent] = []
-        room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
-        encounter = CombatEncounter.objects.create(
-            world=player.world,
-            room=room,
-            player=player,
-            mob=target_mob,
-            resolution_interval=0,
-            round_number=0,
-            pending_player_ability=_pending_payload(
-                ability=ability,
-                command=command,
-                target_type="mob",
-                target_id=target_mob.id,
-                queued_round=0,
-            ),
-            opening_priority=opening_priority or [],
-        )
-        events.append(
-            _ability_ack(
-                player=player,
-                ability=ability,
-                replaced=False,
-                target=target_mob,
-            )
-        )
-        previous_prepared_slug = combat_actions._prepared_player_ability_slug(encounter)
-        combat_actions.ensure_encounter_initiative_order(
-            encounter,
-            player=player,
-            target_mob=target_mob,
-        )
-        for round_no in range(1, combat_actions.MAX_AUTO_RESOLVE_ROUNDS + 1):
-            step = combat_actions._apply_encounter_round(
-                encounter=encounter,
-                player=player,
-                target_mob=target_mob,
-                config=config,
-            )
-            current_prepared_slug = combat_actions._prepared_player_ability_slug(encounter)
-            step = combat_actions._with_ability_prepare_transition(
-                step,
-                player=player,
-                previous_slug=previous_prepared_slug,
-                current_slug=current_prepared_slug,
-            )
-            events.extend(step.events)
-            previous_prepared_slug = current_prepared_slug
-            if not step.encounter_active:
-                return ActionResult(events=events)
-            target_mob.refresh_from_db()
-            player.refresh_from_db()
-
-        raise ActionError("Combat stalled before anyone died.", code="combat_stalled")
-
-    def _resolve_room_opener(
-        self,
-        *,
-        player: Player,
-        ability: AbilityDefinition,
-        command: str,
-        args: list[str],
-        config,
-        rules_config,
-        active_encounter: CombatEncounter | None,
-        connection_id: str | None = None,
-    ) -> ActionResult:
-        if active_encounter:
-            raise ActionError(
-                f"{ability.name} can only be used out of combat.",
-                code="combat_in_progress",
-            )
-        if not (ability.target or {}).get("allow_out_of_combat"):
-            raise ActionError(
-                f"{ability.name} can only be used out of combat.",
-                code="combat_required",
-            )
-
-        direction, target_selector = _split_room_opener_args(args, ability=ability)
-        if not direction and (ability.target or {}).get("range") == "adjacent_room":
-            raise ActionError(
-                "Use a direction and target, such as charge rabbit east.",
-                code="invalid_args",
-            )
-
-        move_events: list[GameEvent] = []
-        if direction:
-            movement = ResolveMoveAction().execute(
-                player,
-                direction,
-                source="ability",
-            )
-            move_context = movement.data["context"]
-
-            for policy_event in (
-                adv_consts.TRIGGER_EVENT_BEFORE_MOVE_EXIT,
-                adv_consts.TRIGGER_EVENT_BEFORE_MOVE_ENTER,
-            ):
-                policy_result = evaluate_movement_policies(
-                    actor=player,
-                    event=policy_event,
-                    direction=move_context.direction,
-                    origin_room_id=move_context.origin_room_id,
-                    destination_room_id=move_context.dest_room_id,
-                    world_id=move_context.trigger_world_id,
-                )
-                if not policy_result.allowed:
-                    raise ActionError(
-                        policy_result.feedback or "You cannot go that way.",
-                        code=policy_result.code,
-                        data={"trigger_id": policy_result.trigger_id},
-                    )
-
-            dest_room = Room.objects.select_related("world", "zone").get(pk=move_context.dest_room_id)
-        else:
-            dest_room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
-
-        target_ref = resolve_room_mob_target(
-            dest_room,
-            target_selector,
-            world=player.world,
-            empty_error=f"Use {ability.name} on what?",
-            not_found_error="You don't see them there." if direction else "You don't see them here.",
-            allow_single_match_when_empty=True,
-            allow_first_match_when_empty=True,
-            empty_candidate_filter=_is_implicit_room_opener_target,
-        )
-        target_mob = (
-            Mob.objects.select_for_update()
-            .filter(
-                pk=target_ref.id,
-                world=player.world,
-                room=dest_room,
-                is_pending_deletion=False,
-            )
-            .first()
-        )
-        if not target_mob:
-            raise ActionError("You don't see them there.", code="target_missing")
-        if not getattr(target_mob, "attackable", True):
-            raise ActionError("You cannot attack them.", code="not_attackable")
-        # The Mob row is the creation reservation. This is a read-only busy
-        # check: locking the existing encounter after Mob would invert the
-        # resolver's Encounter -> Mob suffix.
-        if CombatEncounter.objects.filter(
-            mob=target_mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        ).exists():
-            raise ActionError(
-                f"{target_mob.name or 'They'} are already fighting someone else.",
-                code="target_busy",
-            )
-
-        if direction:
-            ChangeRoomAction().execute(player, move_context.dest_room_id)
-            AdjustStaminaAction().execute(player, -move_context.movement_cost)
-            stand_player(player)
-            player.save(
-                update_fields=[
-                    "room",
-                    "location_sequence",
-                    "follow_move_sequence",
-                    "stamina",
-                    "state",
-                    "last_action_ts",
-                ]
-            )
-            player.viewed_rooms.add(move_context.dest_room_id)
-            move_events = BuildMoveEventsAction().execute(move_context).events
-        else:
-            stand_player(player)
-            player.save(update_fields=["state"])
-
-        from spawns.actions import combat as combat_actions
-        from spawns.actions.combat import (
-            ScanRoomAggroAction,
-            encounter_opening_priority_ref,
-            set_faceoff_override,
-        )
-
-        opening_priority = []
-        if (ability.target or {}).get("opener_priority"):
-            opening_priority = [
-                encounter_opening_priority_ref(
-                    player,
-                    side="player_party",
-                    source=ability.slug,
-                )
-            ]
-
-        interval = _combat_interval(rules_config)
-        if interval == 0:
-            result = self._resolve_immediately(
-                player=player,
-                target_mob=target_mob,
-                ability=ability,
-                command=command,
-                config=config,
-                opening_priority=opening_priority,
-            )
-            aggro_result = ScanRoomAggroAction().execute(player.id)
-            return ActionResult(events=persist_follow_dependent_game_events(
-                [*move_events, *result.events, *aggro_result.events],
-                actor_key=player.key,
-                connection_id=connection_id,
-            ))
-
-        encounter = CombatEncounter.objects.create(
-            world=player.world,
-            room=dest_room,
-            player=player,
-            mob=target_mob,
-            resolution_interval=interval,
-            pending_player_ability=_pending_payload(
-                ability=ability,
-                command=command,
-                target_type="mob",
-                target_id=target_mob.id,
-                queued_round=0,
-            ),
-            opening_priority=opening_priority,
-            faceoff_override=True,
-        )
-        set_faceoff_override(encounter)
-        combat_actions.ensure_encounter_initiative_order(
-            encounter,
-            player=player,
-            target_mob=target_mob,
-        )
-        ability_ack = _ability_ack(
-            player=player,
-            ability=ability,
-            replaced=False,
-            target=target_mob,
-        )
-
-        step = combat_actions.resolve_combat_encounter_step(
-            encounter.id,
-            auto_advance=interval > 0,
-        )
-        aggro_result = ScanRoomAggroAction().execute(player.id)
-        return ActionResult(events=persist_follow_dependent_game_events(
-            [*move_events, ability_ack, *step.events, *aggro_result.events],
-            actor_key=player.key,
-            connection_id=connection_id,
-        ))
-
-    def execute(
-        self,
-        player_id: int,
-        *,
-        ability: AbilityDefinition,
-        command: str,
-        args: list[str],
-        connection_id: str | None = None,
-    ) -> ActionResult:
+    def execute(self, player_id: int, *, ability: AbilityDefinition, command: str,
+                args: list[str], connection_id: str | None = None) -> ActionResult:
         from spawns.actions.pvp import try_execute_ability
+        from spawns import combat_commands
 
-        pvp_result = try_execute_ability(
-            player_id,
-            ability=ability,
-            command=command,
-            args=args,
-            connection_id=connection_id,
-        )
+        pvp_result = try_execute_ability(player_id, ability=ability, command=command,
+                                         args=args, connection_id=connection_id)
         if pvp_result is not None:
             return pvp_result
-
-        with transaction.atomic():
-            player = Player.objects.select_for_update().select_related("world").get(pk=player_id)
-            if not player.room_id:
-                raise ActionError("You are nowhere.", code="no_room")
-
-            rules_config = inherited_system_config(player.world)
-            if rules_config and not rules_config.allow_combat and ability.target.get("type") == "hostile":
-                raise ActionError("Combat is disabled here.", code="combat_disabled")
-            if ability.target.get("type") == "hostile":
-                from spawns import duels
-
-                duel_block_reason = duels.duel_combat_block_reason(player)
-                if duel_block_reason:
-                    raise ActionError(
-                        str(duel_block_reason),
-                        code="duel_combat_disabled",
-                    )
-            death_config = player.world.effective_config
-
-            validate_ability_ready(player, ability)
-            from spawns.actions.doors import (
-                cancel_pending_player_door_action_durably,
-            )
-
-            cancel_pending_player_door_action_durably(
-                player=player,
-                code="physical_action_replaced",
-                message="You stop working with the door to use an ability.",
-            )
-
-            target_type = (ability.target or {}).get("type") or "hostile"
-            active_encounter = _active_player_encounter(player)
-            target_selector = " ".join(args).strip()
-
-            if ability_uses_room_opener(ability):
-                return self._resolve_room_opener(
-                    player=player,
-                    ability=ability,
-                    command=command,
-                    args=args,
-                    config=death_config,
-                    rules_config=rules_config,
-                    active_encounter=active_encounter,
-                    connection_id=connection_id,
-                )
-
-            if target_type in {"self", "ally"}:
-                if active_encounter:
-                    _raise_if_ability_casting(active_encounter.pending_player_ability)
-                    replaced = bool(active_encounter.pending_player_ability)
-                    active_encounter.pending_player_ability = _pending_payload(
-                        ability=ability,
-                        command=command,
-                        target_type="player",
-                        target_id=player.id,
-                        queued_round=active_encounter.round_number,
-                    )
-                    active_encounter.save(update_fields=["pending_player_ability"])
-                    ability_ack = _ability_ack(
-                        player=player,
-                        ability=ability,
-                        replaced=replaced,
-                        target=player,
-                    )
-                    if active_encounter.resolution_interval == -1:
-                        from spawns.actions.combat import resolve_combat_encounter_step
-
-                        step = resolve_combat_encounter_step(active_encounter.id, auto_advance=False)
-                        return ActionResult(events=[
-                            ability_ack,
-                            *step.events,
-                        ])
-                    return ActionResult(events=[ability_ack])
-
-                if not (ability.target or {}).get("allow_out_of_combat", True):
-                    raise ActionError(f"{ability.name} can only be used in combat.", code="combat_required")
-                return self._resolve_self_utility(player=player, ability=ability)
-
-            room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
-            if active_encounter:
-                _raise_if_ability_casting(active_encounter.pending_player_ability)
-                if not active_encounter.mob_id:
-                    raise ActionError("You are already in combat.", code="combat_in_progress")
-                selected_encounter = active_encounter
-                target_mob = (
-                    Mob.objects.select_for_update()
-                    .filter(pk=active_encounter.mob_id, is_pending_deletion=False)
-                    .first()
-                )
-                if not target_mob:
-                    raise ActionError("Your current target is gone.", code="target_missing")
-                if target_selector:
-                    target_ref = resolve_room_mob_target(
-                        room,
-                        target_selector,
-                        world=player.world,
-                        empty_error="Use the ability on what?",
-                        not_found_error="You don't see them here.",
-                    )
-                    if target_ref.id != active_encounter.mob_id:
-                        targeted_encounter = _active_player_encounter_for_mob(
-                            player,
-                            mob_id=target_ref.id,
-                        )
-                        if not targeted_encounter:
-                            raise ActionError(
-                                f"You are already fighting {target_mob.name or 'them'}.",
-                                code="combat_in_progress",
-                            )
-                        selected_encounter = targeted_encounter
-                        target_mob = (
-                            Mob.objects.select_for_update()
-                            .filter(pk=targeted_encounter.mob_id, is_pending_deletion=False)
-                            .first()
-                        )
-                        if not target_mob:
-                            raise ActionError("Your selected target is gone.", code="target_missing")
-                _raise_if_ability_casting(selected_encounter.pending_player_ability)
-                replaced = bool(selected_encounter.pending_player_ability)
-                selected_encounter.pending_player_ability = _pending_payload(
-                    ability=ability,
-                    command=command,
-                    target_type="mob",
-                    target_id=selected_encounter.mob_id,
-                    queued_round=selected_encounter.round_number,
-                )
-                selected_encounter.save(update_fields=["pending_player_ability"])
-                ability_ack = _ability_ack(
-                    player=player,
-                    ability=ability,
-                    replaced=replaced,
-                    target=target_mob,
-                )
-                if selected_encounter.resolution_interval == -1:
-                    from spawns.actions.combat import resolve_combat_encounter_step
-
-                    step = resolve_combat_encounter_step(selected_encounter.id, auto_advance=False)
-                    return ActionResult(events=[
-                        ability_ack,
-                        *step.events,
-                    ])
-                return ActionResult(events=[ability_ack])
-
-            target_ref = resolve_room_mob_target(
-                room,
-                target_selector,
-                world=player.world,
-                empty_error="Use the ability on what?",
-                not_found_error="You don't see them here.",
-            )
-            target_mob = (
-                Mob.objects.select_for_update()
-                .filter(
-                    pk=target_ref.id,
-                    world=player.world,
-                    room=room,
-                    is_pending_deletion=False,
-                )
-                .first()
-            )
-            if not target_mob:
-                raise ActionError("You don't see them here.", code="target_missing")
-
-            # Do not lock an existing encounter after taking the Mob lock.
-            # A committed busy row is sufficient to reject this new fight.
-            if CombatEncounter.objects.filter(
-                mob=target_mob,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists():
-                raise ActionError(
-                    f"{target_mob.name or 'They'} are already fighting someone else.",
-                    code="target_busy",
-                )
-
-            interval = _combat_interval(rules_config)
-            if interval == 0:
-                stand_player(player)
-                return self._resolve_immediately(
-                    player=player,
-                    target_mob=target_mob,
-                    ability=ability,
-                    command=command,
-                    config=death_config,
-                )
-
-            stand_player(player)
-            encounter = CombatEncounter.objects.create(
-                world=player.world,
-                room=room,
-                player=player,
-                mob=target_mob,
-                resolution_interval=interval,
-                pending_player_ability=_pending_payload(
-                    ability=ability,
-                    command=command,
-                    target_type="mob",
-                    target_id=target_mob.id,
-                    queued_round=0,
-                ),
-                next_resolution_ts=(
-                    timezone.now() + timedelta(seconds=interval)
-                    if interval > 0
-                    else None
-                ),
-            )
-            from spawns.actions.combat import ensure_encounter_initiative_order
-
-            ensure_encounter_initiative_order(
-                encounter,
-                player=player,
-                target_mob=target_mob,
-            )
-            ability_ack = _ability_ack(
-                player=player,
-                ability=ability,
-                replaced=False,
-                target=target_mob,
-            )
-
-            if interval == -1:
-                from spawns.actions.combat import resolve_combat_encounter_step
-
-                step = resolve_combat_encounter_step(encounter.id, auto_advance=False)
-                return ActionResult(events=[
-                    ability_ack,
-                    *step.events,
-                ])
-
-            from spawns.actions.combat import _schedule_encounter_resolution
-
-            _schedule_encounter_resolution(encounter.id, interval)
-            return ActionResult(events=[ability_ack])
+        if ability_uses_room_opener(ability):
+            return combat_commands.room_opener(player_id, ability=ability, command=command,
+                                                args=args, connection_id=connection_id)
+        return combat_commands.ability(self, player_id, ability=ability, command=command,
+                                        args=args, connection_id=connection_id)

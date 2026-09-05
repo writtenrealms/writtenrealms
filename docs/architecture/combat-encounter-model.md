@@ -1,5 +1,10 @@
 # Encounter-Scoped Combat in WR2
 
+> Historical pair-encounter design. The current runtime uses the participant
+> model documented in [Multi-Participant Combat](multi-participant-combat.md),
+> including shared PVE/PVP resolution and per-participant targets and intents.
+
+
 This document proposes a high-level combat direction for WR2 that fits the
 existing `Command -> Action -> Event` architecture and keeps room for later
 implementation details.

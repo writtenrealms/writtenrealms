@@ -39,16 +39,16 @@ def _actor_effect_queryset(actor: Player | Mob) -> QuerySet[ActiveEffect]:
 
 def active_effect_payload(effect: ActiveEffect) -> dict[str, Any]:
     source = (
-        actor_effect_ref(effect.source_player)
+        {'type': 'player', 'id': effect.source_player_id}
         if effect.source_player_id
-        else actor_effect_ref(effect.source_mob)
+        else {'type': 'mob', 'id': effect.source_mob_id}
         if effect.source_mob_id
         else deepcopy(effect.source_snapshot.get("ref") or {})
     )
     target = (
-        actor_effect_ref(effect.target_player)
+        {'type': 'player', 'id': effect.target_player_id}
         if effect.target_player_id
-        else actor_effect_ref(effect.target_mob)
+        else {'type': 'mob', 'id': effect.target_mob_id}
     )
     payload: dict[str, Any] = {
         "id": effect.id,
@@ -83,6 +83,10 @@ def clear_actor_effect_cache(actor: Player | Mob | None) -> None:
 def active_character_effects(actor: Player | Mob) -> list[dict[str, Any]]:
     if not getattr(actor, "id", None):
         return []
+    from spawns.combat_effects import actor_effects
+    cached = actor_effects(actor, scope=ActiveEffect.SCOPE_CHARACTER)
+    if cached is not None:
+        return [active_effect_payload(e) for e in cached]
     effects = list(
         _actor_effect_queryset(actor)
         .filter(scope=ActiveEffect.SCOPE_CHARACTER, remaining_rounds__gt=0)
@@ -95,6 +99,10 @@ def active_character_effects(actor: Player | Mob) -> list[dict[str, Any]]:
 
 def active_combat_effects(player: Player) -> list[dict[str, Any]]:
     """Return encounter-scoped effects that currently target ``player``."""
+    from spawns.combat_effects import actor_effects
+    cached = actor_effects(player, scope=ActiveEffect.SCOPE_ENCOUNTER)
+    if cached is not None:
+        return [{**active_effect_payload(e), 'encounter_id': e.encounter_id} for e in cached]
     rows = (
         ActiveEffect.objects.filter(
             scope=ActiveEffect.SCOPE_ENCOUNTER,
@@ -125,6 +133,20 @@ def active_combatant_effects(
         key: [] for key in actors_by_key
     }
     if not actors_by_key:
+        return payloads_by_key
+
+    from spawns.combat_effects import cached_effects
+    from spawns.combat_encounters import current_context
+    ctx = current_context()
+    cached = cached_effects() if ctx and actors_by_key.keys() <= ctx.actors.keys() else None
+    if cached is not None:
+        for effect in cached:
+            key = f'player.{effect.target_player_id}' if effect.target_player_id else f'mob.{effect.target_mob_id}'
+            if key in payloads_by_key:
+                payload = active_effect_payload(effect)
+                if effect.scope == ActiveEffect.SCOPE_ENCOUNTER:
+                    payload['encounter_id'] = effect.encounter_id
+                payloads_by_key[key].append(payload)
         return payloads_by_key
 
     player_ids = [
@@ -173,7 +195,9 @@ def preventing_action_effect(
     if not action_key or not phase_key:
         return None
 
-    rows = (
+    from spawns.combat_effects import actor_effects
+    cached = actor_effects(actor)
+    rows = ([active_effect_payload(e) for e in cached] if cached is not None else
         _actor_effect_queryset(actor)
         .filter(remaining_rounds__gt=0)
         .filter(
@@ -224,49 +248,30 @@ def preventing_action_effect(
 
 
 def _spatially_valid_encounter_effect_q() -> Q:
-    live_encounter = Q(
-        scope=ActiveEffect.SCOPE_ENCOUNTER,
-        encounter__status=CombatEncounter.STATUS_ACTIVE,
-    )
-    pve_player_target = Q(
-        encounter__duel_match_id__isnull=True,
-        target_player_id__isnull=False,
-        world_id=F("target_player__world_id"),
-        encounter__world_id=F("target_player__world_id"),
-        encounter__room_id=F("target_player__room_id"),
-        encounter__mob__world_id=F("target_player__world_id"),
-        encounter__mob__room_id=F("target_player__room_id"),
-        encounter__mob__is_pending_deletion=False,
-        encounter__mob__health__gt=0,
-    )
-    pve_mob_target = Q(
-        encounter__duel_match_id__isnull=True,
-        target_mob_id__isnull=False,
-        world_id=F("target_mob__world_id"),
-        encounter__world_id=F("target_mob__world_id"),
-        encounter__room_id=F("target_mob__room_id"),
-        encounter__player__world_id=F("target_mob__world_id"),
-        encounter__player__room_id=F("target_mob__room_id"),
-        encounter__mob__is_pending_deletion=False,
-        encounter__mob__health__gt=0,
-    )
-    pvp_player_target = Q(
-        encounter__duel_match_id__isnull=False,
-        target_player_id__isnull=False,
-        world_id=F("target_player__world_id"),
-        encounter__world_id=F("target_player__world_id"),
-        encounter__room_id=F("target_player__room_id"),
-        encounter__participants__player_id=F("target_player_id"),
-        encounter__participants__is_active=True,
-    )
-    return live_encounter & (
-        pve_player_target
-        | pve_mob_target
-        | pvp_player_target
-    )
+    live = Q(scope=ActiveEffect.SCOPE_ENCOUNTER,
+             encounter__status__in=[CombatEncounter.STATUS_ACTIVE, CombatEncounter.STATUS_PAUSED])
+    player = Q(target_player_id__isnull=False,
+               encounter__participants__player_id=F("target_player_id"),
+               encounter__participants__is_active=True,
+               world_id=F("target_player__world_id"),
+               encounter__world_id=F("target_player__world_id"),
+               encounter__room_id=F("target_player__room_id"))
+    mob = Q(target_mob_id__isnull=False,
+            encounter__participants__mob_id=F("target_mob_id"),
+            encounter__participants__is_active=True,
+            world_id=F("target_mob__world_id"),
+            encounter__world_id=F("target_mob__world_id"),
+            encounter__room_id=F("target_mob__room_id"),
+            target_mob__is_pending_deletion=False,
+            target_mob__health__gt=0)
+    return live & (player | mob)
 
 
 def encounter_effects(encounter: CombatEncounter) -> list[ActiveEffect]:
+    from spawns.combat_effects import cached_effects
+    cached = cached_effects()
+    if cached is not None:
+        return [e for e in cached if e.encounter_id == encounter.pk and e.scope == ActiveEffect.SCOPE_ENCOUNTER]
     return list(
         ActiveEffect.objects.filter(
             encounter=encounter,
@@ -363,6 +368,13 @@ def targets_for_character_effect_component(
 ) -> list[Player]:
     target_selector = str(component.get("target") or "self").strip().lower()
     if target_selector in ROOM_ALLY_TARGETS:
+        from spawns.combat_encounters import current_context, CombatPolicy
+        ctx = current_context()
+        if ctx:
+            policy = ctx.policy or CombatPolicy(list(ctx.actors.values()))
+            return [a for a in ctx.actors.values() if (a.key == actor.key or policy.allied(actor, a))
+                    and a.room_id == actor.room_id and a.world_id == actor.world_id and a.health > 0
+                    and (a.key == actor.key or not a.is_invisible)]
         targets: list[Player] = []
         seen: set[int] = set()
         for target in room_ally_players(actor, room=room):

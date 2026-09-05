@@ -142,7 +142,8 @@ class TestFollowingMovement(WorldTestCase):
                 )
 
         enqueue.assert_not_called()
-        self.assertEqual(callbacks, [])
+        self.assertEqual(len(callbacks), 1)
+        self.assertIn("request_reconciliation", callbacks[0].__qualname__)
         self.assertFalse(
             GameEventOutbox.objects.filter(
                 event_type=FOLLOW_DIRECTIONAL_MOVE_EVENT_TYPE,

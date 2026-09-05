@@ -141,7 +141,7 @@ class DuelParticipantAdmin(BaseAdmin):
 class CombatEncounterAdmin(BaseAdmin):
     list_display = ['id', 'world', 'room', 'status', 'duel_match']
     list_filter = ['status']
-    raw_id_fields = ['world', 'room', 'player', 'mob', 'duel_match']
+    raw_id_fields = ['world', 'room', 'duel_match']
 
 
 class CombatParticipantAdmin(BaseAdmin):

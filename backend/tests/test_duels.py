@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 from unittest.mock import patch
 
 from django.utils import timezone
@@ -142,7 +143,7 @@ class TestDuelLifecycle(WorldTestCase):
 
     def test_text_commands_challenge_accept_and_block_active_leave(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "duel Alex")
+            dispatch_and_drain_combat(self.player.id, "duel Alex")
 
         challenge = DuelMatch.objects.get()
         self.assertEqual(challenge.status, DuelMatch.STATUS_PENDING)
@@ -152,7 +153,7 @@ class TestDuelLifecycle(WorldTestCase):
             for row in messages
         ))
 
-        dispatch_text_command(self.opponent.id, "duel accept Joe")
+        dispatch_and_drain_combat(self.opponent.id, "duel accept Joe")
         challenge.refresh_from_db()
         self.player.refresh_from_db()
         self.opponent.refresh_from_db()
@@ -161,7 +162,7 @@ class TestDuelLifecycle(WorldTestCase):
         self.assertEqual(self.opponent.world_id, challenge.run.spawned_world_id)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "leave")
+            dispatch_and_drain_combat(self.player.id, "leave")
 
         leave_error = next(
             row["message"]
@@ -207,11 +208,8 @@ class TestDuelLifecycle(WorldTestCase):
         ):
             KillAction().execute(self.player.id, "Alex")
 
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        self.assertEqual(encounter.mob_id, mob.id)
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).get(status=CombatEncounter.STATUS_ACTIVE)
+        self.assertTrue(encounter.participants.filter(mob=mob, is_active=True).exists())
         self.opponent.refresh_from_db()
         self.assertEqual(self.opponent.health, 30)
 
@@ -223,7 +221,7 @@ class TestDuelLifecycle(WorldTestCase):
             name="Gate Rat",
             keywords="rat",
         )
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,

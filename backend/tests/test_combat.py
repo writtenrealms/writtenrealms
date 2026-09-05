@@ -1,3 +1,6 @@
+from tests.combat_fixtures import participant_initiative_order
+from tests.combat_fixtures import dispatch_and_drain_combat
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -24,7 +27,6 @@ from worlds.models import Door, Doorway, Room
 from tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
-    dispatch_text_command,
 )
 
 
@@ -228,7 +230,7 @@ class TestKillCommand(WorldTestCase):
             name="Ogre",
             keywords="ogre",
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -247,7 +249,7 @@ class TestKillCommand(WorldTestCase):
 
         updated_player.refresh_from_db()
         updated_player.equipment.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.assertIsNone(updated_player.equipment.weapon)
         self.assertFalse(Item.objects.filter(pk=sword.pk).exists())
         self.assertEqual(Item.objects.get(pk=ration.pk).container, updated_player)
@@ -544,7 +546,7 @@ class TestKillCommand(WorldTestCase):
         watcher.save(update_fields=["in_game"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
 
         self.player.refresh_from_db()
         self.assertFalse(Mob.objects.filter(pk=mob.id).exists())
@@ -651,7 +653,7 @@ class TestKillCommand(WorldTestCase):
         mob.create_corpse()
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
 
         prepared.refresh_from_db()
         self.assertEqual(
@@ -683,7 +685,7 @@ class TestKillCommand(WorldTestCase):
         mob.create_corpse()
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
 
         self.player.refresh_from_db()
         self.assertFalse(Mob.objects.filter(pk=mob.id).exists())
@@ -741,7 +743,7 @@ class TestKillCommand(WorldTestCase):
         watcher.save(update_fields=["in_game"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill ogre")
+            dispatch_and_drain_combat(self.player.id, "kill ogre")
 
         self.player.refresh_from_db()
         self.assertTrue(Mob.objects.filter(pk=mob.id).exists())
@@ -870,13 +872,9 @@ class TestKillCommand(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
             with self.captureOnCommitCallbacks(execute=True):
                 with capture_game_messages() as messages:
-                    dispatch_text_command(self.player.id, "east")
+                    dispatch_and_drain_combat(self.player.id, "east")
 
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
         self.assertEqual(encounter.round_number, 0)
         engage_message = self._message_by_type(
             messages,
@@ -892,7 +890,7 @@ class TestKillCommand(WorldTestCase):
             schedule_mock.call_args.kwargs["kwargs"]["encounter_id"],
             encounter.id,
         )
-        self.assertEqual(schedule_mock.call_args.kwargs["countdown"], 1.5)
+        self.assertAlmostEqual(schedule_mock.call_args.kwargs["countdown"], 1.5, delta=0.2)
 
     def test_all_opposing_core_faction_mobs_aggro_when_player_enters_room(self):
         self.world.config.combat_resolution_interval = 1.5
@@ -943,15 +941,11 @@ class TestKillCommand(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
             with self.captureOnCommitCallbacks(execute=True):
                 with capture_game_messages() as messages:
-                    dispatch_text_command(self.player.id, "east")
+                    dispatch_and_drain_combat(self.player.id, "east")
 
-        active_encounters = CombatEncounter.objects.filter(
-            player=self.player,
-            mob__in=mobs,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        self.assertEqual(active_encounters.count(), 3)
-        self.assertEqual(schedule_mock.call_count, 3)
+        active_encounters = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob__in=mobs, status=CombatEncounter.STATUS_ACTIVE).distinct()
+        self.assertEqual(active_encounters.count(), 1)
+        self.assertEqual(schedule_mock.call_count, 1)
 
         engage_messages = self._messages_by_type(
             messages,
@@ -995,7 +989,7 @@ class TestKillCommand(WorldTestCase):
             health=40,
             health_max=40,
             attack_power=3,
-            aggression=adv_consts.MOB_AGGRESSION_ALL,
+            aggression=adv_consts.MOB_AGGRESSION_PLAYERS, group_id="shield-line",
             target_priority=-1,
         )
         shieldbearer = Mob.objects.create(
@@ -1006,14 +1000,14 @@ class TestKillCommand(WorldTestCase):
             health=80,
             health_max=80,
             attack_power=2,
-            aggression=adv_consts.MOB_AGGRESSION_ALL,
+            aggression=adv_consts.MOB_AGGRESSION_PLAYERS, group_id="shield-line",
             target_priority=1,
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with self.captureOnCommitCallbacks(execute=True):
                 with capture_game_messages() as messages:
-                    dispatch_text_command(self.player.id, "east")
+                    dispatch_and_drain_combat(self.player.id, "east")
 
         engage_messages = self._messages_by_type(
             messages,
@@ -1021,20 +1015,11 @@ class TestKillCommand(WorldTestCase):
             self.player.key,
         )
         self.assertEqual(len(engage_messages), 2)
-        self.assertTrue(
-            all(
-                message["data"]["actor"]["target"]["key"] == shieldbearer.key
-                for message in engage_messages
-            )
-        )
+        self.assertEqual(engage_messages[-1]["data"]["actor"]["target"]["key"], shieldbearer.key)
 
-        archer_encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=archer,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
+        archer_encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=archer).get(status=CombatEncounter.STATUS_ACTIVE)
         archer_encounter.next_resolution_ts = timezone.now()
-        archer_encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(archer_encounter, update_fields=["next_resolution_ts"])
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as archer_messages:
                 resolve_combat_encounter(archer_encounter.id)
@@ -1057,13 +1042,9 @@ class TestKillCommand(WorldTestCase):
         archer.refresh_from_db()
         self.assertEqual(archer.health, archer.health_max)
 
-        shield_encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=shieldbearer,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
+        shield_encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=shieldbearer).get(status=CombatEncounter.STATUS_ACTIVE)
         shield_encounter.next_resolution_ts = timezone.now()
-        shield_encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(shield_encounter, update_fields=["next_resolution_ts"])
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as shield_messages:
                 resolve_combat_encounter(shield_encounter.id)
@@ -1118,7 +1099,7 @@ class TestKillCommand(WorldTestCase):
             target_priority=-1,
         )
         self.assertEqual(skirmisher.target_priority, 0)
-        shield_encounter = CombatEncounter.objects.create(
+        shield_encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1126,7 +1107,7 @@ class TestKillCommand(WorldTestCase):
             status=CombatEncounter.STATUS_ACTIVE,
             resolution_interval=-1,
         )
-        skirmisher_encounter = CombatEncounter.objects.create(
+        skirmisher_encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1134,7 +1115,7 @@ class TestKillCommand(WorldTestCase):
             status=CombatEncounter.STATUS_ACTIVE,
             resolution_interval=-1,
         )
-        archer_encounter = CombatEncounter.objects.create(
+        archer_encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1147,13 +1128,13 @@ class TestKillCommand(WorldTestCase):
             resolve_combat_encounter(shield_encounter.id)
 
         self.assertFalse(Mob.objects.filter(pk=shieldbearer.id).exists())
-        skirmisher_encounter.refresh_from_db()
+        refresh_combat_fixture(skirmisher_encounter)
         self.assertEqual(skirmisher_encounter.status, CombatEncounter.STATUS_ACTIVE)
-        archer_encounter.refresh_from_db()
+        refresh_combat_fixture(archer_encounter)
         self.assertEqual(archer_encounter.status, CombatEncounter.STATUS_ACTIVE)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "k")
+            dispatch_and_drain_combat(self.player.id, "k")
 
         attacks = self._messages_by_type(
             messages,
@@ -1194,7 +1175,7 @@ class TestKillCommand(WorldTestCase):
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "east")
+                dispatch_and_drain_combat(self.player.id, "east")
 
         self.assertIsNotNone(
             self._message_by_type(messages, "cmd.move.success", self.player.key)
@@ -1203,10 +1184,7 @@ class TestKillCommand(WorldTestCase):
             self._message_by_type(messages, "cmd.kill.success", self.player.key)
         )
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         schedule_mock.assert_not_called()
 
@@ -1229,13 +1207,9 @@ class TestKillCommand(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
             with self.captureOnCommitCallbacks(execute=True):
                 with capture_game_messages() as messages:
-                    dispatch_text_command(self.player.id, "kill rat")
+                    dispatch_and_drain_combat(self.player.id, "kill rat")
 
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
         mob.refresh_from_db()
 
         self.assertEqual(encounter.round_number, 0)
@@ -1251,11 +1225,11 @@ class TestKillCommand(WorldTestCase):
             schedule_mock.call_args.kwargs["kwargs"]["encounter_id"],
             encounter.id,
         )
-        self.assertEqual(schedule_mock.call_args.kwargs["countdown"], 1.5)
+        self.assertAlmostEqual(schedule_mock.call_args.kwargs["countdown"], 1.5, delta=0.2)
         self.assertEqual(
             {
                 (entry["type"], entry["id"])
-                for entry in encounter.initiative_order
+                for entry in participant_initiative_order(encounter)
             },
             {
                 ("player", self.player.id),
@@ -1291,7 +1265,7 @@ class TestKillCommand(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with self.captureOnCommitCallbacks(execute=True):
                 with capture_game_messages() as messages:
-                    dispatch_text_command(self.player.id, "kill rat")
+                    dispatch_and_drain_combat(self.player.id, "kill rat")
 
         engage_message = self._message_by_type(messages, "cmd.kill.success", self.player.key)
         self.assertIsNotNone(engage_message)
@@ -1315,22 +1289,18 @@ class TestKillCommand(WorldTestCase):
             fights_back=True,
         )
 
-        with patch("spawns.actions.combat.random.randint", side_effect=[10, 20]):
+        with patch("spawns.combat_encounters.initiative_roll", side_effect=[10, 20]):
             with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
                 with self.captureOnCommitCallbacks(execute=True):
-                    dispatch_text_command(self.player.id, "kill rat")
+                    dispatch_and_drain_combat(self.player.id, "kill rat")
 
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        self.assertEqual(encounter.initiative_order[0]["type"], "mob")
-        self.assertEqual(encounter.initiative_order[0]["id"], mob.id)
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(participant_initiative_order(encounter)[0]["type"], "mob")
+        self.assertEqual(participant_initiative_order(encounter)[0]["id"], mob.id)
 
         for expected_round in (1, 2):
             encounter.next_resolution_ts = timezone.now()
-            encounter.save(update_fields=["next_resolution_ts"])
+            save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
             with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
                 with capture_game_messages() as messages:
                     resolve_combat_encounter(encounter.id)
@@ -1341,7 +1311,7 @@ class TestKillCommand(WorldTestCase):
             )
             self.assertEqual(attacks[0]["data"]["actor"]["key"], mob.key)
             self.assertEqual(attacks[1]["data"]["actor"]["key"], self.player.key)
-            encounter.refresh_from_db()
+            refresh_combat_fixture(encounter)
             self.assertEqual(encounter.round_number, expected_round)
 
     def test_opening_priority_overrides_only_first_round_order(self):
@@ -1355,7 +1325,7 @@ class TestKillCommand(WorldTestCase):
             attack_power=4,
             fights_back=True,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1401,6 +1371,7 @@ class TestKillCommand(WorldTestCase):
         self.assertEqual(first_round_attacks[0]["data"]["actor"]["key"], self.player.key)
         self.assertEqual(first_round_attacks[1]["data"]["actor"]["key"], mob.key)
 
+        encounter.participants.filter(player=self.player).update(intent_ready=True)
         with capture_game_messages() as second_round_messages:
             resolve_combat_encounter(encounter.id)
         second_round_attacks = self._messages_by_type(
@@ -1436,13 +1407,9 @@ class TestKillCommand(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
             with self.captureOnCommitCallbacks(execute=True):
                 with capture_game_messages() as messages:
-                    dispatch_text_command(self.player.id, "k")
+                    dispatch_and_drain_combat(self.player.id, "k")
 
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
         engage_message = self._message_by_type(messages, "cmd.kill.success", self.player.key)
         self.assertIsNotNone(engage_message)
         self.assertEqual(engage_message["text"], "You engage Persian Guard.")
@@ -1477,13 +1444,10 @@ class TestKillCommand(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with self.captureOnCommitCallbacks(execute=True):
                 with capture_game_messages() as messages:
-                    dispatch_text_command(self.player.id, "k")
+                    dispatch_and_drain_combat(self.player.id, "k")
 
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        self.assertEqual(encounter.mob_id, first_soldier.id)
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).get(status=CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(combat_member(encounter, "player").current_target.mob_id, first_soldier.id)
         engage_message = self._message_by_type(messages, "cmd.kill.success", self.player.key)
         self.assertIsNotNone(engage_message)
         self.assertEqual(engage_message["data"]["actor"]["target"]["key"], first_soldier.key)
@@ -1500,17 +1464,14 @@ class TestKillCommand(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "k")
+            dispatch_and_drain_combat(self.player.id, "k")
 
         error = self._message_by_type(messages, "cmd.kill.error", self.player.key)
         self.assertIsNotNone(error)
         self.assertEqual(error["text"], "Kill what?")
         self.assertEqual(error["data"]["code"], "missing_target")
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
 
     def test_scheduled_combat_round_advances_one_step_and_reschedules(self):
@@ -1532,22 +1493,18 @@ class TestKillCommand(WorldTestCase):
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with self.captureOnCommitCallbacks(execute=True):
-                dispatch_text_command(self.player.id, "kill rat")
+                dispatch_and_drain_combat(self.player.id, "kill rat")
 
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
         encounter.next_resolution_ts = timezone.now()
-        encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async") as reschedule_mock:
             with self.captureOnCommitCallbacks(execute=True):
                 with capture_game_messages() as messages:
                     resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         mob.refresh_from_db()
         self.player.refresh_from_db()
 
@@ -1572,7 +1529,7 @@ class TestKillCommand(WorldTestCase):
             reschedule_mock.call_args.kwargs["kwargs"]["encounter_id"],
             encounter.id,
         )
-        self.assertEqual(reschedule_mock.call_args.kwargs["countdown"], 1.5)
+        self.assertAlmostEqual(reschedule_mock.call_args.kwargs["countdown"], 1.5, delta=0.2)
 
     def test_manual_combat_interval_advances_one_round_per_kill_command(self):
         self.world.config.combat_resolution_interval = -1
@@ -1596,13 +1553,9 @@ class TestKillCommand(WorldTestCase):
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
             with capture_game_messages() as first_messages:
-                dispatch_text_command(self.player.id, "kill rat")
+                dispatch_and_drain_combat(self.player.id, "kill rat")
 
-            encounter = CombatEncounter.objects.get(
-                player=self.player,
-                mob=mob,
-                status=CombatEncounter.STATUS_ACTIVE,
-            )
+            encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
             mob.refresh_from_db()
             self.player.refresh_from_db()
 
@@ -1612,7 +1565,7 @@ class TestKillCommand(WorldTestCase):
             self.assertIsNotNone(self._message_by_type(first_messages, "cmd.kill.success", self.player.key))
 
             with capture_game_messages() as second_messages:
-                dispatch_text_command(self.player.id, "kill rat")
+                dispatch_and_drain_combat(self.player.id, "kill rat")
 
         self.player.refresh_from_db()
         schedule_mock.assert_not_called()

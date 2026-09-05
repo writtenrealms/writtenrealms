@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 import math
 from copy import deepcopy
 from datetime import timedelta
@@ -346,7 +347,7 @@ class TestGameHeartbeat(WorldTestCase):
             health=100,
             health_max=100,
         )
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.spawn_room,
             player=self.player,
@@ -390,7 +391,7 @@ class TestGameHeartbeat(WorldTestCase):
             health=100,
             health_max=100,
         )
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.spawn_room,
             player=self.player,
@@ -452,7 +453,7 @@ class TestGameHeartbeat(WorldTestCase):
             stamina_regen=3,
             regen_rate=10,
         )
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.spawn_room,
             player=self.player,

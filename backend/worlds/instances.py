@@ -447,87 +447,89 @@ def enter_players_into_run(
         # Player rows are the per-player participation reservation. Run-owned
         # flows consistently lock Run, then Players in id order, then any
         # participant rows they may create, reactivate, replace, or exit.
-        players = list(
-            Player.objects.select_for_update(of=('self',))
-            .select_related('world', 'world__context')
-            .filter(pk__in=player_ids)
-            .order_by('pk')
-        )
-        if len(players) != len(player_ids):
-            raise ValueError("One or more players no longer exist.")
-        for player in players:
-            in_base_world = player.world.context_id == run.base_world_id
-            already_in_run = player.world_id == run.spawned_world_id
-            if not in_base_world and not already_in_run:
-                raise RuntimeError(
-                    "A player is no longer in the instance's base world."
-                )
-            transfer_from = transfer_rooms_by_player_id[player.id]
-            if (
-                not already_in_run
-                and transfer_from
-                and player.room_id != transfer_from.id
-            ):
-                raise RuntimeError(
-                    "A player moved away before instance entry completed."
-                )
-
-        from spawns.actions.combat import finish_locked_player_pve_encounters
-
-        for player in players:
-            finish_locked_player_pve_encounters(player=player)
-
-        list(
-            InstanceParticipant.objects.select_for_update(of=('self',))
-            .filter(player_id__in=player_ids)
-            .order_by('player_id', 'id')
-        )
-
-        _clear_movement_follows_for_players(player_ids)
-        now = timezone.now()
-        for player in players:
-            origin_room_id = player.room_id
-            transfer_from = transfer_rooms_by_player_id[player.id]
-            _upsert_assignment(
-                run=run,
-                player=player,
-                transfer_from=transfer_from,
+        from spawns.combat_encounters import locked_combat
+        with locked_combat(keys=[f'player.{pk}' for pk in player_ids]):
+            players = list(
+                Player.objects.select_for_update(of=('self',))
+                .select_related('world', 'world__context')
+                .filter(pk__in=player_ids)
+                .order_by('pk')
             )
-            _mark_other_active_participations_exited(run=run, player=player)
-            _upsert_participant(
-                run=run,
-                player=player,
-                transfer_from=transfer_from,
-                return_runtime_world_id=_entry_return_runtime_world_id(
+            if len(players) != len(player_ids):
+                raise ValueError("One or more players no longer exist.")
+            for player in players:
+                in_base_world = player.world.context_id == run.base_world_id
+                already_in_run = player.world_id == run.spawned_world_id
+                if not in_base_world and not already_in_run:
+                    raise RuntimeError(
+                        "A player is no longer in the instance's base world."
+                    )
+                transfer_from = transfer_rooms_by_player_id[player.id]
+                if (
+                    not already_in_run
+                    and transfer_from
+                    and player.room_id != transfer_from.id
+                ):
+                    raise RuntimeError(
+                        "A player moved away before instance entry completed."
+                    )
+
+            from spawns.actions.combat import finish_locked_player_pve_encounters
+
+            for player in players:
+                finish_locked_player_pve_encounters(player=player)
+
+            list(
+                InstanceParticipant.objects.select_for_update(of=('self',))
+                .filter(player_id__in=player_ids)
+                .order_by('player_id', 'id')
+            )
+
+            _clear_movement_follows_for_players(player_ids)
+            now = timezone.now()
+            for player in players:
+                origin_room_id = player.room_id
+                transfer_from = transfer_rooms_by_player_id[player.id]
+                _upsert_assignment(
                     run=run,
                     player=player,
-                ),
-            )
-
-            player.world = run.spawned_world
-            player.room = entry_room
-            player_update_fields = ['world', 'room']
-            _increment_location_sequence(player, player_update_fields)
-            player.save(update_fields=player_update_fields)
-            move_player_carried_items_to_world(player, run.spawned_world)
-            move_player_character_effects_to_world(
-                player,
-                run.spawned_world,
-            )
-            from spawns.events import player_room_enter_event
-
-            room_enter_events.append(
-                player_room_enter_event(
-                    player=player,
-                    origin_room_id=origin_room_id,
-                    destination_room_id=entry_room.id,
-                    source="instance_enter",
+                    transfer_from=transfer_from,
                 )
-            )
+                _mark_other_active_participations_exited(run=run, player=player)
+                _upsert_participant(
+                    run=run,
+                    player=player,
+                    transfer_from=transfer_from,
+                    return_runtime_world_id=_entry_return_runtime_world_id(
+                        run=run,
+                        player=player,
+                    ),
+                )
 
-        run.last_active_at = now
-        run.save(update_fields=['last_active_at'])
-        _enqueue_instance_events(room_enter_events)
+                player.world = run.spawned_world
+                player.room = entry_room
+                player_update_fields = ['world', 'room']
+                _increment_location_sequence(player, player_update_fields)
+                player.save(update_fields=player_update_fields)
+                move_player_carried_items_to_world(player, run.spawned_world)
+                move_player_character_effects_to_world(
+                    player,
+                    run.spawned_world,
+                )
+                from spawns.events import player_room_enter_event
+
+                room_enter_events.append(
+                    player_room_enter_event(
+                        player=player,
+                        origin_room_id=origin_room_id,
+                        destination_room_id=entry_room.id,
+                        source="instance_enter",
+                    )
+                )
+
+            run.last_active_at = now
+            run.save(update_fields=['last_active_at'])
+            _enqueue_instance_events(room_enter_events)
 
     return run
 
@@ -903,25 +905,27 @@ def transfer_instance_participant(
     with transaction.atomic():
         # The Player row is the participation reservation used by entry,
         # replacement, normal leave, and delegated exit.
-        locked_player = (
-            Player.objects.select_for_update(of=('self',))
-            .get(pk=participant_player_id)
-        )
-        locked_participant = (
-            InstanceParticipant.objects.select_for_update(of=('self',))
-            .select_related('run', 'return_runtime_world')
-            .get(pk=participant_id)
-        )
-        result = _transfer_instance_participant_locked(
-            player=locked_player,
-            participant=locked_participant,
-            destination_room=destination_room,
-            exit_reason=exit_reason,
-            expected_origin_world_id=expected_origin_world_id,
-            exited_at=exited_at,
-            emit_room_enter_event=emit_room_enter_event,
-        )
-        _enqueue_instance_events(result.events)
+        from spawns.combat_encounters import locked_combat
+        with locked_combat(keys=[f'player.{participant_player_id}']):
+            locked_player = (
+                Player.objects.select_for_update(of=('self',))
+                .get(pk=participant_player_id)
+            )
+            locked_participant = (
+                InstanceParticipant.objects.select_for_update(of=('self',))
+                .select_related('run', 'return_runtime_world')
+                .get(pk=participant_id)
+            )
+            result = _transfer_instance_participant_locked(
+                player=locked_player,
+                participant=locked_participant,
+                destination_room=destination_room,
+                exit_reason=exit_reason,
+                expected_origin_world_id=expected_origin_world_id,
+                exited_at=exited_at,
+                emit_room_enter_event=emit_room_enter_event,
+            )
+            _enqueue_instance_events(result.events)
 
     return result.player
 
@@ -1057,116 +1061,118 @@ def force_exit_instance(
                     code="active_duel",
                 )
 
-        locked_player = (
-            Player.objects.select_for_update(of=('self',))
-            .filter(pk=player_id)
-            .first()
-        )
-        if locked_player is None:
-            raise ForcedInstanceExitError(
-                "The player no longer exists.",
-                code="not_in_instance",
+        from spawns.combat_encounters import locked_combat
+        with locked_combat(keys=[f'player.{player_id}']):
+            locked_player = (
+                Player.objects.select_for_update(of=('self',))
+                .filter(pk=player_id)
+                .first()
             )
-        if locked_player.world_id != origin_world_id:
-            raise ForcedInstanceExitError(
-                "The player is no longer in the expected instance runtime.",
-                code="origin_changed",
-            )
-        if (
-            origin_room_id is not None
-            and locked_player.room_id != origin_room_id
-        ):
-            raise ForcedInstanceExitError(
-                "The player is no longer in the expected instance room.",
-                code="origin_changed",
-            )
-        active_encounters = list(
-            CombatEncounter.objects.select_for_update(of=('self',))
-            .filter(
-                player_id=player_id,
-                status=CombatEncounter.STATUS_ACTIVE,
-                duel_match__isnull=True,
-            )
-            .order_by('id')
-        )
-
-        locked_participant = (
-            InstanceParticipant.objects.select_for_update(of=('self',))
-            .select_related('run', 'return_runtime_world')
-            .filter(
-                run=locked_run,
-                player_id=player_id,
-                exited_at__isnull=True,
-            )
-            .first()
-        )
-        if locked_participant is None:
-            raise ForcedInstanceExitError(
-                "The player has no active participant record for this instance.",
-                code="not_in_instance",
-            )
-        return_runtime = locked_participant.return_runtime_world
-        if (
-            return_runtime is None
-            or return_runtime.context_id != locked_run.base_world_id
-        ):
-            raise ForcedInstanceExitError(
-                "The participant has no valid recorded base runtime.",
-                code="invalid_return_runtime",
+            if locked_player is None:
+                raise ForcedInstanceExitError(
+                    "The player no longer exists.",
+                    code="not_in_instance",
+                )
+            if locked_player.world_id != origin_world_id:
+                raise ForcedInstanceExitError(
+                    "The player is no longer in the expected instance runtime.",
+                    code="origin_changed",
+                )
+            if (
+                origin_room_id is not None
+                and locked_player.room_id != origin_room_id
+            ):
+                raise ForcedInstanceExitError(
+                    "The player is no longer in the expected instance room.",
+                    code="origin_changed",
+                )
+            active_encounters = list(
+                CombatEncounter.objects.select_for_update(of=('self',))
+                .filter(
+                    participants__player_id=player_id,
+                    participants__is_active=True,
+                    duel_match__isnull=True,
+                )
+                .order_by('id')
             )
 
-        now = timezone.now()
-        from spawns.actions.combat import finish_locked_player_pve_encounters
+            locked_participant = (
+                InstanceParticipant.objects.select_for_update(of=('self',))
+                .select_related('run', 'return_runtime_world')
+                .filter(
+                    run=locked_run,
+                    player_id=player_id,
+                    exited_at__isnull=True,
+                )
+                .first()
+            )
+            if locked_participant is None:
+                raise ForcedInstanceExitError(
+                    "The player has no active participant record for this instance.",
+                    code="not_in_instance",
+                )
+            return_runtime = locked_participant.return_runtime_world
+            if (
+                return_runtime is None
+                or return_runtime.context_id != locked_run.base_world_id
+            ):
+                raise ForcedInstanceExitError(
+                    "The participant has no valid recorded base runtime.",
+                    code="invalid_return_runtime",
+                )
 
-        finished_encounter_ids = finish_locked_player_pve_encounters(
-            player=locked_player,
-            encounters=active_encounters,
-        )
-        transfer_result = _transfer_instance_participant_locked(
-            player=locked_player,
-            participant=locked_participant,
-            destination_room=resolved_destination,
-            exit_reason=InstanceParticipant.EXIT_REASON_FORCED,
-            expected_origin_world_id=origin_world_id,
-            expected_origin_room_id=origin_room_id,
-            exited_at=now,
-            emit_room_enter_event=False,
-        )
-        locked_player.viewed_rooms.add(resolved_destination.id)
-        duel_participant_ids = [
-            participation.id
-            for participation in locked_duel_participants
-            if participation.exited_at is None
-        ]
-        if duel_participant_ids:
-            DuelParticipant.objects.filter(
-                pk__in=duel_participant_ids,
-            ).update(exited_at=now)
+            now = timezone.now()
+            from spawns.actions.combat import finish_locked_player_pve_encounters
 
-        locked_run.last_active_at = now
-        locked_run.save(update_fields=['last_active_at'])
-
-        events = [
-            *transfer_result.events,
-            GameEvent(
-                type="instance.left",
-                recipients=[],
-                data={
-                    "player_id": locked_player.id,
-                    "run_id": locked_run.id,
-                    "participant_id": locked_participant.id,
-                    "reason": InstanceParticipant.EXIT_REASON_FORCED,
-                    "destination_world_id": transfer_result.destination_world_id,
-                    "destination_room_id": resolved_destination.id,
-                },
-            ),
-            player_room_enter_event(
+            finished_encounter_ids = finish_locked_player_pve_encounters(
                 player=locked_player,
-                origin_room_id=transfer_result.origin_room_id,
-                destination_room_id=resolved_destination.id,
-                source="instance_leave",
-            ),
-        ]
+                encounters=active_encounters,
+            )
+            transfer_result = _transfer_instance_participant_locked(
+                player=locked_player,
+                participant=locked_participant,
+                destination_room=resolved_destination,
+                exit_reason=InstanceParticipant.EXIT_REASON_FORCED,
+                expected_origin_world_id=origin_world_id,
+                expected_origin_room_id=origin_room_id,
+                exited_at=now,
+                emit_room_enter_event=False,
+            )
+            locked_player.viewed_rooms.add(resolved_destination.id)
+            duel_participant_ids = [
+                participation.id
+                for participation in locked_duel_participants
+                if participation.exited_at is None
+            ]
+            if duel_participant_ids:
+                DuelParticipant.objects.filter(
+                    pk__in=duel_participant_ids,
+                ).update(exited_at=now)
+
+            locked_run.last_active_at = now
+            locked_run.save(update_fields=['last_active_at'])
+
+            events = [
+                *transfer_result.events,
+                GameEvent(
+                    type="instance.left",
+                    recipients=[],
+                    data={
+                        "player_id": locked_player.id,
+                        "run_id": locked_run.id,
+                        "participant_id": locked_participant.id,
+                        "reason": InstanceParticipant.EXIT_REASON_FORCED,
+                        "destination_world_id": transfer_result.destination_world_id,
+                        "destination_room_id": resolved_destination.id,
+                    },
+                ),
+                player_room_enter_event(
+                    player=locked_player,
+                    origin_room_id=transfer_result.origin_room_id,
+                    destination_room_id=resolved_destination.id,
+                    source="instance_leave",
+                ),
+            ]
 
     return ForcedInstanceExitResult(
         player=transfer_result.player,
@@ -1249,89 +1255,91 @@ def enter_instance(
             player=player,
             template_world=run.template_world,
         )
-        locked_player = (
-            player.__class__.objects.select_for_update(of=('self',))
-            .select_related('world', 'world__context')
-            .get(pk=player.pk)
-        )
-        if locked_player.world_id != entry_origin['world_id']:
-            raise RuntimeError(
-                "A player changed worlds before instance entry completed."
+        from spawns.combat_encounters import locked_combat
+        with locked_combat(keys=[player.key]):
+            locked_player = (
+                player.__class__.objects.select_for_update(of=('self',))
+                .select_related('world', 'world__context')
+                .get(pk=player.pk)
             )
-        if locked_player.room_id != entry_origin['room_id']:
-            raise RuntimeError(
-                "A player moved away before instance entry completed."
-            )
+            if locked_player.world_id != entry_origin['world_id']:
+                raise RuntimeError(
+                    "A player changed worlds before instance entry completed."
+                )
+            if locked_player.room_id != entry_origin['room_id']:
+                raise RuntimeError(
+                    "A player moved away before instance entry completed."
+                )
 
-        from spawns.actions.combat import finish_locked_player_pve_encounters
+            from spawns.actions.combat import finish_locked_player_pve_encounters
 
-        # Spatial PVE never crosses a runtime boundary. Clean every active
-        # PVE encounter before moving so a stale encounter from this same run
-        # cannot become valid again after re-entry.
-        finish_locked_player_pve_encounters(player=locked_player)
+            # Spatial PVE never crosses a runtime boundary. Clean every active
+            # PVE encounter before moving so a stale encounter from this same run
+            # cannot become valid again after re-entry.
+            finish_locked_player_pve_encounters(player=locked_player)
 
-        cancellation_events = _cancel_pending_door_action(
-            player=locked_player,
-            code="actor_world_changed",
-            message="You stop working with the door as you enter the instance.",
-        )
-        list(
-            InstanceParticipant.objects.select_for_update(of=('self',))
-            .filter(player_id=locked_player.pk)
-            .order_by('id')
-        )
-        return_runtime_world_id = _entry_return_runtime_world_id(
-            run=run,
-            player=locked_player,
-        )
-        _upsert_assignment(
-            run=run,
-            player=locked_player,
-            transfer_from=transfer_from,
-            member_ids=_normalize_member_ids(member_ids),
-        )
-        _mark_other_active_participations_exited(
-            run=run,
-            player=locked_player,
-        )
-        participant = _upsert_participant(
-            run=run,
-            player=locked_player,
-            transfer_from=transfer_from,
-            return_runtime_world_id=return_runtime_world_id,
-        )
-        if participant.return_runtime_world_id is None:
-            raise RuntimeError(
-                "The participant has no recorded return runtime."
-            )
-
-        origin_room_id = locked_player.room_id
-        _clear_movement_follows_for_players([locked_player.id])
-        locked_player.world = run.spawned_world
-        locked_player.room = transfer_to
-        player_update_fields = ['world', 'room']
-        _increment_location_sequence(locked_player, player_update_fields)
-        locked_player.save(update_fields=player_update_fields)
-        move_player_carried_items_to_world(locked_player, run.spawned_world)
-        move_player_character_effects_to_world(
-            locked_player,
-            run.spawned_world,
-        )
-        # Preserve the existing service contract for callers that reuse the
-        # passed model instance immediately after entry.
-        player.world = run.spawned_world
-        player.room = transfer_to
-        from spawns.events import player_room_enter_event
-
-        _enqueue_instance_events([
-            *cancellation_events,
-            player_room_enter_event(
+            cancellation_events = _cancel_pending_door_action(
                 player=locked_player,
-                origin_room_id=origin_room_id,
-                destination_room_id=transfer_to.id,
-                source="instance_enter",
-            ),
-        ])
+                code="actor_world_changed",
+                message="You stop working with the door as you enter the instance.",
+            )
+            list(
+                InstanceParticipant.objects.select_for_update(of=('self',))
+                .filter(player_id=locked_player.pk)
+                .order_by('id')
+            )
+            return_runtime_world_id = _entry_return_runtime_world_id(
+                run=run,
+                player=locked_player,
+            )
+            _upsert_assignment(
+                run=run,
+                player=locked_player,
+                transfer_from=transfer_from,
+                member_ids=_normalize_member_ids(member_ids),
+            )
+            _mark_other_active_participations_exited(
+                run=run,
+                player=locked_player,
+            )
+            participant = _upsert_participant(
+                run=run,
+                player=locked_player,
+                transfer_from=transfer_from,
+                return_runtime_world_id=return_runtime_world_id,
+            )
+            if participant.return_runtime_world_id is None:
+                raise RuntimeError(
+                    "The participant has no recorded return runtime."
+                )
+
+            origin_room_id = locked_player.room_id
+            _clear_movement_follows_for_players([locked_player.id])
+            locked_player.world = run.spawned_world
+            locked_player.room = transfer_to
+            player_update_fields = ['world', 'room']
+            _increment_location_sequence(locked_player, player_update_fields)
+            locked_player.save(update_fields=player_update_fields)
+            move_player_carried_items_to_world(locked_player, run.spawned_world)
+            move_player_character_effects_to_world(
+                locked_player,
+                run.spawned_world,
+            )
+            # Preserve the existing service contract for callers that reuse the
+            # passed model instance immediately after entry.
+            player.world = run.spawned_world
+            player.room = transfer_to
+            from spawns.events import player_room_enter_event
+
+            _enqueue_instance_events([
+                *cancellation_events,
+                player_room_enter_event(
+                    player=locked_player,
+                    origin_room_id=origin_room_id,
+                    destination_room_id=transfer_to.id,
+                    source="instance_enter",
+                ),
+            ])
 
     return run
 
@@ -1367,64 +1375,66 @@ def leave_instance(*, player, force_active_duel=False):
             .select_related('base_world', 'base_world__config')
             .get(pk=run.pk)
         )
-        locked_player = (
-            player.__class__.objects.select_for_update(of=('self',))
-            .get(pk=player.pk)
-        )
-        if locked_player.world_id != spawned_instance.id:
-            raise RuntimeError(
-                "The player is no longer in the expected instance runtime."
+        from spawns.combat_encounters import locked_combat
+        with locked_combat(keys=[player.key]):
+            locked_player = (
+                player.__class__.objects.select_for_update(of=('self',))
+                .get(pk=player.pk)
             )
-        from spawns.actions.combat import finish_locked_player_pve_encounters
-
-        finish_locked_player_pve_encounters(player=locked_player)
-        participant = (
-            InstanceParticipant.objects.select_for_update(of=('self',))
-            .select_related('run', 'return_runtime_world', 'transfer_from')
-            .filter(
-                run=locked_run,
-                player_id=locked_player.pk,
-                exited_at__isnull=True,
-            )
-            .first()
-        )
-        if participant is None:
-            raise RuntimeError(
-                "The player has no active participant record for this instance."
-            )
-
-        room = participant.transfer_from
-        if room is None:
-            assignment = (
-                InstanceAssignment.objects.filter(
-                    player_id=locked_player.pk,
-                    instance=spawned_instance,
+            if locked_player.world_id != spawned_instance.id:
+                raise RuntimeError(
+                    "The player is no longer in the expected instance runtime."
                 )
-                .select_related('transfer_from')
+            from spawns.actions.combat import finish_locked_player_pve_encounters
+
+            finish_locked_player_pve_encounters(player=locked_player)
+            participant = (
+                InstanceParticipant.objects.select_for_update(of=('self',))
+                .select_related('run', 'return_runtime_world', 'transfer_from')
+                .filter(
+                    run=locked_run,
+                    player_id=locked_player.pk,
+                    exited_at__isnull=True,
+                )
                 .first()
             )
-            if assignment and assignment.transfer_from_id:
-                room = assignment.transfer_from
-        if room is None:
-            room = locked_run.base_world.config.starting_room
+            if participant is None:
+                raise RuntimeError(
+                    "The player has no active participant record for this instance."
+                )
 
-        transfer_result = _transfer_instance_participant_locked(
-            player=locked_player,
-            participant=participant,
-            destination_room=room,
-            exit_reason=InstanceParticipant.EXIT_REASON_LEFT,
-            expected_origin_world_id=spawned_instance.id,
-            exited_at=now,
-        )
-        _enqueue_instance_events(transfer_result.events)
-        updated_player = transfer_result.player
-        DuelParticipant.objects.filter(
-            match__run=locked_run,
-            player_id=locked_player.pk,
-            exited_at__isnull=True,
-        ).update(exited_at=now)
-        locked_run.last_active_at = now
-        locked_run.save(update_fields=['last_active_at'])
+            room = participant.transfer_from
+            if room is None:
+                assignment = (
+                    InstanceAssignment.objects.filter(
+                        player_id=locked_player.pk,
+                        instance=spawned_instance,
+                    )
+                    .select_related('transfer_from')
+                    .first()
+                )
+                if assignment and assignment.transfer_from_id:
+                    room = assignment.transfer_from
+            if room is None:
+                room = locked_run.base_world.config.starting_room
+
+            transfer_result = _transfer_instance_participant_locked(
+                player=locked_player,
+                participant=participant,
+                destination_room=room,
+                exit_reason=InstanceParticipant.EXIT_REASON_LEFT,
+                expected_origin_world_id=spawned_instance.id,
+                exited_at=now,
+            )
+            _enqueue_instance_events(transfer_result.events)
+            updated_player = transfer_result.player
+            DuelParticipant.objects.filter(
+                match__run=locked_run,
+                player_id=locked_player.pk,
+                exited_at__isnull=True,
+            ).update(exited_at=now)
+            locked_run.last_active_at = now
+            locked_run.save(update_fields=['last_active_at'])
 
     return updated_player
 
@@ -1497,8 +1507,8 @@ def reset_instance(*, player) -> InstanceResetResult:
         PreparedGameAction,
     )
     with transaction.atomic():
-        player = player.__class__.objects.select_for_update().get(pk=player.pk)
-        spawned_world = World.objects.select_for_update().get(pk=player.world_id)
+        player = player.__class__.objects.get(pk=player.pk)
+        spawned_world = World.objects.get(pk=player.world_id)
         _assert_spawned_instance(spawned_world)
 
         try:
@@ -1514,87 +1524,102 @@ def reset_instance(*, player) -> InstanceResetResult:
             )
             run = InstanceRun.objects.select_for_update().get(pk=run.pk)
 
-        starting_room = _instance_starting_room(spawned_world)
-        active_players = _active_participant_players(run)
-        if all(active_player.id != player.id for active_player in active_players):
-            active_players.append(player)
-        player_ids = [active_player.id for active_player in active_players]
-        _clear_movement_follows_for_players(player_ids)
-        protected_item_ids = _protected_player_item_ids(active_players)
-        cancellation_events = []
-        for active_player in active_players:
-            cancellation_events.extend(
-                _cancel_pending_door_action(
-                    player=active_player,
-                    code="instance_reset",
-                    message=(
-                        "The instance reset interrupts your work with the door."
-                    ),
-                )
-            )
-
-        combat_encounters_qs = CombatEncounter.objects.filter(world=spawned_world)
-        combat_encounters_deleted = combat_encounters_qs.count()
-        combat_encounters_qs.delete()
-
-        items_qs = Item.objects.filter(world=spawned_world)
-        if protected_item_ids:
-            items_qs = items_qs.exclude(pk__in=protected_item_ids)
-        items_deleted = items_qs.count()
-        items_qs.delete()
-
-        mobs_qs = Mob.objects.filter(world=spawned_world)
-        mobs_deleted = mobs_qs.count()
-        mobs_qs.delete()
-
-        # Instance teardown is the one reset path that may remove touched
-        # doorway rows: its prepared actions disappear in the same transaction,
-        # so no old revision can become valid again.
-        PreparedGameAction.objects.filter(runtime_world=spawned_world).delete()
-        DoorState.objects.filter(world=spawned_world).delete()
-        reset_runtime_state(spawned_world)
-
-        spawn_plan_runs_reset = _reset_spawn_plan_runs(spawned_world)
-
-        room_enter_events = []
-        if player_ids:
-            player.__class__.objects.filter(
-                pk__in=player_ids,
-            ).update(
-                room=starting_room,
-                location_sequence=F('location_sequence') + 1,
-            )
-            from spawns.events import player_room_enter_event
-
+        from spawns.combat_encounters import locked_combat
+        from spawns.combat_rounds import finish_encounter
+        from spawns.combat_publication import snapshot_event
+        from spawns.events import enqueue_game_events
+        encounter_ids = list(CombatEncounter.objects.filter(world=spawned_world).values_list('pk', flat=True))
+        player_ids = list(run.participants.filter(exited_at__isnull=True).values_list('player_id', flat=True))
+        with locked_combat(keys=[f'player.{pk}' for pk in {*player_ids, player.pk}],
+                           encounter_ids=encounter_ids) as combat_context:
+            player = combat_context.actors[player.key]
+            if player.world_id != spawned_world.pk:
+                raise ValueError('You are no longer in that instance.')
+            for encounter in combat_context.encounters.values():
+                if encounter.status != CombatEncounter.STATUS_FINISHED:
+                    finish_encounter(combat_context, encounter)
+                    enqueue_game_events([snapshot_event(combat_context, encounter)])
+            starting_room = _instance_starting_room(spawned_world)
+            active_players = _active_participant_players(run)
+            if all(active_player.id != player.id for active_player in active_players):
+                active_players.append(player)
+            player_ids = [active_player.id for active_player in active_players]
+            _clear_movement_follows_for_players(player_ids)
+            protected_item_ids = _protected_player_item_ids(active_players)
+            cancellation_events = []
             for active_player in active_players:
-                origin_room_id = active_player.room_id
-                active_player.room_id = starting_room.id
-                active_player.location_sequence = (
-                    int(active_player.location_sequence or 0) + 1
-                )
-                room_enter_events.append(
-                    player_room_enter_event(
+                cancellation_events.extend(
+                    _cancel_pending_door_action(
                         player=active_player,
-                        origin_room_id=origin_room_id,
-                        destination_room_id=starting_room.id,
-                        source="instance_reset",
+                        code="instance_reset",
+                        message=(
+                            "The instance reset interrupts your work with the door."
+                        ),
                     )
                 )
 
-        run.progress = {}
-        run.outcome = {}
-        run.last_active_at = timezone.now()
-        run.save(update_fields=['progress', 'outcome', 'last_active_at', 'modified_ts'])
+            combat_encounters_qs = CombatEncounter.objects.filter(world=spawned_world)
+            combat_encounters_deleted = combat_encounters_qs.count()
+            combat_encounters_qs.delete()
 
-        spawned_world.is_clean = True
-        spawned_world.last_spawn_plan_run_ts = None
-        spawned_world.save(update_fields=['is_clean', 'last_spawn_plan_run_ts'])
+            items_qs = Item.objects.filter(world=spawned_world)
+            if protected_item_ids:
+                items_qs = items_qs.exclude(pk__in=protected_item_ids)
+            items_deleted = items_qs.count()
+            items_qs.delete()
 
-        run_spawn_plans_for_world(world=spawned_world, initial=True)
-        _enqueue_instance_events([
-            *cancellation_events,
-            *room_enter_events,
-        ])
+            mobs_qs = Mob.objects.filter(world=spawned_world)
+            mobs_deleted = mobs_qs.count()
+            mobs_qs.delete()
+
+            # Instance teardown is the one reset path that may remove touched
+            # doorway rows: its prepared actions disappear in the same transaction,
+            # so no old revision can become valid again.
+            PreparedGameAction.objects.filter(runtime_world=spawned_world).delete()
+            DoorState.objects.filter(world=spawned_world).delete()
+            reset_runtime_state(spawned_world)
+
+            spawn_plan_runs_reset = _reset_spawn_plan_runs(spawned_world)
+
+            room_enter_events = []
+            if player_ids:
+                player.__class__.objects.filter(
+                    pk__in=player_ids,
+                ).update(
+                    room=starting_room,
+                    location_sequence=F('location_sequence') + 1,
+                )
+                from spawns.events import player_room_enter_event
+
+                for active_player in active_players:
+                    origin_room_id = active_player.room_id
+                    active_player.room_id = starting_room.id
+                    active_player.location_sequence = (
+                        int(active_player.location_sequence or 0) + 1
+                    )
+                    room_enter_events.append(
+                        player_room_enter_event(
+                            player=active_player,
+                            origin_room_id=origin_room_id,
+                            destination_room_id=starting_room.id,
+                            source="instance_reset",
+                        )
+                    )
+
+            run.progress = {}
+            run.outcome = {}
+            run.last_active_at = timezone.now()
+            run.save(update_fields=['progress', 'outcome', 'last_active_at', 'modified_ts'])
+
+            spawned_world.is_clean = True
+            spawned_world.last_spawn_plan_run_ts = None
+            spawned_world.save(update_fields=['is_clean', 'last_spawn_plan_run_ts'])
+
+            run_spawn_plans_for_world(world=spawned_world, initial=True)
+            _enqueue_instance_events([
+                *cancellation_events,
+                *room_enter_events,
+            ])
 
     return InstanceResetResult(
         run_id=run.id,

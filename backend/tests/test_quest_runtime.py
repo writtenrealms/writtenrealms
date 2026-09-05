@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 from datetime import timedelta
 
 from django.utils import timezone
@@ -163,7 +164,7 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
 
     def test_look_auto_starts_minimal_quest(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         self.assertIn("cmd.look.success", self._message_types(messages))
         self.assertIn("quest.instance.started", self._message_types(messages))
@@ -189,7 +190,7 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
 
     def test_say_does_not_trigger_auto_start(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "say hello")
+            dispatch_and_drain_combat(self.player.id, "say hello")
 
         self.assertIn("cmd.say.success", self._message_types(messages))
         self.assertNotIn("quest.instance.started", self._message_types(messages))
@@ -197,7 +198,7 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
 
     def test_listing_active_quests_does_not_trigger_auto_start(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "quest list")
+            dispatch_and_drain_combat(self.player.id, "quest list")
 
         self.assertIn("cmd.quest.success", self._message_types(messages))
         self.assertNotIn("quest.instance.started", self._message_types(messages))
@@ -205,10 +206,10 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
 
     def test_quest_defaults_to_list_and_choice_complete_minimal_quest(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         with capture_game_messages() as info_messages:
-            dispatch_text_command(self.player.id, "quest")
+            dispatch_and_drain_combat(self.player.id, "quest")
 
         info_message = self._message_by_type(info_messages, "cmd.quest.success")
         self.assertIsNotNone(info_message)
@@ -221,7 +222,7 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         self.assertIn("tiny_hello", info_message["text"])
 
         with capture_game_messages() as choice_messages:
-            dispatch_text_command(self.player.id, "quest choose tiny_hello continue")
+            dispatch_and_drain_combat(self.player.id, "quest choose tiny_hello continue")
 
         self.assertIn("quest.instance.resolved", self._message_types(choice_messages))
         quest_instance = QuestInstance.objects.get(player=self.player, template__slug="tiny_hello")
@@ -261,7 +262,7 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(
+            dispatch_and_drain_combat(
                 self.player.id,
                 "quest choose broken_toll pay",
             )
@@ -273,10 +274,10 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
 
     def test_quest_abandon_resolves_active_quest_without_arc(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         with capture_game_messages() as abandon_messages:
-            dispatch_text_command(self.player.id, "quest abandon tiny_hello")
+            dispatch_and_drain_combat(self.player.id, "quest abandon tiny_hello")
 
         self.assertIn("quest.instance.resolved", self._message_types(abandon_messages))
 
@@ -286,10 +287,10 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
 
     def test_quest_i_prefix_resolves_to_info_with_slug(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         with capture_game_messages() as info_messages:
-            dispatch_text_command(self.player.id, "quest i tiny_hello")
+            dispatch_and_drain_combat(self.player.id, "quest i tiny_hello")
 
         info_message = self._message_by_type(info_messages, "cmd.quest.success")
         self.assertIsNotNone(info_message)
@@ -298,10 +299,10 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
 
     def test_quest_info_slug_returns_structured_quest_payload(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         with capture_game_messages() as info_messages:
-            dispatch_text_command(self.player.id, "quest info tiny_hello")
+            dispatch_and_drain_combat(self.player.id, "quest info tiny_hello")
 
         info_message = self._message_by_type(info_messages, "cmd.quest.success")
         self.assertIsNotNone(info_message)
@@ -312,7 +313,7 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
 
     def test_quest_info_requires_slug(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "quest info")
+            dispatch_and_drain_combat(self.player.id, "quest info")
 
         error_message = self._message_by_type(messages, "cmd.quest.error")
         self.assertIsNotNone(error_message)
@@ -321,7 +322,7 @@ class TestMinimalQuestRuntime(QuestRuntimeTestCase):
 
     def test_quest_a_prefix_is_rejected_as_ambiguous(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "quest a")
+            dispatch_and_drain_combat(self.player.id, "quest a")
 
         error_message = self._message_by_type(messages, "cmd.quest.error")
         self.assertIsNotNone(error_message)
@@ -401,7 +402,7 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
 
     def test_room_prompt_accepts_and_progresses_via_move_and_look(self):
         with capture_game_messages() as discovery_messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         self.assertNotIn("quest.opportunity.available", self._message_types(discovery_messages))
         look_message = self._message_by_type(discovery_messages, "cmd.look.success")
@@ -410,23 +411,23 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         self.assertFalse(QuestInstance.objects.filter(player=self.player, template__slug="shrine_survey").exists())
 
         with capture_game_messages() as accept_messages:
-            dispatch_text_command(self.player.id, "quest accept shrine_survey")
+            dispatch_and_drain_combat(self.player.id, "quest accept shrine_survey")
 
         self.assertIn("quest.instance.started", self._message_types(accept_messages))
 
         with capture_game_messages() as begin_messages:
-            dispatch_text_command(self.player.id, "quest choose shrine_survey begin")
+            dispatch_and_drain_combat(self.player.id, "quest choose shrine_survey begin")
 
         self.assertIn("quest.instance.updated", self._message_types(begin_messages))
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "east")
+            dispatch_and_drain_combat(self.player.id, "east")
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "east")
+            dispatch_and_drain_combat(self.player.id, "east")
         with capture_game_messages() as final_messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         self.assertIn("quest.instance.resolved", self._message_types(final_messages))
         quest_instance = QuestInstance.objects.get(player=self.player, template__slug="shrine_survey")
@@ -435,16 +436,16 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
 
     def test_objective_progress_update_includes_updated_objective_payload(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest accept shrine_survey")
+            dispatch_and_drain_combat(self.player.id, "quest accept shrine_survey")
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest choose shrine_survey begin")
+            dispatch_and_drain_combat(self.player.id, "quest choose shrine_survey begin")
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "east")
+            dispatch_and_drain_combat(self.player.id, "east")
 
         with capture_game_messages() as progress_messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         update_message = self._message_by_type(progress_messages, "quest.instance.updated")
         self.assertIsNotNone(update_message)
@@ -458,7 +459,7 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
 
     def test_quest_opp_prefix_is_rejected_as_unknown(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "quest opp")
+            dispatch_and_drain_combat(self.player.id, "quest opp")
 
         error_message = self._message_by_type(messages, "cmd.quest.error")
         self.assertIsNotNone(error_message)
@@ -467,10 +468,10 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
 
     def test_abandoned_non_repeatable_quest_can_be_reaccepted(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest accept shrine_survey")
+            dispatch_and_drain_combat(self.player.id, "quest accept shrine_survey")
 
         with capture_game_messages() as abandon_messages:
-            dispatch_text_command(self.player.id, "quest abandon shrine_survey")
+            dispatch_and_drain_combat(self.player.id, "quest abandon shrine_survey")
 
         self.assertIn("quest.instance.resolved", self._message_types(abandon_messages))
 
@@ -482,7 +483,7 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         self.assertEqual(abandoned_instance.resolution, "abandoned")
 
         with capture_game_messages() as resolved_messages:
-            dispatch_text_command(self.player.id, "quest resolved")
+            dispatch_and_drain_combat(self.player.id, "quest resolved")
 
         resolved_message = self._message_by_type(resolved_messages, "cmd.quest.success")
         self.assertIsNotNone(resolved_message)
@@ -495,7 +496,7 @@ class TestObjectiveQuestRuntime(QuestRuntimeTestCase):
         )
 
         with capture_game_messages() as accept_again_messages:
-            dispatch_text_command(self.player.id, "quest accept shrine_survey")
+            dispatch_and_drain_combat(self.player.id, "quest accept shrine_survey")
 
         self.assertIn("quest.instance.started", self._message_types(accept_again_messages))
         self.assertEqual(
@@ -553,7 +554,7 @@ class TestRoomPromptCalloutRuntime(QuestRuntimeTestCase):
 
     def test_look_shows_room_prompt_callout_and_skips_available_event(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         self.assertNotIn("quest.opportunity.available", self._message_types(messages))
         look_message = self._message_by_type(messages, "cmd.look.success")
@@ -571,7 +572,7 @@ class TestRoomPromptCalloutRuntime(QuestRuntimeTestCase):
 
     def test_inspect_presents_room_prompt_opportunity(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "inspect")
+            dispatch_and_drain_combat(self.player.id, "inspect")
 
         inspect_message = self._message_by_type(messages, "cmd.inspect.success")
         self.assertIsNotNone(inspect_message)
@@ -653,7 +654,7 @@ class TestPortableRoomRefsQuestRuntime(QuestRuntimeTestCase):
 
     def test_room_prompt_and_room_objectives_accept_canonical_refs(self):
         with capture_game_messages() as discovery_messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         self.assertNotIn("quest.opportunity.available", self._message_types(discovery_messages))
         look_message = self._message_by_type(discovery_messages, "cmd.look.success")
@@ -661,18 +662,18 @@ class TestPortableRoomRefsQuestRuntime(QuestRuntimeTestCase):
         self.assertIn("A survey notice hangs here.", look_message.get("text", ""))
 
         with capture_game_messages() as accept_messages:
-            dispatch_text_command(self.player.id, "quest accept portable_shrine_survey")
+            dispatch_and_drain_combat(self.player.id, "quest accept portable_shrine_survey")
 
         self.assertIn("quest.instance.started", self._message_types(accept_messages))
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "east")
+            dispatch_and_drain_combat(self.player.id, "east")
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "east")
+            dispatch_and_drain_combat(self.player.id, "east")
         with capture_game_messages() as final_messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         self.assertIn("quest.instance.resolved", self._message_types(final_messages))
         quest_instance = QuestInstance.objects.get(player=self.player, template__slug="portable_shrine_survey")
@@ -781,7 +782,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
 
     def test_room_prompt_accept_grants_item_on_start_step(self):
         with capture_game_messages() as accept_messages:
-            dispatch_text_command(self.player.id, "quest accept survey_route")
+            dispatch_and_drain_combat(self.player.id, "quest accept survey_route")
 
         self.assertEqual(
             self.player.inventory.filter(definition=self.survey_token_template).count(),
@@ -796,7 +797,7 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
 
     def test_npc_dialogue_accept_grants_item_on_start_step(self):
         with capture_game_messages() as accept_messages:
-            dispatch_text_command(self.player.id, "quest accept guide_assignment")
+            dispatch_and_drain_combat(self.player.id, "quest accept guide_assignment")
 
         self.assertEqual(
             self.player.inventory.filter(definition=self.survey_token_template).count(),
@@ -822,18 +823,18 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
         )
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest accept survey_route")
+            dispatch_and_drain_combat(self.player.id, "quest accept survey_route")
 
         granted_item = self.player.inventory.get(definition=self.survey_token_template)
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "put token satchel")
+            dispatch_and_drain_combat(self.player.id, "put token satchel")
 
         granted_item.refresh_from_db()
         self.assertEqual(granted_item.container_id, satchel.id)
 
         with capture_game_messages() as abandon_messages:
-            dispatch_text_command(self.player.id, "quest abandon survey_route")
+            dispatch_and_drain_combat(self.player.id, "quest abandon survey_route")
 
         self.assertFalse(Item.objects.filter(pk=granted_item.id).exists())
         satchel.refresh_from_db()
@@ -854,15 +855,15 @@ class TestGrantedItemQuestRuntime(QuestRuntimeTestCase):
         )
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest accept survey_route")
+            dispatch_and_drain_combat(self.player.id, "quest accept survey_route")
 
         granted_item = self.player.inventory.get(definition=self.survey_token_template)
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "put token satchel")
+            dispatch_and_drain_combat(self.player.id, "put token satchel")
 
         with capture_game_messages() as resolve_messages:
-            dispatch_text_command(self.player.id, "quest choose survey_route continue")
+            dispatch_and_drain_combat(self.player.id, "quest choose survey_route continue")
 
         self.assertFalse(Item.objects.filter(pk=granted_item.id).exists())
         self.assertEqual(
@@ -955,10 +956,10 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
         watcher.save(update_fields=["in_game"])
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
+            dispatch_and_drain_combat(self.player.id, "quest accept saloon_keg_run")
 
         with capture_game_messages() as move_messages:
-            dispatch_text_command(self.player.id, "east")
+            dispatch_and_drain_combat(self.player.id, "east")
 
         move_message = self._message_by_type(move_messages, "cmd.move.success")
         self.assertIsNotNone(move_message)
@@ -974,7 +975,7 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
         self.assertIn("[ * ]", move_message["text"])
 
         with capture_game_messages() as get_messages:
-            dispatch_text_command(self.player.id, "get keg")
+            dispatch_and_drain_combat(self.player.id, "get keg")
 
         self.assertEqual(
             self.player.inventory.filter(definition=self.keg_template).count(),
@@ -999,11 +1000,11 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
 
     def test_look_can_target_visible_quest_room_item(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
-            dispatch_text_command(self.player.id, "east")
+            dispatch_and_drain_combat(self.player.id, "quest accept saloon_keg_run")
+            dispatch_and_drain_combat(self.player.id, "east")
 
         with capture_game_messages() as look_messages:
-            dispatch_text_command(self.player.id, "look keg")
+            dispatch_and_drain_combat(self.player.id, "look keg")
 
         look_message = self._message_by_type(look_messages, "cmd.look.success")
         self.assertIsNotNone(look_message)
@@ -1030,26 +1031,26 @@ class TestQuestRoomItemsRuntime(QuestRuntimeTestCase):
         )
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
-            dispatch_text_command(self.player.id, "east")
-            dispatch_text_command(self.player.id, "get keg")
+            dispatch_and_drain_combat(self.player.id, "quest accept saloon_keg_run")
+            dispatch_and_drain_combat(self.player.id, "east")
+            dispatch_and_drain_combat(self.player.id, "get keg")
 
         with capture_game_messages() as drop_messages:
-            dispatch_text_command(self.player.id, "drop keg")
+            dispatch_and_drain_combat(self.player.id, "drop keg")
 
         drop_message = self._message_by_type(drop_messages, "cmd.drop.error")
         self.assertIsNotNone(drop_message)
         self.assertIn("Quest items stay with you", drop_message["text"])
 
         with capture_game_messages() as put_room_messages:
-            dispatch_text_command(self.player.id, "put keg chest")
+            dispatch_and_drain_combat(self.player.id, "put keg chest")
 
         put_room_message = self._message_by_type(put_room_messages, "cmd.put.error")
         self.assertIsNotNone(put_room_message)
         self.assertIn("Quest items can only be carried or turned in", put_room_message["text"])
 
         with capture_game_messages() as put_bag_messages:
-            dispatch_text_command(self.player.id, "put keg satchel")
+            dispatch_and_drain_combat(self.player.id, "put keg satchel")
 
         put_bag_message = self._message_by_type(put_bag_messages, "cmd.put.success")
         self.assertIsNotNone(put_bag_message)
@@ -1097,10 +1098,10 @@ class TestQuestRepeatabilityRuntime(QuestRuntimeTestCase):
 
     def test_completed_cooldown_quest_is_hidden_until_cooldown_expires(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest accept cooldown_trial")
+            dispatch_and_drain_combat(self.player.id, "quest accept cooldown_trial")
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest choose cooldown_trial finish")
+            dispatch_and_drain_combat(self.player.id, "quest choose cooldown_trial finish")
 
         self.assertNotIn(
             "cooldown_trial",
@@ -1226,7 +1227,7 @@ class TestNpcDialogueSlugDiscovery(QuestRuntimeTestCase):
 
     def test_npc_dialogue_discovery_accepts_mob_definition_slug_without_room_entry_spam(self):
         with capture_game_messages() as discovery_messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         self.assertNotIn("quest.opportunity.available", self._message_types(discovery_messages))
         look_message = self._message_by_type(discovery_messages, "cmd.look.success")
@@ -1333,13 +1334,13 @@ class TestTurnInQuestRuntime(QuestRuntimeTestCase):
 
     def test_turn_in_quest_progresses_from_give_and_grants_rewards(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "give all.pelt quartermaster")
+            dispatch_and_drain_combat(self.player.id, "give all.pelt quartermaster")
 
         with capture_game_messages() as final_messages:
-            dispatch_text_command(self.player.id, "give moonleaf quartermaster")
+            dispatch_and_drain_combat(self.player.id, "give moonleaf quartermaster")
 
         self.player.refresh_from_db()
         quest_instance = QuestInstance.objects.get(player=self.player, template__slug="quartermaster_supplies")
@@ -1421,7 +1422,7 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
 
     def test_look_marks_npc_dialogue_offer_with_exclamation_indicator(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         look_message = self._message_by_type(messages, "cmd.look.success")
         bartender = self._room_char_by_name(look_message, "Saloon Bartender")
@@ -1431,7 +1432,7 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
 
     def test_talk_to_offer_npc_shows_pitch_and_accept_command(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "talk bartender")
+            dispatch_and_drain_combat(self.player.id, "talk bartender")
 
         guidance_message = self._message_by_type(messages, "quest.opportunity.presented")
         self.assertIsNotNone(guidance_message)
@@ -1441,11 +1442,11 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
 
     def test_return_npc_shows_question_indicator_when_turn_in_is_ready(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
+            dispatch_and_drain_combat(self.player.id, "quest accept saloon_keg_run")
         self.keg_template.spawn(self.player, self.spawn_world)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         look_message = self._message_by_type(messages, "cmd.look.success")
         bartender = self._room_char_by_name(look_message, "Saloon Bartender")
@@ -1455,10 +1456,10 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
 
     def test_talk_to_turn_in_npc_without_giving_item_shows_handoff_hint(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "quest accept saloon_keg_run")
+            dispatch_and_drain_combat(self.player.id, "quest accept saloon_keg_run")
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "talk bartender")
+            dispatch_and_drain_combat(self.player.id, "talk bartender")
 
         hint_message = self._message_by_type(messages, "quest.interaction.hint")
         self.assertIsNotNone(hint_message)
@@ -1467,7 +1468,7 @@ class TestQuestDiscoverability(QuestRuntimeTestCase):
 
     def test_quest_accept_without_slug_uses_single_visible_opportunity(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "quest accept")
+            dispatch_and_drain_combat(self.player.id, "quest accept")
 
         self.assertIn("quest.instance.started", self._message_types(messages))
         quest_instance = QuestInstance.objects.get(player=self.player, template__slug="saloon_keg_run")
@@ -1534,7 +1535,7 @@ class TestQuestAcceptCommand(QuestRuntimeTestCase):
 
     def test_quest_accept_without_slug_errors_when_multiple_opportunities_are_visible(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "quest accept")
+            dispatch_and_drain_combat(self.player.id, "quest accept")
 
         error_message = self._message_by_type(messages, "cmd.quest.error")
         self.assertIsNotNone(error_message)
@@ -1642,16 +1643,16 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
 
     def test_kill_then_talk_quest_resolves_and_mob_responds(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
         with capture_game_messages() as final_messages:
-            dispatch_text_command(self.player.id, "talk captain")
+            dispatch_and_drain_combat(self.player.id, "talk captain")
 
         self.player.refresh_from_db()
         quest_instance = QuestInstance.objects.get(player=self.player, template__slug="rat_cull")
@@ -1663,11 +1664,11 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
 
     def test_forced_talk_is_visible_but_does_not_resolve_quest(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
 
         quest_instance = QuestInstance.objects.get(
             player=self.player,
@@ -1699,21 +1700,21 @@ class TestKillReturnQuestRuntime(QuestRuntimeTestCase):
         self.assertEqual(balance_map(self.player).get("obol", 0), 0)
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "talk captain")
+            dispatch_and_drain_combat(self.player.id, "talk captain")
 
         quest_instance.refresh_from_db()
         self.assertEqual(quest_instance.status, "resolved")
 
     def test_return_to_captain_shows_question_indicator_after_kills(self):
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "look")
+            dispatch_and_drain_combat(self.player.id, "look")
 
         look_message = self._message_by_type(messages, "cmd.look.success")
         captain = self._room_char_by_name(look_message, "Captain Merrow")
@@ -1780,7 +1781,7 @@ class TestQuestScopedState(QuestRuntimeTestCase):
         self.assertEqual(weather_watch["recap"], "The sky is stormy.")
 
         with capture_game_messages() as accept_messages:
-            dispatch_text_command(self.player.id, "quest accept weather_watch")
+            dispatch_and_drain_combat(self.player.id, "quest accept weather_watch")
 
         started_message = self._message_by_type(accept_messages, "quest.instance.started")
         self.assertIsNotNone(started_message)

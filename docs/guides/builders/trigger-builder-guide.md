@@ -1115,9 +1115,9 @@ the mob as an ordinary combat target.
 
 This mutates the spawned runtime mob, not its `kind: mobdefinition` document. A
 fresh spawn still uses the definition's authored values, and a later definition
-resync can replace the runtime override. Changing `aggression` does not
-immediately create a combat encounter; the new value applies when the runtime
-next evaluates mob aggression.
+resync can replace the runtime override. Changing `aggression` queues a room
+combat check after the change commits. The runtime revalidates the new policy
+before automatic engagement.
 
 ## Loading And Granting Items
 

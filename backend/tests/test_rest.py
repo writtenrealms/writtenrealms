@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 from unittest.mock import patch
 
 from config import constants as adv_consts
@@ -63,7 +64,7 @@ class TestRestCommands(WorldTestCase):
 
     def test_rest_command_sets_player_state(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "rest")
+            dispatch_and_drain_combat(self.player.id, "rest")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.state, adv_consts.CHARACTER_STATE_RESTING)
@@ -75,7 +76,7 @@ class TestRestCommands(WorldTestCase):
 
     def test_r_alias_defaults_to_rest_not_roll(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "r")
+            dispatch_and_drain_combat(self.player.id, "r")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.state, adv_consts.CHARACTER_STATE_RESTING)
@@ -89,7 +90,7 @@ class TestRestCommands(WorldTestCase):
         self.player.save(update_fields=["state"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "stand")
+            dispatch_and_drain_combat(self.player.id, "stand")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.state, adv_consts.CHARACTER_STATE_STANDING)
@@ -124,7 +125,7 @@ class TestRestCommands(WorldTestCase):
             health=100,
             health_max=100,
         )
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -132,7 +133,7 @@ class TestRestCommands(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "rest")
+            dispatch_and_drain_combat(self.player.id, "rest")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.state, adv_consts.CHARACTER_STATE_STANDING)
@@ -163,7 +164,7 @@ class TestRestCommands(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "rest")
+            dispatch_and_drain_combat(self.player.id, "rest")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.state, adv_consts.CHARACTER_STATE_STANDING)
@@ -189,7 +190,7 @@ class TestRestCommands(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with self.captureOnCommitCallbacks(execute=True):
                 with capture_game_messages() as messages:
-                    dispatch_text_command(self.player.id, "kill rat")
+                    dispatch_and_drain_combat(self.player.id, "kill rat")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.state, adv_consts.CHARACTER_STATE_STANDING)
@@ -210,7 +211,7 @@ class TestRestCommands(WorldTestCase):
             attack_power=4,
             fights_back=True,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,

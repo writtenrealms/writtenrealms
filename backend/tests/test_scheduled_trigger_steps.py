@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -3448,15 +3449,14 @@ class TestScheduledTriggerSteps(WorldTestCase):
         ) as schedule_mock:
             with capture_game_messages() as messages:
                 self._dispatch(self.player.id, "board hostile ferry")
+                from tests.combat_fixtures import drain_queued_combat
+                with self.captureOnCommitCallbacks(execute=True):
+                    drain_queued_combat()
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, destination.id)
         self.assertEqual(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=hostile,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).count(),
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=hostile).filter(status=CombatEncounter.STATUS_ACTIVE).count(),
             1,
         )
         schedule_mock.assert_called_once()
@@ -4429,7 +4429,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
             name="a fighting scene guard",
         )
         scene_guard = definition.spawn(remote_room, self.spawn_world)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=remote_room,
             player=fighter,
@@ -4465,7 +4465,7 @@ class TestScheduledTriggerSteps(WorldTestCase):
         self.assertFalse(result.started)
         self.assertEqual(result.code, "in_combat")
         scene_guard.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.assertEqual(scene_guard.room_id, remote_room.id)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
         self.assertFalse(GameEventOutbox.objects.exists())

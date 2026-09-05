@@ -42,7 +42,8 @@ class WorldGate:
 
         self.preflight()
 
-        with transaction.atomic():
+        from spawns.combat_encounters import locked_combat
+        with locked_combat(keys=[player.key]):
             player = (
                 Player.objects.select_for_update(of=('self',))
                 .select_related('world')
@@ -276,7 +277,8 @@ class WorldGate:
         else:
             self.exit_spw(player_data_id=player_data_id)
 
-        with transaction.atomic():
+        from spawns.combat_encounters import locked_combat
+        with locked_combat(keys=[self.player.key]):
             player = Player.objects.select_for_update(of=('self',)).get(
                 pk=self.player.pk,
             )

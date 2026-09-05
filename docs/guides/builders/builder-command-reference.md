@@ -594,8 +594,8 @@ so later commands can continue to use a stable authored keyword. Changing a
 description field to an empty value with a trailing `--` clears the runtime
 override, so display falls back to the definition's authored text or generated
 room text. A mob's `name` cannot be blank. `attackable` accepts `true` or
-`false`. Changing `aggression` does not itself start combat. The new setting is
-used the next time normal aggression evaluation runs.
+`false`. Changing `aggression` queues a room combat check after the change commits.
+The new setting is revalidated before any automatic engagement.
 
 ### `/setcurrency`
 

@@ -1,3 +1,6 @@
+from tests.combat_fixtures import combat_outbox_events
+from tests.combat_fixtures import dispatch_and_drain_combat
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture
 import json
 from datetime import timedelta
 from unittest.mock import patch
@@ -37,7 +40,6 @@ from worlds.models import Door, Doorway, Room
 from tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
-    dispatch_text_command,
 )
 
 
@@ -135,7 +137,7 @@ class TestCombatFlee(WorldTestCase):
         )
 
     def _active_encounter(self, mob, *, pending_flee=None):
-        return CombatEncounter.objects.create(
+        return create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -157,7 +159,7 @@ class TestCombatFlee(WorldTestCase):
             },
         )
         encounter.next_resolution_ts = timezone.now() - timedelta(seconds=30)
-        encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
         crack = ActiveEffect.objects.create(
             world=self.spawn_world,
             encounter=encounter,
@@ -178,10 +180,10 @@ class TestCombatFlee(WorldTestCase):
                 grace_seconds=0,
             )
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.assertEqual(result, {"candidates": 1, "resolved": 1, "failed": 0})
         self.assertEqual(encounter.round_number, 1)
-        self.assertEqual(encounter.pending_flee["status"], "ready")
+        self.assertEqual(combat_member(encounter, "player").pending_flee["status"], "ready")
         self.assertGreater(encounter.next_resolution_ts, recovery_now)
         self.assertTrue(ActiveEffect.objects.filter(pk=crack.pk).exists())
 
@@ -189,29 +191,29 @@ class TestCombatFlee(WorldTestCase):
             now=recovery_now,
             grace_seconds=0,
         )
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.assertEqual(second["candidates"], 0)
         self.assertEqual(encounter.round_number, 1)
 
         encounter.next_resolution_ts = recovery_now - timedelta(seconds=1)
-        encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
         completed = process_due_combat_encounters(
             now=recovery_now,
             grace_seconds=0,
         )
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.player.refresh_from_db()
         self.assertEqual(completed["resolved"], 1)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
-        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
         self.assertEqual(self.player.room_id, self.escape_room.id)
         self.assertFalse(ActiveEffect.objects.filter(pk=crack.pk).exists())
 
-    def test_resolver_locks_player_before_encounter_and_mob(self):
+    def test_resolver_locks_encounter_before_player_and_mob(self):
         mob = self._mob()
         encounter = self._active_encounter(mob)
         encounter.next_resolution_ts = timezone.now()
-        encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
         locked_tables = []
 
         def record_lock(execute, sql, params, many, context):
@@ -232,8 +234,8 @@ class TestCombatFlee(WorldTestCase):
                 resolve_combat_encounter_step(encounter.id, auto_advance=True)
 
         self.assertLess(
-            locked_tables.index("spawns_player"),
             locked_tables.index("spawns_combatencounter"),
+            locked_tables.index("spawns_player"),
         )
         self.assertLess(
             locked_tables.index("spawns_combatencounter"),
@@ -252,10 +254,7 @@ class TestCombatFlee(WorldTestCase):
         source_stats = combatant_snapshot(source, world=source.world)
         return ActiveEffect.objects.create(
             world=self.spawn_world,
-            encounter=CombatEncounter.objects.filter(
-                player=self.player,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).first(),
+            encounter=CombatEncounter.objects.filter(participants__player=self.player).filter(status=CombatEncounter.STATUS_ACTIVE).first(),
             source_player=source if isinstance(source, Player) else None,
             source_mob=source if isinstance(source, Mob) else None,
             target_player=target if isinstance(target, Player) else None,
@@ -343,7 +342,7 @@ class TestCombatFlee(WorldTestCase):
             "exp_worth",
             "currency_reward_snapshot",
         ])
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -356,11 +355,11 @@ class TestCombatFlee(WorldTestCase):
         starting_experience = self.player.experience
         starting_balance = balance_map(self.player)["obol"]
 
-        dispatch_text_command(self.player.id, "flee")
-        dispatch_text_command(self.player.id, "flee")
+        dispatch_and_drain_combat(self.player.id, "flee")
+        dispatch_and_drain_combat(self.player.id, "flee")
 
         self.player.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         effect.refresh_from_db()
         self.assertEqual(self.player.room_id, self.escape_room.id)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
@@ -393,7 +392,7 @@ class TestCombatFlee(WorldTestCase):
         self.assertEqual(quest_event.data["actor"]["key"], self.player.key)
         self.assertEqual(quest_event.data["target"]["id"], mob.id)
 
-    def test_reengaged_mob_dot_kill_credits_original_player(self):
+    def test_reengaged_mob_dot_does_not_reward_departed_player(self):
         mob = self._mob()
         mob.fights_back = False
         mob.health = 1
@@ -407,7 +406,7 @@ class TestCombatFlee(WorldTestCase):
             "exp_worth",
             "currency_reward_snapshot",
         ])
-        origin_encounter = CombatEncounter.objects.create(
+        origin_encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -421,7 +420,7 @@ class TestCombatFlee(WorldTestCase):
         second_player = self.create_player("Ally")
         second_player.in_game = True
         second_player.save(update_fields=["in_game"])
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=second_player,
@@ -438,8 +437,8 @@ class TestCombatFlee(WorldTestCase):
         self.player.refresh_from_db()
         second_player.refresh_from_db()
         self.assertFalse(Mob.objects.filter(pk=mob.id).exists())
-        self.assertEqual(self.player.experience, source_experience + 7)
-        self.assertEqual(balance_map(self.player)["obol"], source_balance + 3)
+        self.assertEqual(self.player.experience, source_experience)
+        self.assertEqual(balance_map(self.player)["obol"], source_balance)
         self.assertEqual(second_player.experience, second_experience)
         self.assertEqual(balance_map(second_player)["obol"], second_balance)
 
@@ -464,7 +463,7 @@ class TestCombatFlee(WorldTestCase):
         self.player.delete()
         effect.refresh_from_db()
         self.assertIsNone(effect.source_player_id)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=second_player,
@@ -487,7 +486,7 @@ class TestCombatFlee(WorldTestCase):
         mob = self._mob()
         mob.fights_back = False
         mob.save(update_fields=["fights_back"])
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -498,8 +497,8 @@ class TestCombatFlee(WorldTestCase):
         effect.encounter = encounter
         effect.save(update_fields=["encounter"])
 
-        dispatch_text_command(self.player.id, "flee")
-        dispatch_text_command(self.player.id, "flee")
+        dispatch_and_drain_combat(self.player.id, "flee")
+        dispatch_and_drain_combat(self.player.id, "flee")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, self.escape_room.id)
@@ -539,7 +538,7 @@ class TestCombatFlee(WorldTestCase):
         mob = self._mob()
         mob.fights_back = False
         mob.save(update_fields=["fights_back"])
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -550,8 +549,8 @@ class TestCombatFlee(WorldTestCase):
         effect.encounter = encounter
         effect.save(update_fields=["encounter"])
 
-        dispatch_text_command(self.player.id, "flee")
-        dispatch_text_command(self.player.id, "flee")
+        dispatch_and_drain_combat(self.player.id, "flee")
+        dispatch_and_drain_combat(self.player.id, "flee")
         effect.refresh_from_db()
         effect.next_tick_ts = timezone.now() - timedelta(seconds=1)
         effect.save(update_fields=["next_tick_ts"])
@@ -590,7 +589,7 @@ class TestCombatFlee(WorldTestCase):
 
     def test_deleting_encounter_only_removes_encounter_scoped_effects(self):
         mob = self._mob()
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -621,9 +620,9 @@ class TestCombatFlee(WorldTestCase):
     def test_fresh_flee_is_blocked_before_route_or_state_mutation(self):
         primary_encounter = self._active_encounter(self._mob())
         secondary_encounter = self._active_encounter(self._mob())
-        primary_encounter.pending_player_ability = {"ability": "held-player-cast"}
-        primary_encounter.pending_mob_ability = {"ability": "held-mob-cast"}
-        primary_encounter.save(
+        combat_member(primary_encounter, "player").pending_ability = {"ability": "held-player-cast"}
+        combat_member(primary_encounter, "mob").pending_ability = {"ability": "held-mob-cast"}
+        save_combat_fixture(primary_encounter,
             update_fields=["pending_player_ability", "pending_mob_ability"]
         )
         effect = self._prevent_flee_effect(
@@ -637,11 +636,11 @@ class TestCombatFlee(WorldTestCase):
 
         with patch("spawns.actions.combat._choose_flee_destination") as choose:
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "flee")
+                dispatch_and_drain_combat(self.player.id, "flee")
 
         choose.assert_not_called()
-        primary_encounter.refresh_from_db()
-        secondary_encounter.refresh_from_db()
+        refresh_combat_fixture(primary_encounter)
+        refresh_combat_fixture(secondary_encounter)
         self.player.refresh_from_db()
         effect.refresh_from_db()
         error = self._messages_by_type(messages, "cmd.flee.error")[0]
@@ -659,16 +658,16 @@ class TestCombatFlee(WorldTestCase):
         self.assertEqual(error["data"]["effect_duration_rounds"], 2)
         self.assertEqual(error["data"]["reason"], "rooted")
         self.assertEqual(error["data"]["phase"], "before_action")
-        self.assertEqual(primary_encounter.pending_flee, {})
+        self.assertEqual(combat_member(primary_encounter, "player").pending_flee, {})
         self.assertEqual(
-            primary_encounter.pending_player_ability,
+            combat_member(primary_encounter, "player").pending_ability,
             {"ability": "held-player-cast"},
         )
         self.assertEqual(
-            primary_encounter.pending_mob_ability,
+            combat_member(primary_encounter, "mob").pending_ability,
             {"ability": "held-mob-cast"},
         )
-        self.assertEqual(secondary_encounter.pending_flee, {})
+        self.assertEqual(combat_member(secondary_encounter, "player").pending_flee, {})
         self.assertEqual(self.player.stamina, starting_stamina)
         self.assertEqual(self.player.room_id, self.room.id)
         self.assertEqual(effect.remaining_rounds, 2)
@@ -677,7 +676,7 @@ class TestCombatFlee(WorldTestCase):
         self.world.config.combat_resolution_interval = -1
         self.world.config.save(update_fields=["combat_resolution_interval"])
         mob = self._mob()
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -685,12 +684,12 @@ class TestCombatFlee(WorldTestCase):
             resolution_interval=-1,
         )
 
-        dispatch_text_command(self.player.id, "flee")
+        dispatch_and_drain_combat(self.player.id, "flee")
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.player.refresh_from_db()
         mob.refresh_from_db()
-        self.assertEqual(encounter.pending_flee["status"], "ready")
+        self.assertEqual(combat_member(encounter, "player").pending_flee["status"], "ready")
         ready_round = encounter.round_number
         health_before_completion = self.player.health
         mob_health_before_completion = mob.health
@@ -719,21 +718,21 @@ class TestCombatFlee(WorldTestCase):
                 }
             ],
         )
-        encounter.pending_player_ability = {"ability": "held-player-cast"}
-        encounter.pending_mob_ability = {
+        combat_member(encounter, "player").pending_ability = {"ability": "held-player-cast"}
+        combat_member(encounter, "mob").pending_ability = {
             "ability": "snare-counter",
             "command": "snare-counter",
             "target": {"type": "player", "id": self.player.id},
             "queued_round": ready_round,
         }
-        encounter.save(
+        save_combat_fixture(encounter,
             update_fields=["pending_player_ability", "pending_mob_ability"]
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "flee")
+            dispatch_and_drain_combat(self.player.id, "flee")
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.player.refresh_from_db()
         mob.refresh_from_db()
         error = self._messages_by_type(messages, "cmd.flee.error")[0]
@@ -756,9 +755,9 @@ class TestCombatFlee(WorldTestCase):
         self.assertEqual(mob_attacks[0]["data"]["attack"], "snare-counter")
         self.assertEqual(encounter.round_number, ready_round + 1)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
-        self.assertEqual(encounter.pending_flee, {})
-        self.assertEqual(encounter.pending_player_ability, {})
-        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
         self.assertEqual(self.player.room_id, self.room.id)
         self.assertEqual(self.player.stamina, self.stats["stamina_max"])
         self.assertLess(self.player.health, health_before_completion)
@@ -774,16 +773,16 @@ class TestCombatFlee(WorldTestCase):
         mob = self._mob()
         encounter = self._active_encounter(mob)
 
-        dispatch_text_command(self.player.id, "flee")
+        dispatch_and_drain_combat(self.player.id, "flee")
         encounter.next_resolution_ts = timezone.now()
-        encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.player.refresh_from_db()
         mob.refresh_from_db()
-        self.assertEqual(encounter.pending_flee["status"], "ready")
+        self.assertEqual(combat_member(encounter, "player").pending_flee["status"], "ready")
         ready_round = encounter.round_number
         root_effect = self._prevent_flee_effect(
             encounter=encounter,
@@ -798,9 +797,9 @@ class TestCombatFlee(WorldTestCase):
         )
         self.player.ability_cooldowns = {"cooling-ability": 2}
         self.player.save(update_fields=["ability_cooldowns"])
-        encounter.pending_player_ability = {"ability": "held-player-cast"}
+        combat_member(encounter, "player").pending_ability = {"ability": "held-player-cast"}
         encounter.next_resolution_ts = timezone.now()
-        encounter.save(
+        save_combat_fixture(encounter,
             update_fields=["pending_player_ability", "next_resolution_ts"]
         )
         health_before_completion = self.player.health
@@ -810,7 +809,7 @@ class TestCombatFlee(WorldTestCase):
             with capture_game_messages() as messages:
                 resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.player.refresh_from_db()
         mob.refresh_from_db()
         root_effect.refresh_from_db()
@@ -823,8 +822,8 @@ class TestCombatFlee(WorldTestCase):
         )
         self.assertEqual(encounter.round_number, ready_round + 1)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
-        self.assertEqual(encounter.pending_flee, {})
-        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
         self.assertEqual(self.player.room_id, self.room.id)
         self.assertEqual(self.player.stamina, self.stats["stamina_max"])
         self.assertEqual(self.player.ability_cooldowns, {"cooling-ability": 1})
@@ -847,25 +846,21 @@ class TestCombatFlee(WorldTestCase):
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with self.captureOnCommitCallbacks(execute=True):
-                dispatch_text_command(self.player.id, "kill rat")
-            encounter = CombatEncounter.objects.get(
-                player=self.player,
-                mob=mob,
-                status=CombatEncounter.STATUS_ACTIVE,
-            )
-            encounter.pending_player_ability = {
+                dispatch_and_drain_combat(self.player.id, "kill rat")
+            encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
+            combat_member(encounter, "player").pending_ability = {
                 "ability": "held-player-cast",
                 "status": "casting",
             }
-            encounter.save(update_fields=["pending_player_ability"])
+            save_combat_fixture(encounter, update_fields=["pending_player_ability"])
             with capture_game_messages() as flee_messages:
-                dispatch_text_command(self.player.id, "flee")
+                dispatch_and_drain_combat(self.player.id, "flee")
 
-        encounter.refresh_from_db()
-        self.assertEqual(encounter.pending_flee["status"], "preparing")
-        self.assertEqual(encounter.pending_player_ability, {})
+        refresh_combat_fixture(encounter)
+        self.assertEqual(combat_member(encounter, "player").pending_flee["status"], "preparing")
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
         self.assertEqual(
-            encounter.pending_flee["movement_cost"],
+            combat_member(encounter, "player").pending_flee["movement_cost"],
             movement_cost(self.escape_room),
         )
         self.player.refresh_from_db()
@@ -887,16 +882,16 @@ class TestCombatFlee(WorldTestCase):
         )
 
         encounter.next_resolution_ts = timezone.now()
-        encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as first_round_messages:
                 resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         mob.refresh_from_db()
         self.player.refresh_from_db()
         self.assertEqual(encounter.round_number, 1)
-        self.assertEqual(encounter.pending_flee["status"], "ready")
+        self.assertEqual(combat_member(encounter, "player").pending_flee["status"], "ready")
         self.assertEqual(mob.health, self.stats["attack_power"] * 10)
         self.assertEqual(self.player.health, self.stats["health_max"] - 4)
         self.assertEqual(self.player.room_id, self.room.id)
@@ -920,12 +915,12 @@ class TestCombatFlee(WorldTestCase):
         )
 
         encounter.next_resolution_ts = timezone.now()
-        encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as second_round_messages:
                 resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         mob.refresh_from_db()
         self.player.refresh_from_db()
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
@@ -973,10 +968,10 @@ class TestCombatFlee(WorldTestCase):
             gate_delay=0,
         )
 
-        dispatch_text_command(self.player.id, "kill rat")
+        dispatch_and_drain_combat(self.player.id, "kill rat")
 
         with capture_game_messages() as preparing_messages:
-            dispatch_text_command(self.player.id, "flee")
+            dispatch_and_drain_combat(self.player.id, "flee")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, self.room.id)
@@ -1000,7 +995,7 @@ class TestCombatFlee(WorldTestCase):
         )
 
         with capture_game_messages() as completed_messages:
-            dispatch_text_command(self.player.id, "flee")
+            dispatch_and_drain_combat(self.player.id, "flee")
 
         self.player.refresh_from_db()
         mob.refresh_from_db()
@@ -1035,23 +1030,19 @@ class TestCombatFlee(WorldTestCase):
         self.world.config.save(update_fields=["combat_resolution_interval"])
         mob = self._mob()
 
-        dispatch_text_command(self.player.id, "kill rat")
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
+        dispatch_and_drain_combat(self.player.id, "kill rat")
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
         self.player.health = self.stats["health_max"]
         self.player.save(update_fields=["health"])
 
         with capture_game_messages() as first_messages:
-            dispatch_text_command(self.player.id, "flee")
+            dispatch_and_drain_combat(self.player.id, "flee")
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         mob.refresh_from_db()
         self.player.refresh_from_db()
         self.assertEqual(encounter.round_number, 2)
-        self.assertEqual(encounter.pending_flee["status"], "ready")
+        self.assertEqual(combat_member(encounter, "player").pending_flee["status"], "ready")
         self.assertEqual(mob.health, self.stats["attack_power"] * 9)
         self.assertEqual(self.player.health, self.stats["health_max"] - 4)
         self.assertEqual(
@@ -1078,9 +1069,9 @@ class TestCombatFlee(WorldTestCase):
         )
 
         with capture_game_messages() as second_messages:
-            dispatch_text_command(self.player.id, "flee")
+            dispatch_and_drain_combat(self.player.id, "flee")
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.player.refresh_from_db()
         mob.refresh_from_db()
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
@@ -1102,11 +1093,11 @@ class TestCombatFlee(WorldTestCase):
         self._guard(definition)
         encounter = self._active_encounter(self._mob())
 
-        dispatch_text_command(self.player.id, "flee")
+        dispatch_and_drain_combat(self.player.id, "flee")
 
-        encounter.refresh_from_db()
-        self.assertEqual(encounter.pending_flee["direction"], "north")
-        self.assertEqual(encounter.pending_flee["destination_room_id"], north_room.id)
+        refresh_combat_fixture(encounter)
+        self.assertEqual(combat_member(encounter, "player").pending_flee["direction"], "north")
+        self.assertEqual(combat_member(encounter, "player").pending_flee["destination_room_id"], north_room.id)
 
     def test_flee_reports_guard_policy_when_it_blocks_only_exit(self):
         definition = MobDefinition.objects.create(
@@ -1120,14 +1111,14 @@ class TestCombatFlee(WorldTestCase):
         starting_stamina = self.player.stamina
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "flee")
+            dispatch_and_drain_combat(self.player.id, "flee")
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.player.refresh_from_db()
         error = self._messages_by_type(messages, "cmd.flee.error")[0]
         self.assertEqual(error["text"], "The guard bars the eastern way.")
         self.assertEqual(error["data"]["code"], "policy_blocked")
-        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
         self.assertEqual(self.player.stamina, starting_stamina)
 
     def test_flee_reroutes_when_guard_arrives_during_preparation(self):
@@ -1148,18 +1139,18 @@ class TestCombatFlee(WorldTestCase):
                 choice for choice in choices if choice.direction == "east"
             ),
         ):
-            dispatch_text_command(self.player.id, "flee")
-        encounter.refresh_from_db()
-        self.assertEqual(encounter.pending_flee["direction"], "east")
-        reserved_cost = encounter.pending_flee["movement_cost"]
-        encounter.pending_flee = {**encounter.pending_flee, "status": "ready"}
-        encounter.save(update_fields=["pending_flee"])
+            dispatch_and_drain_combat(self.player.id, "flee")
+        refresh_combat_fixture(encounter)
+        self.assertEqual(combat_member(encounter, "player").pending_flee["direction"], "east")
+        reserved_cost = combat_member(encounter, "player").pending_flee["movement_cost"]
+        combat_member(encounter, "player").pending_flee = {**combat_member(encounter, "player").pending_flee, "status": "ready"}
+        save_combat_fixture(encounter, update_fields=["pending_flee"])
         self._guard(definition)
 
         result = resolve_combat_encounter_step(encounter.id, auto_advance=False)
 
         self.player.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         flee_event = next(event for event in result.events if event.type == "cmd.flee.success")
         self.assertEqual(self.player.room_id, north_room.id)
         self.assertEqual(flee_event.data["direction"], "north")
@@ -1172,10 +1163,10 @@ class TestCombatFlee(WorldTestCase):
 
     def test_flee_completion_does_not_rescan_routes_when_stored_route_is_valid(self):
         encounter = self._active_encounter(self._mob())
-        dispatch_text_command(self.player.id, "flee")
-        encounter.refresh_from_db()
-        encounter.pending_flee = {**encounter.pending_flee, "status": "ready"}
-        encounter.save(update_fields=["pending_flee"])
+        dispatch_and_drain_combat(self.player.id, "flee")
+        refresh_combat_fixture(encounter)
+        combat_member(encounter, "player").pending_flee = {**combat_member(encounter, "player").pending_flee, "status": "ready"}
+        save_combat_fixture(encounter, update_fields=["pending_flee"])
 
         with patch("spawns.actions.combat._choose_flee_destination") as choose:
             result = resolve_combat_encounter_step(encounter.id, auto_advance=False)
@@ -1199,10 +1190,10 @@ class TestCombatFlee(WorldTestCase):
             to_room=self.escape_room,
         )
         encounter = self._active_encounter(self._mob())
-        dispatch_text_command(self.player.id, "flee")
-        encounter.refresh_from_db()
-        encounter.pending_flee = {**encounter.pending_flee, "status": "ready"}
-        encounter.save(update_fields=["pending_flee"])
+        dispatch_and_drain_combat(self.player.id, "flee")
+        refresh_combat_fixture(encounter)
+        combat_member(encounter, "player").pending_flee = {**combat_member(encounter, "player").pending_flee, "status": "ready"}
+        save_combat_fixture(encounter, update_fields=["pending_flee"])
 
         def close_door_then_lock(**kwargs):
             DoorState.objects.update_or_create(
@@ -1222,13 +1213,13 @@ class TestCombatFlee(WorldTestCase):
             )
 
         self.player.refresh_from_db()
-        encounter.refresh_from_db()
-        error = next(event for event in result.events if event.type == "cmd.flee.error")
+        refresh_combat_fixture(encounter)
+        error = next(event for event in [*result.events, *combat_outbox_events()] if event.type == "cmd.flee.error")
         self.assertEqual(error.data["code"], "closed_door")
         self.assertEqual(self.player.room_id, self.room.id)
         self.assertEqual(self.player.stamina, self.stats["stamina_max"])
         self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
-        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
         lock_mock.assert_called_once()
 
     def test_flee_stays_in_combat_and_refunds_cost_when_route_becomes_blocked(self):
@@ -1240,27 +1231,27 @@ class TestCombatFlee(WorldTestCase):
         policy = self._guarded_exit_policy(definition)
         encounter = self._active_encounter(self._mob())
 
-        dispatch_text_command(self.player.id, "flee")
-        encounter.refresh_from_db()
-        self.assertEqual(encounter.pending_flee["direction"], "east")
+        dispatch_and_drain_combat(self.player.id, "flee")
+        refresh_combat_fixture(encounter)
+        self.assertEqual(combat_member(encounter, "player").pending_flee["direction"], "east")
         self.player.refresh_from_db()
         self.assertLess(self.player.stamina, self.stats["stamina_max"])
-        encounter.pending_flee = {**encounter.pending_flee, "status": "ready"}
-        encounter.save(update_fields=["pending_flee"])
+        combat_member(encounter, "player").pending_flee = {**combat_member(encounter, "player").pending_flee, "status": "ready"}
+        save_combat_fixture(encounter, update_fields=["pending_flee"])
         self._guard(definition)
 
         result = resolve_combat_encounter_step(encounter.id, auto_advance=False)
 
         self.player.refresh_from_db()
-        encounter.refresh_from_db()
-        error = next(event for event in result.events if event.type == "cmd.flee.error")
+        refresh_combat_fixture(encounter)
+        error = next(event for event in [*result.events, *combat_outbox_events()] if event.type == "cmd.flee.error")
         self.assertEqual(error.text, "The guard bars the eastern way.")
         self.assertEqual(error.data["code"], "policy_blocked")
         self.assertEqual(error.data["trigger_id"], policy.id)
         self.assertEqual(self.player.room_id, self.room.id)
         self.assertEqual(self.player.stamina, self.stats["stamina_max"])
         self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
-        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
 
     def test_flee_finishes_all_active_origin_room_encounters(self):
         self.world.config.combat_resolution_interval = -1
@@ -1286,7 +1277,7 @@ class TestCombatFlee(WorldTestCase):
             health_max=self.stats["attack_power"] * 10,
             fights_back=False,
         )
-        primary_encounter = CombatEncounter.objects.create(
+        primary_encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1294,7 +1285,7 @@ class TestCombatFlee(WorldTestCase):
             status=CombatEncounter.STATUS_ACTIVE,
             resolution_interval=-1,
         )
-        secondary_encounter = CombatEncounter.objects.create(
+        secondary_encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1307,12 +1298,12 @@ class TestCombatFlee(WorldTestCase):
             },
         )
 
-        dispatch_text_command(self.player.id, "flee")
+        dispatch_and_drain_combat(self.player.id, "flee")
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "flee")
+            dispatch_and_drain_combat(self.player.id, "flee")
 
-        primary_encounter.refresh_from_db()
-        secondary_encounter.refresh_from_db()
+        refresh_combat_fixture(primary_encounter)
+        refresh_combat_fixture(secondary_encounter)
         self.player.refresh_from_db()
         self.assertEqual(primary_encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertEqual(secondary_encounter.status, CombatEncounter.STATUS_FINISHED)
@@ -1327,7 +1318,7 @@ class TestCombatFlee(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "scan west")
+            dispatch_and_drain_combat(self.player.id, "scan west")
 
         scan_messages = self._messages_by_type(messages, "cmd.scan.success")
         self.assertTrue(scan_messages, messages)
@@ -1340,7 +1331,7 @@ class TestCombatFlee(WorldTestCase):
         )
 
     def test_stale_room_flee_finishes_charge_and_emits_clear_state(self):
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1359,20 +1350,20 @@ class TestCombatFlee(WorldTestCase):
         ):
             result = FleeAction().execute(self.player.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
-        error = next(event for event in result.events if event.type == "cmd.flee.error")
+        error = next(event for event in [*result.events, *combat_outbox_events()] if event.type == "cmd.flee.error")
         self.assertEqual(error.data["code"], "combat_ended")
         preparation_state = next(
             event
-            for event in result.events
+            for event in combat_outbox_events()
             if event.type == "player.ability_preparations.update"
         )
         self.assertEqual(preparation_state.data["abilities"], [])
 
     def test_flee_requires_active_combat_and_an_exit(self):
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "flee")
+            dispatch_and_drain_combat(self.player.id, "flee")
 
         error = self._messages_by_type(messages, "cmd.flee.error")[0]
         self.assertEqual(error["data"]["code"], "not_in_combat")
@@ -1384,10 +1375,10 @@ class TestCombatFlee(WorldTestCase):
         self._mob()
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with self.captureOnCommitCallbacks(execute=True):
-                dispatch_text_command(self.player.id, "kill rat")
+                dispatch_and_drain_combat(self.player.id, "kill rat")
 
         with capture_game_messages() as no_exit_messages:
-            dispatch_text_command(self.player.id, "flee")
+            dispatch_and_drain_combat(self.player.id, "flee")
 
         error = self._messages_by_type(no_exit_messages, "cmd.flee.error")[0]
         self.assertEqual(error["data"]["code"], "no_flee_exit")
@@ -1425,8 +1416,9 @@ class TestCombatFlee(WorldTestCase):
             PreparedGameAction.STATUS_CANCELLED,
         )
         self.assertEqual(prepared.failure_code, "physical_action_replaced")
-        self.assertEqual(result.events[0].type, "cmd.close.cancelled")
-        self.assertIn("cmd.flee.success", [event.type for event in result.events])
+        self.assertEqual(combat_outbox_events()[0].type, "cmd.close.cancelled")
+        self.assertEqual(result.events, [])
+        self.assertIn("cmd.flee.success", [event.type for event in combat_outbox_events()])
 
     def test_flee_requires_enough_stamina_for_destination_room(self):
         self.world.config.combat_resolution_interval = 1.5
@@ -1437,18 +1429,14 @@ class TestCombatFlee(WorldTestCase):
         mob = self._mob()
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with self.captureOnCommitCallbacks(execute=True):
-                dispatch_text_command(self.player.id, "kill rat")
+                dispatch_and_drain_combat(self.player.id, "kill rat")
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "flee")
+            dispatch_and_drain_combat(self.player.id, "flee")
 
         error = self._messages_by_type(messages, "cmd.flee.error")[0]
         self.assertEqual(error["data"]["code"], "exhausted")
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        self.assertEqual(encounter.pending_flee, {})
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
         self.player.refresh_from_db()
         self.assertEqual(self.player.stamina, flee_cost - 1)

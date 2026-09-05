@@ -315,35 +315,32 @@ def _collect_nested_item_ids(items: list[Item]) -> set[int]:
 
 
 def _purge_mob_cleanly(*, mob: Mob) -> None:
-    item_ids = _collect_nested_item_ids(list(mob.inventory.all()))
-    if mob.equipment_id:
-        equipment_type = ContentType.objects.get_for_model(Equipment)
-        equipment_items = list(
-            Item.objects.filter(
-                container_type=equipment_type,
-                container_id=mob.equipment_id,
+    from spawns.combat_encounters import locked_combat
+    from spawns.combat_rounds import detach_actor
+    with locked_combat(keys=[mob.key]) as ctx:
+        detach_actor(ctx, mob.key, reason='purged')
+        item_ids = _collect_nested_item_ids(list(mob.inventory.all()))
+        if mob.equipment_id:
+            equipment_type = ContentType.objects.get_for_model(Equipment)
+            equipment_items = list(
+                Item.objects.filter(
+                    container_type=equipment_type,
+                    container_id=mob.equipment_id,
+                )
             )
-        )
-        item_ids.update(_collect_nested_item_ids(equipment_items))
+            item_ids.update(_collect_nested_item_ids(equipment_items))
 
-    if item_ids:
-        Item.objects.filter(id__in=item_ids).delete()
+        if item_ids:
+            Item.objects.filter(id__in=item_ids).delete()
 
-    Mob.objects.filter(pk=mob.id).delete()
+        Mob.objects.filter(pk=mob.id).delete()
 
 
 def _active_encounter_player_ids_for_mobs(mobs: list[Mob]) -> set[int]:
-    mob_ids = [mob.id for mob in mobs if mob.id]
-    if not mob_ids:
-        return set()
-    return set(
-        CombatEncounter.objects.select_for_update()
-        .filter(
-            mob_id__in=mob_ids,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        .values_list("player_id", flat=True)
-    )
+    encounter_ids = CombatParticipant.objects.filter(mob_id__in=[mob.pk for mob in mobs],
+                                                      is_active=True).values('encounter_id')
+    return set(CombatParticipant.objects.filter(encounter_id__in=encounter_ids, is_active=True,
+        player__isnull=False).values_list('player_id', flat=True))
 
 
 def _split_chained_commands(cmd: str) -> list[str]:
@@ -2674,7 +2671,8 @@ class SetClassAction:
         new_class = _resolve_player_class_key(target.world, class_selector)
         previous_class = str(target.archetype or "")
 
-        with transaction.atomic():
+        from spawns.combat_encounters import locked_combat
+        with locked_combat(keys=[target.key]):
             target = Player.objects.select_for_update().get(pk=target.pk)
             previous_abilities = list(target.known_abilities or [])
             target.archetype = new_class
@@ -2699,10 +2697,7 @@ class SetClassAction:
                 "ability_hotkeys",
                 "ability_cooldowns",
             ])
-            CombatEncounter.objects.filter(
-                player=target,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exclude(pending_player_ability={}).update(pending_player_ability={})
+            CombatParticipant.objects.filter(player=target, is_active=True).exclude(pending_ability={}).update(pending_ability={})
 
         updated_target = get_player_with_related(target.id)
         target_payload = serialize_actor(updated_target, updated_target.room)
@@ -3384,9 +3379,9 @@ class TransferAction:
             duel_match_id__isnull=True,
         )
         if target_ref.target_type == "player":
-            encounters = encounters.filter(player_id=target_ref.target_id)
+            encounters = encounters.filter(participants__player_id=target_ref.target_id, participants__is_active=True)
         else:
-            encounters = encounters.filter(mob_id=target_ref.target_id)
+            encounters = encounters.filter(participants__mob_id=target_ref.target_id, participants__is_active=True)
         return list(encounters.order_by("id"))
 
     @staticmethod
@@ -3436,23 +3431,6 @@ class TransferAction:
         )
         return finished_ids, events
 
-    @staticmethod
-    def _finish_active_encounters(encounters: list[CombatEncounter]) -> list[int]:
-        encounter_ids = [encounter.id for encounter in encounters]
-        if not encounter_ids:
-            return []
-        ActiveEffect.objects.filter(
-            encounter_id__in=encounter_ids,
-            scope=ActiveEffect.SCOPE_ENCOUNTER,
-        ).delete()
-        CombatEncounter.objects.filter(pk__in=encounter_ids).update(
-            status=CombatEncounter.STATUS_FINISHED,
-            next_resolution_ts=None,
-            pending_player_ability={},
-            pending_mob_ability={},
-            pending_flee={},
-        )
-        return encounter_ids
 
     @staticmethod
     def _lock_target(
@@ -3525,7 +3503,7 @@ class TransferAction:
     def _combat_effect_state_events(
         encounters: list[CombatEncounter],
     ) -> list[GameEvent]:
-        player_ids = sorted({encounter.player_id for encounter in encounters})
+        player_ids = list(CombatParticipant.objects.filter(encounter__in=encounters, player__isnull=False).values_list('player_id', flat=True).distinct())
         if not player_ids:
             return []
         players = Player.objects.filter(pk__in=player_ids).order_by("id")
@@ -3618,7 +3596,9 @@ class TransferAction:
                 )
 
         try:
-            with transaction.atomic():
+            from spawns.combat_encounters import locked_combat
+            from spawns.combat_rounds import detach_actor
+            with locked_combat(keys=[f"{target_ref.target_type}.{target_ref.target_id}"]) as combat_ctx:
                 # Acquire both encounter and target rows without waiting. This
                 # avoids joining either encounter-first resolution cycles or
                 # player-first combat-start cycles; callers can retry instead.
@@ -3665,7 +3645,8 @@ class TransferAction:
                 ability_prepare_events = list(pvp_cleanup_events)
                 if moved:
                     finished_encounter_ids.extend(
-                        self._finish_active_encounters(active_encounters)
+                        detach_actor(
+                            combat_ctx, target.key, reason='transferred')
                     )
 
                     target.room_id = destination.id
@@ -3688,8 +3669,7 @@ class TransferAction:
                     )
                     ability_prepare_events.extend(
                         ability_prepare_state_events_for_players(
-                            encounter.player_id
-                            for encounter in active_encounters
+                            p.player_id for p in combat_ctx.participants if p.player_id
                         )
                     )
                 elif isinstance(target, Player):

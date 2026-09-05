@@ -49,6 +49,15 @@ state into WR2.
 
 Current required mappings:
 
+- Emit authored mob assistance as `spec.combat.assist`: `none` by default,
+  `same_spawn_cohort` only when the old content's intent is same-spawn allied
+  assistance, or `allies` for explicit faction-allied assistance. The legacy
+  `MobDefinition.assists` flag is not the runtime authority for WR2 admission.
+  Ambiguous WR1 assistance behavior requires builder review. Preserve authored
+  aggression and retaliation independently. Express representable engagement
+  conditions in `spec.combat.engage_when` using the existing WR2 condition DSL;
+  do not export live encounter sides, targets, intents, contributions, or leases.
+
 - Emit each WR1 authored currency as `kind: currency` with its portable code,
   then select exactly one `spec.default_currency` in `kind: world`. Because
   Gold was WR1's fixed effective default, a converted WR1 world emits a `gold`

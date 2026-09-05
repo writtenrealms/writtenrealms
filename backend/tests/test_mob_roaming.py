@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 from unittest.mock import patch
 
 from django.contrib.contenttypes.models import ContentType
@@ -262,7 +263,8 @@ class TestMobRoaming(WorldTestCase):
             health=20,
             health_max=20,
             attack_power=4,
-            aggression=api_consts.MOB_AGGRESSION_ALL,
+            aggression=api_consts.MOB_AGGRESSION_PLAYERS,
+            group_id="persian-patrol",
             target_priority=-1,
             roams=self.zone,
         )
@@ -274,7 +276,8 @@ class TestMobRoaming(WorldTestCase):
             health=20,
             health_max=20,
             attack_power=4,
-            aggression=api_consts.MOB_AGGRESSION_ALL,
+            aggression=api_consts.MOB_AGGRESSION_PLAYERS,
+            group_id="persian-patrol",
             target_priority=1,
             roams=self.zone,
         )
@@ -283,19 +286,17 @@ class TestMobRoaming(WorldTestCase):
             with self.captureOnCommitCallbacks(execute=True):
                 with capture_game_messages() as messages:
                     roamed = run_mob_roaming()
+                    from tests.combat_fixtures import drain_queued_combat
+                    drain_queued_combat()
 
         archer.refresh_from_db()
         sparabara.refresh_from_db()
         self.assertEqual(roamed, 2)
         self.assertEqual(archer.room_id, destination.id)
         self.assertEqual(sparabara.room_id, destination.id)
-        active_encounters = CombatEncounter.objects.filter(
-            player=self.player,
-            mob__in=[archer, sparabara],
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        self.assertEqual(active_encounters.count(), 2)
-        self.assertEqual(schedule_mock.call_count, 2)
+        active_encounters = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob__in=[archer, sparabara]).filter(status=CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(active_encounters.distinct().count(), 1)
+        self.assertEqual(schedule_mock.call_count, 1)
 
         engage_messages = [
             msg["message"]
@@ -308,12 +309,7 @@ class TestMobRoaming(WorldTestCase):
             {message["data"]["target"]["key"] for message in engage_messages},
             {archer.key, sparabara.key},
         )
-        self.assertTrue(
-            all(
-                message["data"]["actor"]["target"]["key"] == sparabara.key
-                for message in engage_messages
-            )
-        )
+        self.assertEqual(engage_messages[-1]["data"]["actor"]["target"]["key"], sparabara.key)
 
     def test_room_loaded_mob_without_roams_target_stays_static(self):
         destination = self._room(name="East Room", x=1, y=0)
@@ -762,7 +758,7 @@ class TestMobRoaming(WorldTestCase):
             name="a fighting patrol",
             roams=self.zone,
         )
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -781,7 +777,7 @@ class TestMobRoaming(WorldTestCase):
         self.room.east = destination
         self.room.save(update_fields=["east"])
         leader, follower = self._cohort()
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,

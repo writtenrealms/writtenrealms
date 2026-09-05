@@ -4,6 +4,48 @@ Combat abilities can be granted at character creation or learned during play.
 See [Abilities and Training](abilities.md) for `learn`, `unlearn`, requirements,
 and training rooms or NPCs.
 
+## Fighting Together
+
+Players and mobs in a compatible fight share one encounter with two opposing
+sides. Each combatant gets one turn per round, even when several enemies target
+them. Joining an existing fight does not grant an extra turn or reroll anyone's
+combat order; the newcomer becomes eligible in the next round.
+
+The Combat section in the desktop right sidebar shows the round, allies and
+enemies, their health, and their active effects. It replaces the sidebar's
+character list; the left-side status, map, and target panel keep their usual
+layout. Quest Log and Communication Log are available under the expandable
+Logs heading at the top of the right sidebar.
+
+Click an enemy in the roster or use `kill <target>` to select your current opponent.
+Changing targets keeps you in the same fight. If that opponent leaves or dies,
+your next attack selects another visible opponent, preferring higher target
+priority. An ability queued at a specific target keeps that target and fails
+if it is no longer valid.
+
+Allies must have an established relationship, such as matching core factions
+or an explicit faction alliance. Attacking the same enemy does not by itself
+make two actors allies. A join that would require a third side, or exceed the
+32-combatant limit, is rejected before it spends resources or changes the fight.
+Ordinary player attacks on other players remain restricted to authorized duels.
+
+In worlds with manual combat, each connected participating player submits an
+action before the shared round advances. `kill` readies a basic attack; an
+ability or `flee` readies that action. Disconnected participants remain in
+combat and do not hold up other players' readiness. Manual duels retain their
+existing command-driven pacing: either contestant can advance the shared round.
+
+Leaving or dying removes your character from the fight. Other combatants keep
+fighting while both sides still have members. NPC fights in an unobserved room
+can continue for a short activity window, then pause until someone returns.
+
+When a mob dies, experience and currency are split equally among living player
+opponents still participating in the encounter who damaged that mob. Those
+players receive quest kill credit even if an allied NPC delivers the final
+blow. The mob creates one corpse and one loot roll. Leaving before the kill
+forfeits this participation credit; damage to a different mob does not qualify.
+A fight with no eligible player contributor creates no reward or loot corpse.
+
 ## Encounter Order
 
 When combat starts, the encounter rolls a combat order and keeps that order for
@@ -203,16 +245,17 @@ Once that first round has resolved, ordinary movement is blocked and you must
 use `flee` to leave combat.
 
 If your current mob opponent is configured not to fight back, use `disengage`
-to end that encounter without leaving the room. Disengaging is immediate: it
+to stop fighting that opponent without leaving the room. Disengaging is immediate: it
 does not choose an exit, cost movement stamina, fire movement events, or give a
 tracker an opportunity to pursue you. Any ability or flee attempt queued for
-that encounter is canceled; stamina already reserved by the canceled flee is
-refunded.
+that player is canceled; stamina already reserved by the canceled flee is
+refunded when you leave combat.
 
 `disengage` works only against a mob with `fights_back: false`. It cannot end a
 fight with a retaliating mob or another player. When several mobs have engaged
-you, it ends only the encounter with your current passive target. Any other
-hostile encounter remains active and becomes your current fight.
+you, it removes only an eligible passive target from the shared encounter.
+The target cannot disengage while another participant is attacking it or a
+hostile encounter effect still involves it. The remaining fight continues.
 
 The **Rooted** status prevents `flee` while it is active. If you are already
 Rooted, the command is rejected before an escape route is chosen or stamina is
@@ -233,10 +276,10 @@ and immediately re-engages in the next room. Other hostile mobs remain behind.
 Your initial view of the destination does not list the pursuer; its arrival is
 announced afterward when it actually crosses the exit.
 
-When `flee` succeeds, you leave the room and all active hostile encounters from
-that room end for you. Any tracker mobs from those encounters follow your final
-escape route and re-engage in the destination room; this can include multiple
-trackers from the same fight, not just your primary target. Mobs that remain in
+When `flee` succeeds, you leave the room and your encounter participation ends.
+Tracker opponents follow your final escape route and re-engage in the
+destination room if they are free to leave; a tracker still fighting another
+participant stays in the original fight. Multiple free trackers can pursue you. Mobs that remain in
 the origin room are no longer shown as fighting you on nearby scans unless they
 later reach and engage you again.
 

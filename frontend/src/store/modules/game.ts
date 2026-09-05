@@ -24,6 +24,7 @@ import {
 } from "@/core/editRoomCommand";
 import { builderRoomIndexRoute } from "@/core/builderRoutes";
 import { playerRoundEffectSnapshot } from "@/core/roundEffects";
+import { applyCombatSnapshot, currentCombatTarget, initialCombatState } from "@/core/combatState";
 import _ from "lodash";
 import router from "@/router";
 
@@ -260,6 +261,7 @@ const set_initial_state = () => {
     // because sometimes player.target doesn't get set right away, or gets
     // cleared momentarily, and we want the UI to be more robust than that.
     player_target: null,
+    combat: initialCombatState(),
 
     focus_data: {},
 
@@ -310,6 +312,10 @@ const receiveMessage = async ({
 }) => {
   /* Main process for receiving messages */
   const message_data = JSON.parse(event.data);
+  if (message_data.type === "notification.combat.snapshot") {
+    commit("combat_snapshot_set", message_data.data);
+    return;
+  }
   const eventId = message_data?.data?._event_id;
   if (eventId && state.received_event_ids[eventId]) {
     return;
@@ -559,6 +565,11 @@ const receiveMessage = async ({
     };
     commit("world_set", world_data);
     commit("player_set", message_data.data.actor);
+    if (message_data.data.combat_snapshot) {
+      commit("combat_snapshot_set", message_data.data.combat_snapshot);
+    } else {
+      commit("combat_reset");
+    }
     commit("prepared_abilities_set", message_data.data.prepared_abilities);
     commit("wallet_sync_requested_clear");
     commit("who_list_set", message_data.data.who_list);
@@ -1491,6 +1502,18 @@ const combatRoundGroup = (message) => {
 };
 
 const mutations = {
+  combat_reset: (state) => { state.combat = initialCombatState(); },
+  combat_snapshot_set: (state, snapshot) => {
+    if (snapshot.room_id && state.room?.id && snapshot.room_id !== state.room.id) return;
+    if (snapshot.world_id && state.world?.id && snapshot.world_id !== state.world.id) return;
+    const next = applyCombatSnapshot(state.combat, snapshot, state.player?.key);
+    if (next === state.combat) return;
+    const hadCombat = Boolean(state.combat.current);
+    state.combat = next;
+    const target = currentCombatTarget(next);
+    if (target) state.player_target = { ...target, active_effects: target.effects };
+    else if (hadCombat && Number(state.player_target?.health ?? 1) > 0) state.player_target = null;
+  },
   message_add: (state, message) => {
     // Console entries are terminal-style snapshots. Never retain references
     // to the live payload objects that the rest of the store may update.
@@ -2010,6 +2033,7 @@ const mutations = {
   },
 
   room_set: (state, room) => {
+    if (state.room?.id !== room?.id) state.combat = initialCombatState();
     const chars = (room.chars || []).map(cloneRoomChar);
     state.room = { ...room, chars };
     state.room_chars = chars;
@@ -2128,6 +2152,10 @@ const mutations = {
   },
 
   player_target_set: (state, target) => {
+    if (state.combat.current) {
+      const selected = currentCombatTarget(state.combat);
+      if (!target || target.key !== selected?.key) return;
+    }
     // if (target.key != state.player.key) {
     const existingEffects = state.player_target?.key === target?.key
       && Array.isArray(state.player_target?.active_effects)

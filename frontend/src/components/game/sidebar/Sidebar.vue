@@ -1,13 +1,12 @@
 <template>
   <div id="sidebar">
-    <!-- Quest Log -->
-    <div class="sidebar-element logs">
-      <h3>LOGS</h3>
-      <div class="mt-4">
+    <details class="sidebar-element logs">
+      <summary>Logs</summary>
+      <div class="log-actions mt-3">
         <button class="btn-small mb-1 button-gray" @click="onClickQuestLog">QUEST LOG</button>
         <button class="btn-small button-gray" @click="onClickCommunicationLog" v-if="world.is_multiplayer">COMMUNICATION LOG</button>
       </div>
-    </div>
+    </details>
 
     <!-- Focus -->
     <div class="sidebar-element focus" v-if="allow_combat">
@@ -45,21 +44,8 @@
       </div>
     </div>
 
-    <!-- Chars -->
-    <div class="sidebar-element chars">
-      <h3 @click="onClickExpand('chars')" class="hover">
-        <span v-if="expanded === 'chars'">-</span>
-        <span v-else>+</span>
-        {{ room_chars_length }}
-        <template
-          v-if="room_chars_length == 1"
-        >CHARACTER</template>
-        <template v-else>CHARACTERS</template>
-        IN ROOM
-      </h3>
-      <div v-if="expanded === 'chars'" class="my-1">
-        <Chars/>
-      </div>
+    <div v-if="allow_combat" class="sidebar-element combat">
+      <CombatRoster />
     </div>
 
     <!-- News -->
@@ -73,16 +59,15 @@ import Help from "@/components/Help.vue";
 import QuestLog from "@/components/game/QuestLog.vue";
 import ComLog from "@/components/game/sidebar/ComLog.vue";
 import Focus from "@/components/game/sidebar/Focus.vue";
-import Chars from "@/components/game/sidebar/Chars.vue";
+import CombatRoster from "@/components/game/sidebar/CombatRoster.vue";
 
 const store = useStore();
 
-const expanded = ref<"who" | "" | "chars">("");
+const expanded = ref<"who" | "">("");
 
 const world = computed(() => store.state.game.world);
 const allow_combat = computed(() => store.state.game.world.allow_combat);
 const who_list = computed(() => store.state.game.who_list);
-const room_chars_length = computed(() => store.state.game.room_chars.length);
 
 const onClickWhoPlayer = (player) => {
   store.dispatch("game/cmd", `whois ${player.name}`);
@@ -92,7 +77,7 @@ const focus_help = `Set an item or character as the focus of another command.<br
     <br/>
     Enter 'help focus' for more information.`;
 
-const onClickExpand = (section: "who" | "" | "chars") => {
+const onClickExpand = (section: "who" | "") => {
   if (expanded.value == section) {
     expanded.value = "";
   } else {
@@ -126,6 +111,7 @@ const onClickCommunicationLog = () => {
   background: $color-background-light;
   border-left: 2px solid $color-background-very-light;
   width: 250px;
+  overflow-y: auto;
 
   .sidebar-element {
     padding: 15px;
@@ -147,6 +133,24 @@ const onClickCommunicationLog = () => {
           color: $color-text-hex-80;
         }
       }
+    }
+
+    &.logs {
+      summary {
+        @include font-title-regular;
+        color: $color-text-half;
+        text-transform: uppercase;
+        list-style: none;
+        cursor: pointer;
+
+        &::-webkit-details-marker { display: none; }
+        &::before { content: "+"; display: inline-block; width: 14px; }
+        &:hover { color: $color-text; }
+        &:focus-visible { outline: 1px solid $color-primary; outline-offset: 4px; }
+      }
+
+      &[open] summary::before { content: "−"; }
+      .log-actions { display: flex; flex-direction: column; align-items: flex-start; }
     }
   }
 }

@@ -1213,7 +1213,26 @@ def _apply_active_stat_modifiers(stats: dict[str, float], actor: Any) -> None:
         stats[stat_key] = float(stats.get(stat_key, 0.0) or 0.0) * multiplier
 
 
-def compute_stats(
+def compute_stats(level, archetype=None, char=None, boost_mob=False, is_mob=False,
+                  faction_level=0, world=None):
+    # Combat repeatedly serializes and resolves the same actors. Cache only
+    # inside its transaction; effect and actor-stat writes invalidate the cache.
+    from spawns.combat_encounters import current_context
+    context = current_context()
+    key = (getattr(char, 'key', None), level, archetype, boost_mob, is_mob,
+           faction_level, getattr(world, 'pk', None))
+    cache = getattr(context, 'stats_cache', None) if context else None
+    if context is not None and cache is None:
+        context.stats_cache = cache = {}
+    if cache is not None and key in cache:
+        return dict(cache[key])
+    result = _compute_stats(level, archetype, char, boost_mob, is_mob, faction_level, world)
+    if cache is not None:
+        cache[key] = dict(result)
+    return result
+
+
+def _compute_stats(
     level,
     archetype=None,
     char=None,

@@ -641,6 +641,15 @@ def publish_events(
     follow_movement_data: list[dict] = []
     for event in event_list:
         event_type = str(event.type or "").strip().lower()
+        if event_type == 'private.combat.tracker_chase':
+            from spawns.tasks import resolve_combat_tracker_chase
+            resolve_combat_tracker_chase.delay({
+                key: event.data[key] for key in (
+                    'source', 'mob_ids', 'world_id', 'chase_key', 'direction',
+                    'player_id', 'encounter_ids', 'origin_room_id', 'destination_room_id',
+                )
+            })
+            continue
         message = event.to_message()
         if (
             SCRIPT_COMMAND_DEPTH_KEY in event.data
@@ -668,6 +677,9 @@ def publish_events(
             public_data.pop(FOLLOW_OUTBOX_EVENT_ID_KEY, None)
             message["data"] = public_data
         for recipient in event.recipients:
+            from spawns.combat_publication import project_message
+
+            recipient_message = project_message(message, recipient)
             recipient_connection_id = event.connection_id
             if (
                 recipient_connection_id is None
@@ -679,7 +691,7 @@ def publish_events(
             publish_to_player(
                 recipient,
                 correlate_actor_command_message(
-                    message,
+                    recipient_message,
                     actor_key=recipient,
                 ),
                 connection_id=recipient_connection_id,

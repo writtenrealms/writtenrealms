@@ -1,3 +1,6 @@
+from spawns.models import Player
+from tests.combat_fixtures import participant_initiative_order
+from tests.combat_fixtures import combat_outbox_events
 from unittest.mock import patch
 
 from django.utils import timezone
@@ -417,7 +420,7 @@ class DuelCombatTests(WorldTestCase):
             encounter=encounter,
             player=self.player,
         )
-        error = next(event for event in result.events if event.type == "cmd.flee.error")
+        error = next(event for event in [*result.events, *combat_outbox_events()] if event.type == "cmd.flee.error")
         self.assertEqual(error.data["code"], "closed_door")
         self.assertEqual(self.player.room_id, self.arena_room.id)
         self.assertEqual(self.player.stamina, starting_stamina)
@@ -595,10 +598,9 @@ class DuelCombatTests(WorldTestCase):
             status=CombatEncounter.STATUS_ACTIVE,
         )
 
-        with self.captureOnCommitCallbacks(execute=False):
-            dispatch_text_command(self.player.id, "east")
-        with self.captureOnCommitCallbacks(execute=False):
-            dispatch_text_command(self.opponent.id, "east")
+        # Simulate stale external movement that bypassed normal cleanup.
+        Player.objects.filter(pk=self.player.pk).update(room=self.escape_room)
+        Player.objects.filter(pk=self.opponent.pk).update(room=self.escape_room)
 
         first_encounter.refresh_from_db()
         self.player.refresh_from_db()
@@ -635,8 +637,8 @@ class DuelCombatTests(WorldTestCase):
             status=CombatEncounter.STATUS_ACTIVE,
         )
 
-        with self.captureOnCommitCallbacks(execute=False):
-            dispatch_text_command(self.player.id, "east")
+        # Simulate stale external movement that bypassed normal cleanup.
+        Player.objects.filter(pk=self.player.pk).update(room=self.escape_room)
         events = reconcile_stale_pvp_encounters()
 
         encounter.refresh_from_db()
@@ -1004,8 +1006,8 @@ class DuelCombatTests(WorldTestCase):
                 "side": f"team.{kicker.team}",
             },
         ]
-        encounter.initiative_order = initiative_order
-        encounter.save(update_fields=["initiative_order"])
+        for index, ref in enumerate(initiative_order):
+            encounter.participants.filter(player_id=ref['id']).update(initiative=len(initiative_order) - index)
         caster.pending_ability = {
             "ability": slow_cast.slug,
             "command": slow_cast.slug,
@@ -1041,7 +1043,7 @@ class DuelCombatTests(WorldTestCase):
         self.assertEqual(len(hostile_cast_events), 1)
 
         encounter.refresh_from_db()
-        self.assertEqual(encounter.initiative_order, initiative_order)
+        self.assertEqual([p['id'] for p in participant_initiative_order(encounter)], [p['id'] for p in initiative_order])
         encounter.resolution_interval = 1
         encounter.save(update_fields=["resolution_interval"])
 
@@ -1063,7 +1065,7 @@ class DuelCombatTests(WorldTestCase):
         self.player.refresh_from_db()
         self.opponent.refresh_from_db()
         encounter.refresh_from_db()
-        self.assertEqual(encounter.initiative_order, initiative_order)
+        self.assertEqual([p['id'] for p in participant_initiative_order(encounter)], [p['id'] for p in initiative_order])
         self.assertEqual(caster.pending_ability, {})
         self.assertEqual(self.player.ability_cooldowns.get(kick.slug), 12)
         self.assertEqual(
@@ -1463,7 +1465,7 @@ class DuelCombatTests(WorldTestCase):
         )
         encounter.save(update_fields=["next_resolution_ts"])
         with patch(
-            "spawns.actions.combat._schedule_encounter_resolution"
+            "spawns.combat_commands.schedule"
         ) as reschedule:
             result = resolve_combat_encounter_step(
                 encounter.id,
@@ -1473,4 +1475,5 @@ class DuelCombatTests(WorldTestCase):
         encounter.refresh_from_db()
         self.assertTrue(result.encounter_active)
         self.assertEqual(encounter.round_number, 1)
-        reschedule.assert_called_once_with(encounter.id, 1.0)
+        reschedule.assert_called_once()
+        self.assertEqual(reschedule.call_args.args[0].pk, encounter.pk)

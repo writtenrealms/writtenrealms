@@ -1,3 +1,4 @@
+from tests.combat_fixtures import dispatch_and_drain_combat
 from copy import deepcopy
 
 from builders.models import ItemDefinition
@@ -18,6 +19,8 @@ from tests.utils import (
 class TestAttackRoutines(WorldTestCase):
     def setUp(self):
         super().setUp()
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
         apply_basic_stat_system(self.world)
         self.world.config.combat_resolution_interval = -1
         self.world.config.combat_system = normalize_combat_system({
@@ -122,7 +125,7 @@ class TestAttackRoutines(WorldTestCase):
         self.player.equipment.equip(mainhand, adv_consts.EQUIPMENT_SLOT_WEAPON)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "wield bone")
+            dispatch_and_drain_combat(self.player.id, "wield bone")
 
         self.player.equipment.refresh_from_db()
         offhand.refresh_from_db()
@@ -140,7 +143,7 @@ class TestAttackRoutines(WorldTestCase):
         self.player.equipment.equip(mainhand, adv_consts.EQUIPMENT_SLOT_WEAPON)
 
         with capture_game_messages():
-            dispatch_text_command(self.player.id, "wield axe")
+            dispatch_and_drain_combat(self.player.id, "wield axe")
 
         self.player.equipment.refresh_from_db()
         mainhand.refresh_from_db()
@@ -209,7 +212,7 @@ class TestAttackRoutines(WorldTestCase):
         mob.create_corpse()
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
 
         mob.refresh_from_db()
         attack_messages = self._messages_by_type(messages, "notification.combat.attack")

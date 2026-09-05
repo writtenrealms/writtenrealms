@@ -22,7 +22,7 @@ from spawns.events import (
     follow_directional_move_event,
     persist_follow_dependent_game_events,
 )
-from spawns.models import ActiveEffect, CombatEncounter, Mob, Player
+from spawns.models import ActiveEffect, CombatEncounter, CombatParticipant, Mob, Player
 from spawns.state_payloads import (
     safe_capitalize,
     serialize_char_from_mob,
@@ -175,30 +175,34 @@ def _mark_tracker_chase_processed(mob: Mob, chase_key: str) -> bool:
     return changed
 
 
-def load_player_escape_encounters(
-    *,
-    player: Player,
-    origin_room_id: int,
-) -> tuple[CombatEncounter, ...]:
-    """Load valid active origin encounters with one indexed, bounded query."""
-    return tuple(
-        CombatEncounter.objects.select_related(
-            "mob",
-            "mob__definition",
-            "room__zone",
-        )
-        .filter(
-            player_id=player.id,
-            world_id=player.world_id,
-            room_id=origin_room_id,
-            status=CombatEncounter.STATUS_ACTIVE,
-            mob_id__isnull=False,
-            mob__room_id=origin_room_id,
-            mob__is_pending_deletion=False,
-            mob__health__gt=0,
-        )
-        .order_by("id")
-    )
+def load_player_escape_encounters(*, player, origin_room_id):
+    from spawns.combat_encounters import current_context, eligible
+    from spawns.combat_rounds import detach_actor
+    ctx = current_context()
+    if ctx:
+        for member in list(ctx.participants):
+            if not member.is_active:
+                continue
+            actor = ctx.actors.get(member.actor_key)
+            encounter = ctx.encounters[member.encounter_id]
+            if (encounter.status == 'finished' or not eligible(actor) or
+                    (actor.world_id, actor.room_id) != (encounter.world_id, encounter.room_id)):
+                detach_actor(ctx, member.actor_key, reason='unavailable')
+    from django.db.models import Subquery
+    own_side = CombatParticipant.objects.filter(player=player, is_active=True).values('side_id')[:1]
+    opponents = CombatParticipant.objects.filter(encounter__participants__player=player,
+        encounter__participants__is_active=True, encounter__world_id=player.world_id,
+        encounter__room_id=origin_room_id, encounter__status__in=['active', 'paused'],
+        mob__isnull=False, is_active=True).exclude(side_id=Subquery(own_side)).select_related(
+            'mob__definition', 'encounter__room__zone').order_by('pk')
+    encounters = {}
+    for member in opponents:
+        encounter = encounters.setdefault(member.encounter_id, member.encounter)
+        if not hasattr(encounter, '_escape_opponents'):
+            encounter._escape_opponents = []
+        encounter._escape_opponents.append(member)
+    return tuple(encounters.values())
+
 
 
 def plan_player_escape(
@@ -212,9 +216,9 @@ def plan_player_escape(
 ) -> TrackerEscapePlan:
     """Capture a bounded tracker candidate set from active origin encounters.
 
-    This query intentionally does not lock encounter rows. Player movement owns
-    the player row lock, which serializes it against a combat round becoming
-    locked without introducing the resolver's Encounter -> Player lock inverse.
+    Movement and combat callers already hold the encounter coordinator locks.
+    Candidate collection uses one joined query and snapshots opponents before
+    detaching the moving player.
     """
     if encounters is None:
         encounters = load_player_escape_encounters(
@@ -247,8 +251,11 @@ def plan_player_escape(
     if origin_room is not None and not (
         normalized_source == "move" and combat_locked
     ):
-        for encounter in encounters:
-            mob = encounter.mob
+        if any(not hasattr(e, '_escape_opponents') for e in encounters):
+            encounters = load_player_escape_encounters(player=player, origin_room_id=origin_room_id)
+        opponents = [p for e in encounters for p in e._escape_opponents]
+        for participant in opponents:
+            mob = participant.mob
             if mob and _tracker_trait_is_active(
                 mob,
                 player=player,
@@ -461,51 +468,18 @@ class ResolveTrackerChaseAction:
         preparation_events: list[GameEvent] = []
         prepared_state_changed = False
 
-        # Encounter cleanup has its own lock-only transaction. Keeping those
-        # locks out of the Player -> Mob transition below avoids the resolver's
-        # Encounter -> Player lock cycle.
+        from spawns.combat_encounters import locked_combat, transact
+        from spawns.combat_rounds import detach_actor
         if normalized_encounter_ids:
-            with transaction.atomic():
-                escaped_encounters = list(
-                    CombatEncounter.objects.select_for_update(of=("self",))
-                    .filter(
-                        id__in=normalized_encounter_ids,
-                        player_id=player_id,
-                        world_id=world_id,
-                        room_id=origin_room_id,
-                    )
-                    .order_by("id")
-                )
-
-                active_encounter_ids = [
-                    encounter.id
-                    for encounter in escaped_encounters
-                    if encounter.status == CombatEncounter.STATUS_ACTIVE
-                ]
-                prepared_state_changed = any(
-                    encounter.status == CombatEncounter.STATUS_ACTIVE
-                    and isinstance(encounter.pending_player_ability, dict)
-                    and bool(
-                        str(
-                            encounter.pending_player_ability.get("ability") or ""
-                        ).strip()
-                    )
-                    for encounter in escaped_encounters
-                )
-                if active_encounter_ids:
-                    ActiveEffect.objects.filter(
-                        encounter_id__in=active_encounter_ids,
-                        scope=ActiveEffect.SCOPE_ENCOUNTER,
-                    ).delete()
-                    CombatEncounter.objects.filter(
-                        id__in=active_encounter_ids,
-                    ).update(
-                        status=CombatEncounter.STATUS_FINISHED,
-                        next_resolution_ts=None,
-                        pending_flee={},
-                        pending_player_ability={},
-                        pending_mob_ability={},
-                    )
+            def cleanup(ctx):
+                participant = ctx.participant(f'player.{player_id}')
+                if participant and participant.encounter_id in normalized_encounter_ids:
+                    actor = ctx.actors[participant.actor_key]
+                    if (actor.world_id, actor.room_id) != (world_id, origin_room_id):
+                        return detach_actor(ctx, participant.actor_key, reason='escaped')
+                return []
+            prepared_state_changed = bool(transact(cleanup, keys=[f'player.{player_id}'],
+                                                    encounter_ids=normalized_encounter_ids))
 
         if prepared_state_changed:
             preparation_events = ability_prepare_state_events_for_players(
@@ -524,7 +498,7 @@ class ResolveTrackerChaseAction:
         follow_movement_events: list[GameEvent] = []
         engagement_events: list[GameEvent] = []
         mob_char_payloads: dict[int, dict] = {}
-        with transaction.atomic():
+        with locked_combat(keys=[f'player.{player_id}', *[f'mob.{pk}' for pk in normalized_mob_ids]]) as ctx:
             player = (
                 Player.objects.select_for_update(of=("self",))
                 .select_related(
@@ -545,6 +519,9 @@ class ResolveTrackerChaseAction:
                 .order_by("id")
             )
 
+            if player:
+                ctx.actors[player.key] = player
+            ctx.actors.update({mob.key: mob for mob in tracker_mobs})
             unprocessed_mobs = [
                 mob
                 for mob in tracker_mobs
@@ -577,11 +554,9 @@ class ResolveTrackerChaseAction:
                 )
             )
             busy_mob_ids = set(
-                CombatEncounter.objects.filter(
-                    mob_id__in=[mob.id for mob in unprocessed_mobs],
-                    status=CombatEncounter.STATUS_ACTIVE,
+                CombatParticipant.objects.filter(
+                    mob_id__in=[mob.id for mob in unprocessed_mobs], is_active=True,
                 )
-                .exclude(id__in=normalized_encounter_ids)
                 .values_list("mob_id", flat=True)
             )
             event_data = _tracker_event_data(
@@ -650,11 +625,10 @@ class ResolveTrackerChaseAction:
                     player,
                     room=destination_room,
                 )
-                primary_mob = (
-                    existing_primary.mob
-                    if existing_primary and existing_primary.mob
-                    else eligible_mobs[0]
-                )
+                member = ctx.participant(player.key)
+                current_target = next((p for p in ctx.participants if member and p.pk == member.current_target_id), None)
+                primary_mob = (ctx.actors.get(current_target.actor_key) if current_target and current_target.mob_id
+                               else eligible_mobs[0])
                 aggro_action = ScanRoomAggroAction()
                 interval = _combat_interval(rules_config)
                 death_config = player.world.effective_config

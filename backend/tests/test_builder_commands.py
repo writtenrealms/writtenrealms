@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 import json
 from datetime import timedelta
 
@@ -1927,7 +1928,7 @@ class TestBuilderPurge(BuilderCommandTestCase):
             name="Guard",
             keywords="guard",
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1941,9 +1942,9 @@ class TestBuilderPurge(BuilderCommandTestCase):
         with capture_game_messages() as messages:
             dispatch_text_command(self.player.id, "/purge mobs")
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.assertFalse(Mob.objects.filter(pk=mob.pk).exists())
-        self.assertIsNone(encounter.mob_id)
+        self.assertIsNone(combat_member(encounter, "mob").mob_id)
         self.assertFalse(
             self.room.inventory.filter(
                 world=self.spawn_world,
@@ -2857,7 +2858,7 @@ class TestBuilderTransfer(BuilderCommandTestCase):
             name="a waiting opponent",
             fights_back=False,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=destination,
             player=self.player,
@@ -2879,7 +2880,7 @@ class TestBuilderTransfer(BuilderCommandTestCase):
         with capture_game_messages() as same_room_messages:
             dispatch_text_command(self.player.id, "/transfer self here")
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         success = self._message_by_type(
             same_room_messages,
             "cmd./transfer.success",
@@ -2917,7 +2918,7 @@ class TestBuilderTransfer(BuilderCommandTestCase):
             keywords="opponent",
             fights_back=False,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=target,
@@ -2943,7 +2944,7 @@ class TestBuilderTransfer(BuilderCommandTestCase):
         )
 
         encounter.next_resolution_ts = timezone.now() + timedelta(minutes=1)
-        encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
 
         with capture_game_messages() as messages:
             dispatch_text_command(
@@ -2951,14 +2952,14 @@ class TestBuilderTransfer(BuilderCommandTestCase):
                 f"/transfer {target.key} {self._room_ref(destination)}",
             )
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         target.refresh_from_db()
         self.assertEqual(target.room_id, destination.id)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertIsNone(encounter.next_resolution_ts)
-        self.assertEqual(encounter.pending_player_ability, {})
-        self.assertEqual(encounter.pending_mob_ability, {})
-        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
         self.assertFalse(ActiveEffect.objects.filter(pk=effect.pk).exists())
         effect_state = self._message_by_type(
             messages,
@@ -2982,7 +2983,7 @@ class TestBuilderTransfer(BuilderCommandTestCase):
             keywords="sentinel",
             fights_back=False,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3009,7 +3010,7 @@ class TestBuilderTransfer(BuilderCommandTestCase):
             )
 
         target.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.assertEqual(target.room_id, destination.id)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertFalse(ActiveEffect.objects.filter(pk=effect.pk).exists())
@@ -3440,7 +3441,7 @@ class TestBuilderJump(BuilderCommandTestCase):
             name="Guard",
             keywords="guard",
         )
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -4003,7 +4004,7 @@ class TestBuilderSetClass(BuilderCommandTestCase):
         target.ability_hotkeys = {"1": "power-strike"}
         target.ability_cooldowns = {"power-strike": 2}
         target.save(update_fields=["known_abilities", "ability_hotkeys", "ability_cooldowns"])
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=target,
@@ -4017,12 +4018,12 @@ class TestBuilderSetClass(BuilderCommandTestCase):
             dispatch_text_command(self.player.id, "/setclass target Warlord")
 
         target.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.assertEqual(target.archetype, "warlord")
         self.assertEqual(target.known_abilities, [])
         self.assertEqual(target.ability_hotkeys, {})
         self.assertEqual(target.ability_cooldowns, {})
-        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
         message = self._message_by_type(messages, "cmd./setclass.success")
         self.assertEqual(message["data"]["unlearned_abilities"], ["power-strike"])
         self.assertEqual(message["data"]["target"]["known_abilities"], [])
@@ -4684,7 +4685,7 @@ class TestBuilderStatsAndSet(BuilderCommandTestCase):
         mob.refresh_from_db()
         self.assertEqual(mob.aggression, api_consts.MOB_AGGRESSION_PLAYERS)
         self.assertFalse(
-            CombatEncounter.objects.filter(mob=mob).exists(),
+            CombatEncounter.objects.filter(participants__mob=mob).filter().exists(),
         )
 
     def test_builder_set_rejects_unknown_mob_aggression(self):

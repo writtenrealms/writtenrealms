@@ -53,7 +53,7 @@ class DisengageHandler(CommandHandler):
     text_commands = ("disengage",)
     help = {
         "name": "Disengage",
-        "format": "disengage",
+        "format": "disengage [target]",
         "description": (
             "Stop fighting a mob that does not fight back without leaving the room."
         ),
@@ -64,7 +64,7 @@ class DisengageHandler(CommandHandler):
 
     def handle(self, ctx: CommandContext) -> None:
         try:
-            result = DisengageAction().execute(ctx.player.id)
+            result = DisengageAction().execute(ctx.player.id, ctx.payload.get('target') or ' '.join(ctx.payload.get('args', [])))
         except ActionError as err:
             ctx.publish(
                 {

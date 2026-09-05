@@ -1,3 +1,6 @@
+from tests.combat_fixtures import participant_initiative_order
+from tests.combat_fixtures import dispatch_and_drain_combat
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture
 from copy import deepcopy
 import math
 from unittest.mock import patch
@@ -42,7 +45,6 @@ from tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
     create_active_effect,
-    dispatch_text_command,
     replace_active_effects,
 )
 from worlds.models import Room
@@ -423,7 +425,7 @@ class TestCombatAbilities(WorldTestCase):
             ],
         )
         mob = mob_definition.spawn(self.room, self.spawn_world)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -557,7 +559,7 @@ class TestCombatAbilities(WorldTestCase):
             combat_abilities=[{"ability": "player-strike", "weight": 1}],
         )
         mob = mob_definition.spawn(self.room, self.spawn_world)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -647,7 +649,7 @@ class TestCombatAbilities(WorldTestCase):
             combat_abilities=[{"ability": "mob-crack", "weight": 1}],
         )
         mob = mob_definition.spawn(self.room, self.spawn_world)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -698,14 +700,14 @@ class TestCombatAbilities(WorldTestCase):
         )
         combat_effect_updates = self._messages_by_type(
             resolve_messages,
-            "player.combat_effects.update",
+            "notification.combat.snapshot",
         )
         self.assertEqual(
-            combat_effect_updates[-1]["data"]["active_effects"][0]["label"],
+            next(p for p in combat_effect_updates[-1]["data"]["participants"] if p["key"] == self.player.key)["effects"][0]["label"],
             "Crack",
         )
         self.assertEqual(
-            combat_effect_updates[-1]["data"]["active_effects"][0]["remaining_rounds"],
+            next(p for p in combat_effect_updates[-1]["data"]["participants"] if p["key"] == self.player.key)["effects"][0]["remaining_rounds"],
             1,
         )
         self.assertEqual(len(resolve_round_mob_attacks), 1)
@@ -728,9 +730,9 @@ class TestCombatAbilities(WorldTestCase):
         )
         combat_effect_updates = self._messages_by_type(
             stunned_messages,
-            "player.combat_effects.update",
+            "notification.combat.snapshot",
         )
-        self.assertEqual(combat_effect_updates[-1]["data"]["active_effects"], [])
+        self.assertEqual(next(p for p in combat_effect_updates[-1]["data"]["participants"] if p["key"] == self.player.key)["effects"], [])
 
     def test_mob_cast_pipeline_applies_root_and_blocks_flee(self):
         self._ability(
@@ -784,7 +786,7 @@ class TestCombatAbilities(WorldTestCase):
             ],
         )
         mob = mob_definition.spawn(self.room, self.spawn_world)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -797,10 +799,10 @@ class TestCombatAbilities(WorldTestCase):
             with patch("spawns.actions.combat.random.randint", return_value=1):
                 resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         mob.refresh_from_db()
         self.assertEqual(
-            encounter.pending_mob_ability,
+            combat_member(encounter, "mob").pending_ability,
             {
                 "ability": "mob-leg-irons",
                 "ability_name": "Leg Irons",
@@ -825,7 +827,7 @@ class TestCombatAbilities(WorldTestCase):
             with patch("spawns.actions.combat.random.randint", return_value=1):
                 resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         mob.refresh_from_db()
         root_effect = ActiveEffect.objects.get(
             encounter=encounter,
@@ -848,15 +850,15 @@ class TestCombatAbilities(WorldTestCase):
                 }
             ],
         )
-        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
         self.assertEqual(mob.ability_cooldowns, {"mob-leg-irons": 3})
 
         starting_stamina = self.player.stamina
         with capture_game_messages() as flee_messages:
-            dispatch_text_command(self.player.id, "flee")
+            dispatch_and_drain_combat(self.player.id, "flee")
 
         self.player.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         flee_errors = self._messages_by_type(flee_messages, "cmd.flee.error")
         self.assertEqual(len(flee_errors), 1)
         self.assertEqual(flee_errors[0]["text"], "Rooted prevents you from fleeing.")
@@ -866,7 +868,7 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(self.player.room_id, self.room.id)
         self.assertNotEqual(self.player.room_id, escape_room.id)
         self.assertEqual(self.player.stamina, starting_stamina)
-        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
 
     def test_kick_interrupts_active_cast_before_faster_mob_turn(self):
         kick = self._kick_ability()
@@ -876,7 +878,7 @@ class TestCombatAbilities(WorldTestCase):
         mob, mob_ability = self._mob_with_cast_ability()
         starting_health = mob.health
         initiative_order = self._mob_first_initiative(mob)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -899,10 +901,10 @@ class TestCombatAbilities(WorldTestCase):
             command=kick.slug,
             args=[],
         )
-        encounter.refresh_from_db()
-        self.assertEqual(encounter.initiative_order, initiative_order)
+        refresh_combat_fixture(encounter)
+        self.assertEqual([p["id"] for p in participant_initiative_order(encounter)], [p["id"] for p in initiative_order])
         self.assertEqual(
-            encounter.pending_player_ability["turn_priority"],
+            combat_member(encounter, "player").pending_ability["turn_priority"],
             "interrupt",
         )
 
@@ -910,16 +912,16 @@ class TestCombatAbilities(WorldTestCase):
             with capture_game_messages() as messages:
                 resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         mob.refresh_from_db()
         self.player.refresh_from_db()
-        self.assertEqual(encounter.initiative_order, initiative_order)
+        self.assertEqual([p["id"] for p in participant_initiative_order(encounter)], [p["id"] for p in initiative_order])
         self.assertEqual(
             starting_health - mob.health,
             math.ceil(self.stats["attack_power"] * 0.25),
         )
         self.assertGreater(self.player.health, 0)
-        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
         self.assertEqual(mob.ability_cooldowns, {})
         self.assertEqual(self.player.ability_cooldowns, {"kick": 12})
         mob_hex_attacks = [
@@ -990,7 +992,7 @@ class TestCombatAbilities(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
                 resolve_combat_encounter(encounter.id)
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         return messages
 
     def test_kick_preserves_mob_cast_cooldown_until_next_opportunity(self):
@@ -1005,7 +1007,7 @@ class TestCombatAbilities(WorldTestCase):
         ability.save(update_fields=["cost"])
         mob.energy = 10
         mob.save(update_fields=["energy"])
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world, room=self.room, player=self.player, mob=mob,
             resolution_interval=1,
             initiative_order=self._mob_first_initiative(mob),
@@ -1013,8 +1015,8 @@ class TestCombatAbilities(WorldTestCase):
 
         self._resolve_ability_round(encounter)
         mob.refresh_from_db()
-        self.assertEqual(encounter.pending_mob_ability["status"], "casting")
-        self.assertEqual(encounter.pending_mob_ability["ability_name"], ability.name)
+        self.assertEqual(combat_member(encounter, "mob").pending_ability["status"], "casting")
+        self.assertEqual(combat_member(encounter, "mob").pending_ability["ability_name"], ability.name)
         self.assertEqual(mob.ability_cooldowns, {ability.slug: 3})
         self.assertEqual(mob.energy, 10)
 
@@ -1023,7 +1025,7 @@ class TestCombatAbilities(WorldTestCase):
         )
         messages = self._resolve_ability_round(encounter)
         mob.refresh_from_db()
-        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
         self.assertEqual(mob.ability_cooldowns, {ability.slug: 2})
         self.assertEqual(mob.energy, 10)
         self.assertEqual(len(self._messages_by_type(
@@ -1033,12 +1035,12 @@ class TestCombatAbilities(WorldTestCase):
         for remaining in (1, 0):
             self._resolve_ability_round(encounter)
             mob.refresh_from_db()
-            self.assertEqual(encounter.pending_mob_ability, {})
+            self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
             self.assertEqual(mob.ability_cooldowns.get(ability.slug, 0), remaining)
 
         self._resolve_ability_round(encounter)
         mob.refresh_from_db()
-        self.assertEqual(encounter.pending_mob_ability["status"], "casting")
+        self.assertEqual(combat_member(encounter, "mob").pending_ability["status"], "casting")
         self.assertEqual(mob.ability_cooldowns, {ability.slug: 3})
         ability.refresh_from_db()
         self.assertEqual(ability.cooldown, {"rounds": 0})
@@ -1049,14 +1051,14 @@ class TestCombatAbilities(WorldTestCase):
             cooldown={"rounds": 7, "trigger": "on_cast"},
             loadout={"cooldown": {"rounds": 4}},
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world, room=self.room, player=self.player, mob=mob,
         )
         for remaining in (4, 3, 2):
             messages = self._resolve_ability_round(encounter)
             mob.refresh_from_db()
             self.assertEqual(mob.ability_cooldowns, {ability.slug: remaining})
-        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
         attacks = self._messages_by_type(messages, "notification.combat.attack")
         self.assertEqual(len([
             attack for attack in attacks if attack["data"]["attack"] == ability.slug
@@ -1067,14 +1069,14 @@ class TestCombatAbilities(WorldTestCase):
             cooldown={"rounds": 5, "trigger": "on_cast"},
             loadout={"chance": 50},
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world, room=self.room, player=self.player, mob=mob,
         )
         with patch("spawns.actions.combat.random.randint", return_value=51):
             self._resolve_ability_round(encounter)
         mob.refresh_from_db()
         self.assertEqual(mob.ability_cooldowns, {})
-        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
 
         ability.cost = {"resource": "energy", "amount": 1000}
         ability.save(update_fields=["cost"])
@@ -1082,18 +1084,18 @@ class TestCombatAbilities(WorldTestCase):
             self._resolve_ability_round(encounter)
         mob.refresh_from_db()
         self.assertEqual(mob.ability_cooldowns, {})
-        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
 
     def test_instant_mob_ability_starts_cast_cooldown(self):
         mob, ability = self._mob_with_cast_ability(
             cast_rounds=0, cooldown={"rounds": 4, "trigger": "on_cast"},
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world, room=self.room, player=self.player, mob=mob,
         )
         messages = self._resolve_ability_round(encounter)
         mob.refresh_from_db()
-        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
         self.assertEqual(mob.ability_cooldowns, {ability.slug: 4})
         attacks = self._messages_by_type(messages, "notification.combat.attack")
         self.assertTrue(any(attack["data"]["attack"] == ability.slug for attack in attacks))
@@ -1103,23 +1105,24 @@ class TestCombatAbilities(WorldTestCase):
             cooldown={"rounds": 7, "trigger": "on_cast"},
             loadout={"cooldown": {"rounds": 0}},
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world, room=self.room, player=self.player, mob=mob,
         )
         for _ in range(2):
             self._resolve_ability_round(encounter)
             mob.refresh_from_db()
             self.assertEqual(mob.ability_cooldowns, {})
-        self.assertEqual(encounter.pending_mob_ability, {})
+        self.assertEqual(combat_member(encounter, "mob").pending_ability, {})
 
     def test_mob_cast_commit_adds_only_one_actor_update_and_no_reads(self):
         mob, ability = self._mob_with_cast_ability()
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world, room=self.room, player=self.player, mob=mob,
         )
+        combat_member(encounter, "player")
         query_sets = {}
         for trigger in ("on_resolve", "on_cast"):
-            encounter.pending_mob_ability = {
+            combat_member(encounter, "mob").pending_ability = {
                 "ability": ability.slug,
                 "target": {"type": "player", "id": self.player.id},
                 "status": "queued",
@@ -1128,6 +1131,8 @@ class TestCombatAbilities(WorldTestCase):
             }
             with CaptureQueriesContext(connection) as queries:
                 _execute_pending_mob_ability(
+                    participant=combat_member(encounter, 'mob'),
+                    opponent=combat_member(encounter, 'player'),
                     encounter=encounter, player=self.player, target_mob=mob,
                     room=self.room, round_id="test:1",
                     player_health_max=self.stats["health_max"],
@@ -1149,7 +1154,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.known_abilities = ["kick"]
         self.player.save(update_fields=["known_abilities"])
         mob, mob_ability = self._mob_with_cast_ability()
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1172,9 +1177,9 @@ class TestCombatAbilities(WorldTestCase):
             command=kick.slug,
             args=[],
         )
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.assertEqual(
-            encounter.pending_player_ability["turn_priority"],
+            combat_member(encounter, "player").pending_ability["turn_priority"],
             "interrupt",
         )
 
@@ -1182,10 +1187,10 @@ class TestCombatAbilities(WorldTestCase):
             with capture_game_messages() as messages:
                 resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
-        self.assertEqual(encounter.pending_mob_ability["status"], "casting")
+        refresh_combat_fixture(encounter)
+        self.assertEqual(combat_member(encounter, "mob").pending_ability["status"], "casting")
         self.assertEqual(
-            encounter.pending_mob_ability["cast_rounds_remaining"],
+            combat_member(encounter, "mob").pending_ability["cast_rounds_remaining"],
             0,
         )
         self.assertEqual(
@@ -1215,7 +1220,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
         mob, mob_ability = self._mob_with_cast_ability()
         initiative_order = self._mob_first_initiative(mob)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1238,14 +1243,14 @@ class TestCombatAbilities(WorldTestCase):
             command=quick_jab.slug,
             args=[],
         )
-        encounter.refresh_from_db()
-        self.assertNotIn("turn_priority", encounter.pending_player_ability)
+        refresh_combat_fixture(encounter)
+        self.assertNotIn("turn_priority", combat_member(encounter, "player").pending_ability)
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
                 resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         ability_attacks = [
             attack["data"]["attack"]
             for attack in self._messages_by_type(
@@ -1254,7 +1259,7 @@ class TestCombatAbilities(WorldTestCase):
             )
             if attack["data"]["attack"] in {mob_ability.slug, quick_jab.slug}
         ]
-        self.assertEqual(encounter.initiative_order, initiative_order)
+        self.assertEqual([p["id"] for p in participant_initiative_order(encounter)], [p["id"] for p in initiative_order])
         self.assertEqual(ability_attacks, [mob_ability.slug, quick_jab.slug])
         self.assertEqual(
             self._messages_by_type(
@@ -1276,7 +1281,7 @@ class TestCombatAbilities(WorldTestCase):
         mob, mob_ability = self._mob_with_cast_ability()
         mob.dodge = 100000
         mob.save(update_fields=["dodge"])
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1301,7 +1306,7 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
-            with patch("core.combat_formulas.random.random", return_value=0):
+            with patch("spawns.actions.combat._round_rng", return_value=lambda: 0):
                 with capture_game_messages() as messages:
                     resolve_combat_encounter(encounter.id)
 
@@ -1369,7 +1374,7 @@ class TestCombatAbilities(WorldTestCase):
             ],
         )
         mob = mob_definition.spawn(self.room, self.spawn_world)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1430,7 +1435,7 @@ class TestCombatAbilities(WorldTestCase):
             ],
         )
         mob = mob_definition.spawn(self.room, self.spawn_world)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1576,7 +1581,7 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "learn power strike")
+            dispatch_and_drain_combat(self.player.id, "learn power strike")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.known_abilities, ["power-strike"])
@@ -1599,7 +1604,7 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "learn")
+            dispatch_and_drain_combat(self.player.id, "learn")
 
         errors = self._messages_by_type(messages, "cmd.ability.learn.error")
         self.assertEqual(len(errors), 1)
@@ -1616,7 +1621,7 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "learn")
+            dispatch_and_drain_combat(self.player.id, "learn")
 
         lists = self._messages_by_type(messages, "cmd.ability.learn.list")
         self.assertEqual(len(lists), 1)
@@ -1689,7 +1694,7 @@ class TestCombatAbilities(WorldTestCase):
         }
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "learn")
+            dispatch_and_drain_combat(self.player.id, "learn")
 
         lists = self._messages_by_type(messages, "cmd.ability.learn.list")
         self.assertEqual(len(lists), 1)
@@ -1740,7 +1745,7 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "learn power strike")
+            dispatch_and_drain_combat(self.player.id, "learn power strike")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.known_abilities, [])
@@ -1749,7 +1754,7 @@ class TestCombatAbilities(WorldTestCase):
 
         trainer_definition.spawn(self.room, self.spawn_world)
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "learn power strike")
+            dispatch_and_drain_combat(self.player.id, "learn power strike")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.known_abilities, ["power-strike"])
@@ -1771,7 +1776,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.known_abilities = ["power-strike"]
         self.player.ability_hotkeys = {"1": "power-strike"}
         self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -1783,14 +1788,14 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "unlearn power strike")
+            dispatch_and_drain_combat(self.player.id, "unlearn power strike")
 
         self.player.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.assertEqual(self.player.known_abilities, ["power-strike"])
         self.assertEqual(self.player.ability_hotkeys, {"1": "power-strike"})
         self.assertEqual(
-            encounter.pending_player_ability["status"],
+            combat_member(encounter, "player").pending_ability["status"],
             "queued",
         )
         errors = self._messages_by_type(messages, "cmd.ability.unlearn.error")
@@ -1805,13 +1810,13 @@ class TestCombatAbilities(WorldTestCase):
 
         trainer_definition.spawn(self.room, self.spawn_world)
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "unlearn power strike")
+            dispatch_and_drain_combat(self.player.id, "unlearn power strike")
 
         self.player.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.assertEqual(self.player.known_abilities, [])
         self.assertEqual(self.player.ability_hotkeys, {})
-        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
         success = self._messages_by_type(messages, "cmd.ability.unlearn.success")[0]
         self.assertEqual(success["data"]["trainer"]["name"], "an arms trainer")
         preparation_updates = self._messages_by_type(
@@ -1833,7 +1838,7 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "learn power strike")
+            dispatch_and_drain_combat(self.player.id, "learn power strike")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.known_abilities, [])
@@ -1852,7 +1857,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "strike")
+            dispatch_and_drain_combat(self.player.id, "strike")
 
         errors = self._messages_by_type(messages, "cmd.ability.error")
         self.assertEqual(errors[0]["data"]["code"], "ability_unavailable")
@@ -1875,7 +1880,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "hotkey 1 quick jab")
+            dispatch_and_drain_combat(self.player.id, "hotkey 1 quick jab")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.ability_hotkeys, {"1": "quick-jab"})
@@ -1905,7 +1910,7 @@ class TestCombatAbilities(WorldTestCase):
         mob = self._mob(health=self.stats["attack_power"] * 10)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "1 rat")
+            dispatch_and_drain_combat(self.player.id, "1 rat")
 
         mob.refresh_from_db()
         self.player.refresh_from_db()
@@ -1944,9 +1949,9 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
         mob = self._mob(health=self.stats["attack_power"] * 10, dodge=100000)
 
-        with patch("core.combat_formulas.random.random", return_value=0):
+        with patch("spawns.actions.combat._round_rng", return_value=lambda: 0):
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "bash rat")
+                dispatch_and_drain_combat(self.player.id, "bash rat")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.ability_cooldowns, {})
@@ -1957,9 +1962,9 @@ class TestCombatAbilities(WorldTestCase):
 
         mob.dodge = 0
         mob.save(update_fields=["dodge"])
-        with patch("core.combat_formulas.random.random", return_value=0.99):
+        with patch("spawns.actions.combat._round_rng", return_value=lambda: 0.99):
             with capture_game_messages():
-                dispatch_text_command(self.player.id, "bash rat")
+                dispatch_and_drain_combat(self.player.id, "bash rat")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.ability_cooldowns, {"bash": 6})
@@ -2005,72 +2010,25 @@ class TestCombatAbilities(WorldTestCase):
         )
         self.assertEqual(payload["prepared_abilities"], [])
 
-    def test_state_sync_includes_active_prepared_abilities(self):
+    def test_state_sync_contains_one_intent_for_a_player_with_multiple_opponents(self):
         from spawns.state_payloads import build_state_sync
-
-        mob = self._mob()
-        encounter = CombatEncounter.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            player=self.player,
-            mob=mob,
-            pending_player_ability={
-                "ability": "charged-strike",
-                "status": "queued",
-                "cast_rounds_remaining": 1,
-            },
-        )
-        second_encounter = CombatEncounter.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            player=self.player,
-            mob=self._mob(),
-            pending_player_ability={
-                "ability": "charged-mark",
-                "status": "casting",
-                "cast_rounds_remaining": 1,
-            },
-        )
-
+        encounter = create_combat_encounter(world=self.spawn_world, room=self.room, player=self.player,
+            mob=self._mob(), pending_player_ability={'ability': 'charged-strike', 'status': 'queued', 'cast_rounds_remaining': 1})
+        extra = create_combat_encounter(world=self.spawn_world, room=self.room, player=self.player, mob=self._mob())
+        self.assertEqual(encounter.pk, extra.pk)
         payload = build_state_sync(self.player).model_dump()
+        self.assertEqual(payload['prepared_abilities'], ['charged-strike'])
+        self.assertEqual(len(payload['combat_snapshot']['participants']), 3)
+        combat_member(encounter, 'player').pending_ability = {}
+        save_combat_fixture(encounter, update_fields=['pending_player_ability'])
+        self.assertEqual(build_state_sync(self.player).model_dump()['prepared_abilities'], [])
 
-        self.assertEqual(
-            payload["prepared_abilities"],
-            ["charged-strike", "charged-mark"],
-        )
-
-        encounter.pending_player_ability = {
-            "ability": "charged-strike",
-            "command": "charged-strike",
-        }
-        encounter.save(update_fields=["pending_player_ability"])
-
-        payload = build_state_sync(self.player).model_dump()
-
-        self.assertEqual(
-            payload["prepared_abilities"],
-            ["charged-strike", "charged-mark"],
-        )
-
-        encounter.pending_player_ability = {}
-        encounter.save(update_fields=["pending_player_ability"])
-
-        payload = build_state_sync(self.player).model_dump()
-
-        self.assertEqual(payload["prepared_abilities"], ["charged-mark"])
-
-        second_encounter.pending_player_ability = {}
-        second_encounter.save(update_fields=["pending_player_ability"])
-
-        payload = build_state_sync(self.player).model_dump()
-
-        self.assertEqual(payload["prepared_abilities"], [])
 
     def test_state_sync_includes_active_player_combat_effects(self):
         from spawns.state_payloads import build_state_sync
 
         mob = self._mob()
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -2119,7 +2077,7 @@ class TestCombatAbilities(WorldTestCase):
         mob = self._mob(health=self.stats["attack_power"] * 5)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "strike rat")
+            dispatch_and_drain_combat(self.player.id, "strike rat")
 
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 3)
@@ -2149,7 +2107,7 @@ class TestCombatAbilities(WorldTestCase):
         self._mob(health=self.stats["attack_power"] * 4)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "strike rat")
+            dispatch_and_drain_combat(self.player.id, "strike rat")
 
         prepared = self._messages_by_type(messages, "cmd.ability.success")[0]
         self.assertEqual(
@@ -2227,25 +2185,21 @@ class TestCombatAbilities(WorldTestCase):
         mob = self._mob(room=dest_room, attack_power=4, fights_back=True)
         expected_damage = math.ceil(self.stats["attack_power"] * 1.5)
 
-        with patch("spawns.actions.combat.random.randint", side_effect=[10, 20]):
+        with patch("spawns.combat_encounters.initiative_roll", side_effect=[10, 20]):
             with patch("spawns.tasks.resolve_combat_encounter.apply_async") as schedule_mock:
                 with capture_game_messages() as messages:
                     with self.captureOnCommitCallbacks(execute=True):
-                        dispatch_text_command(self.player.id, "charge rat east")
+                        dispatch_and_drain_combat(self.player.id, "charge rat east")
 
         self.player.refresh_from_db()
         mob.refresh_from_db()
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
         self.assertEqual(self.player.room_id, dest_room.id)
         self.assertEqual(self.player.stamina, self.stats["stamina_max"] - movement_cost(dest_room))
         self.assertEqual(encounter.round_number, 1)
         self.assertEqual(encounter.resolution_interval, 1.5)
         self.assertIsNotNone(encounter.next_resolution_ts)
-        self.assertEqual(encounter.initiative_order[0]["type"], "mob")
+        self.assertEqual(participant_initiative_order(encounter)[0]["type"], "mob")
         self.assertEqual(encounter.opening_priority[0]["source"], "charge")
 
         attacks = self._messages_by_type(messages, "notification.combat.attack")
@@ -2274,7 +2228,7 @@ class TestCombatAbilities(WorldTestCase):
             schedule_mock.call_args.kwargs["kwargs"]["encounter_id"],
             encounter.id,
         )
-        self.assertEqual(schedule_mock.call_args.kwargs["countdown"], 1.5)
+        self.assertAlmostEqual(schedule_mock.call_args.kwargs["countdown"], 1.5, delta=0.2)
 
     def test_charge_revalidates_target_room_after_lock_race(self):
         self._charge_ability()
@@ -2290,19 +2244,18 @@ class TestCombatAbilities(WorldTestCase):
             return mob
 
         with patch(
-            "spawns.actions.abilities.resolve_room_mob_target",
+            "spawns.combat_commands.resolve_room_mob_target",
             side_effect=move_before_lock,
         ):
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "charge rat east")
+                dispatch_and_drain_combat(self.player.id, "charge rat east")
 
         self.player.refresh_from_db()
         mob.refresh_from_db()
         self.assertEqual(self.player.room_id, self.room.id)
-        # The simulated move shares this test transaction and is rolled back
-        # with the rejected opener; the important invariant is no encounter.
-        self.assertEqual(mob.room_id, dest_room.id)
-        self.assertFalse(CombatEncounter.objects.filter(mob=mob).exists())
+        # Preflight raced with movement; rejection must preserve that movement.
+        self.assertEqual(mob.room_id, moved_room.id)
+        self.assertFalse(CombatEncounter.objects.filter(participants__mob=mob).filter().exists())
         errors = self._messages_by_type(messages, "cmd.ability.error")
         self.assertEqual(errors[0]["data"]["code"], "target_missing")
 
@@ -2330,15 +2283,15 @@ class TestCombatAbilities(WorldTestCase):
             return mob
 
         with patch(
-            "spawns.actions.abilities.resolve_room_mob_target",
+            "spawns.combat_commands.resolve_room_mob_target",
             side_effect=move_before_lock,
         ):
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "strike-race rat")
+                dispatch_and_drain_combat(self.player.id, "strike-race rat")
 
         mob.refresh_from_db()
-        self.assertEqual(mob.room_id, self.room.id)
-        self.assertFalse(CombatEncounter.objects.filter(mob=mob).exists())
+        self.assertEqual(mob.room_id, moved_room.id)
+        self.assertFalse(CombatEncounter.objects.filter(participants__mob=mob).filter().exists())
         errors = self._messages_by_type(messages, "cmd.ability.error")
         self.assertEqual(errors[0]["data"]["code"], "target_missing")
 
@@ -2350,7 +2303,7 @@ class TestCombatAbilities(WorldTestCase):
         mob = self._mob(room=dest_room)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "charge north rat")
+            dispatch_and_drain_combat(self.player.id, "charge north rat")
 
         self.player.refresh_from_db()
         mob.refresh_from_db()
@@ -2376,17 +2329,13 @@ class TestCombatAbilities(WorldTestCase):
         mob = self._mob(room=dest_room)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "charge south")
+            dispatch_and_drain_combat(self.player.id, "charge south")
 
         self.player.refresh_from_db()
         mob.refresh_from_db()
         self.assertEqual(self.player.room_id, dest_room.id)
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        self.assertTrue(encounter.faceoff_override)
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(combat_member(encounter, "player").current_target.mob_id, mob.pk)
         attacks = self._messages_by_type(messages, "notification.combat.attack")
         self.assertEqual(attacks[0]["data"]["actor"]["key"], self.player.key)
         self.assertEqual(attacks[0]["data"]["target"]["key"], mob.key)
@@ -2406,7 +2355,8 @@ class TestCombatAbilities(WorldTestCase):
             health_max=self.stats["attack_power"] * 10,
             attack_power=3,
             fights_back=True,
-            aggression=adv_consts.MOB_AGGRESSION_ALL,
+            aggression=adv_consts.MOB_AGGRESSION_PLAYERS,
+            group_id="persian-guard",
             target_priority=-1,
         )
         archer.create_corpse()
@@ -2419,26 +2369,19 @@ class TestCombatAbilities(WorldTestCase):
             health_max=self.stats["attack_power"] * 10,
             attack_power=3,
             fights_back=True,
-            aggression=adv_consts.MOB_AGGRESSION_ALL,
+            aggression=adv_consts.MOB_AGGRESSION_PLAYERS,
+            group_id="persian-guard",
             target_priority=1,
         )
         tank.create_corpse()
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "charge archer south")
+            dispatch_and_drain_combat(self.player.id, "charge archer south")
 
-        archer_encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=archer,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        tank_encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=tank,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        self.assertTrue(archer_encounter.faceoff_override)
-        self.assertFalse(tank_encounter.faceoff_override)
+        archer_encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=archer).get(status=CombatEncounter.STATUS_ACTIVE)
+        tank_encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tank).get(status=CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(archer_encounter.pk, tank_encounter.pk)
+        self.assertEqual(combat_member(archer_encounter, "player").current_target.mob_id, archer.pk)
 
         attacks = self._messages_by_type(messages, "notification.combat.attack")
         self.assertTrue(
@@ -2449,9 +2392,7 @@ class TestCombatAbilities(WorldTestCase):
                 for attack in attacks
             )
         )
-        self.assertTrue(
-            any(attack["data"]["actor"]["key"] == tank.key for attack in attacks)
-        )
+        self.assertTrue(tank_encounter.participants.filter(mob=tank, is_active=True).exists())
         self.assertFalse(
             any(
                 attack["data"]["actor"]["key"] == self.player.key
@@ -2461,7 +2402,7 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with capture_game_messages() as followup_messages:
-            dispatch_text_command(self.player.id, "k")
+            dispatch_and_drain_combat(self.player.id, "k")
 
         followup_attacks = self._messages_by_type(
             followup_messages,
@@ -2489,20 +2430,16 @@ class TestCombatAbilities(WorldTestCase):
         mob = self._mob(attack_power=4, fights_back=True)
         expected_damage = math.ceil(self.stats["attack_power"] * 1.5)
 
-        with patch("spawns.actions.combat.random.randint", side_effect=[10, 20]):
+        with patch("spawns.combat_encounters.initiative_roll", side_effect=[10, 20]):
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "charge rat")
+                dispatch_and_drain_combat(self.player.id, "charge rat")
 
         self.player.refresh_from_db()
         mob.refresh_from_db()
-        encounter = CombatEncounter.objects.get(
-            player=self.player,
-            mob=mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
         self.assertEqual(self.player.room_id, self.room.id)
         self.assertEqual(encounter.round_number, 1)
-        self.assertEqual(encounter.initiative_order[0]["type"], "mob")
+        self.assertEqual(participant_initiative_order(encounter)[0]["type"], "mob")
         self.assertEqual(encounter.opening_priority[0]["source"], "charge")
         attacks = self._messages_by_type(messages, "notification.combat.attack")
         self.assertEqual(attacks[0]["data"]["actor"]["key"], self.player.key)
@@ -2517,7 +2454,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.known_abilities = ["charge"]
         self.player.save(update_fields=["known_abilities"])
         mob = self._mob()
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -2526,7 +2463,7 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "charge rat")
+            dispatch_and_drain_combat(self.player.id, "charge rat")
 
         errors = self._messages_by_type(messages, "cmd.ability.error")
         self.assertEqual(errors[0]["data"]["code"], "combat_in_progress")
@@ -2542,7 +2479,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.known_abilities = [ability.slug]
         self.player.save(update_fields=["known_abilities"])
         mob = self._mob()
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world, room=self.room, player=self.player, mob=mob,
             resolution_interval=1,
         )
@@ -2568,7 +2505,7 @@ class TestCombatAbilities(WorldTestCase):
         self._resolve_ability_round(encounter)
         self.player.refresh_from_db()
         mob.refresh_from_db()
-        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
         self.assertEqual(self.player.ability_cooldowns, {ability.slug: 2})
         self.assertEqual(self.player.energy, starting_energy - 5)
         self.assertLess(mob.health, starting_health)
@@ -2579,7 +2516,7 @@ class TestCombatAbilities(WorldTestCase):
             self._resolve_ability_round(encounter)
             self.player.refresh_from_db()
             self.assertEqual(self.player.ability_cooldowns.get(ability.slug, 0), remaining)
-        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
         mob.refresh_from_db()
         self.assertLess(mob.health, mob.health_max)
 
@@ -2588,7 +2525,7 @@ class TestCombatAbilities(WorldTestCase):
         self._resolve_ability_round(encounter)
         self.player.refresh_from_db()
         self.assertEqual(self.player.ability_cooldowns, {ability.slug: 4})
-        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
         mob.refresh_from_db()
         self.assertLess(mob.health, mob.health_max)
 
@@ -2629,7 +2566,7 @@ class TestCombatAbilities(WorldTestCase):
         mob = self._mob(health=self.stats["attack_power"] * 5)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "charge rat")
+            dispatch_and_drain_combat(self.player.id, "charge rat")
 
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 5)
@@ -2647,16 +2584,16 @@ class TestCombatAbilities(WorldTestCase):
             messages,
             "player.ability_preparations.update",
         )
-        self.assertEqual(preparation_updates, [])
+        self.assertEqual([event["data"]["abilities"] for event in preparation_updates], [["charged-strike"]])
         attacks = self._messages_by_type(messages, "notification.combat.attack")
         self.assertEqual(attacks, [])
 
-        encounter = CombatEncounter.objects.get(player=self.player, mob=mob, status=CombatEncounter.STATUS_ACTIVE)
-        self.assertEqual(encounter.pending_player_ability["status"], "casting")
-        self.assertEqual(encounter.pending_player_ability["cast_rounds_remaining"], 0)
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(combat_member(encounter, "player").pending_ability["status"], "casting")
+        self.assertEqual(combat_member(encounter, "player").pending_ability["cast_rounds_remaining"], 0)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
 
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 3)
@@ -2673,66 +2610,33 @@ class TestCombatAbilities(WorldTestCase):
             [[]],
         )
 
-    def test_resolving_one_charge_preserves_other_encounter_preparation_state(self):
-        for slug, name in (
-            ("charged-strike", "Charged Strike"),
-            ("charged-mark", "Charged Mark"),
-        ):
-            self._ability(
-                slug=slug,
-                name=name,
-                verbs=[slug],
-                cast_time={"rounds": 1},
-                components=[
-                    {
-                        "type": "damage",
-                        "profile": "basic_physical",
-                        "text": {"label": name},
-                    }
-                ],
-            )
-        self.player.known_abilities = ["charged-strike", "charged-mark"]
-        self.player.save(update_fields=["known_abilities"])
-        first_mob = self._mob()
-        first_encounter = CombatEncounter.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            player=self.player,
-            mob=first_mob,
-            pending_player_ability={
-                "ability": "charged-strike",
-                "status": "casting",
-                "cast_rounds_remaining": 0,
-            },
-        )
-        second_encounter = CombatEncounter.objects.create(
-            world=self.spawn_world,
-            room=self.room,
-            player=self.player,
-            mob=self._mob(),
-            pending_player_ability={
-                "ability": "charged-mark",
-                "status": "casting",
-                "cast_rounds_remaining": 1,
-            },
-        )
+    def test_shared_round_preserves_each_players_independent_preparation(self):
+        from spawns.models import CombatParticipant
+        from spawns.combat_rounds import resolve
+        for slug in ('charged-strike', 'charged-mark'):
+            self._ability(slug=slug, name=slug, verbs=[slug], cast_time={'rounds': 1},
+                          components=[{'type': 'damage', 'profile': 'basic_physical'}])
+        self.player.known_abilities = ['charged-strike']
+        self.player.save(update_fields=['known_abilities'])
+        other = self.create_player('Ally')
+        other.known_abilities = ['charged-mark']
+        other.in_game = True
+        other.save(update_fields=['known_abilities', 'in_game'])
+        mob = self._mob(health=10000)
+        encounter = create_combat_encounter(world=self.spawn_world, room=self.room, player=self.player, mob=mob,
+            pending_player_ability={'ability': 'charged-strike', 'status': 'casting', 'cast_rounds_remaining': 0,
+                                    'target': {'type': 'mob', 'id': mob.pk}})
+        mine = combat_member(encounter, 'player')
+        ally = CombatParticipant.objects.create(encounter=encounter, player=other, side=mine.side,
+            current_target=mine.current_target, pending_ability={'ability': 'charged-mark', 'status': 'casting',
+                'cast_rounds_remaining': 1, 'target': {'type': 'mob', 'id': mob.pk}},
+            actor_snapshot={'key': other.key, 'kind': 'player'}, initiative=1)
+        resolve(encounter.pk, auto_advance=False)
+        mine.refresh_from_db(); ally.refresh_from_db()
+        self.assertEqual(mine.pending_ability, {})
+        self.assertEqual(ally.pending_ability['status'], 'casting')
+        self.assertEqual(ally.pending_ability['cast_rounds_remaining'], 0)
 
-        with capture_game_messages() as messages:
-            resolve_combat_encounter(first_encounter.id)
-
-        second_encounter.refresh_from_db()
-        self.assertEqual(
-            second_encounter.pending_player_ability["status"],
-            "casting",
-        )
-        preparation_updates = self._messages_by_type(
-            messages,
-            "player.ability_preparations.update",
-        )
-        self.assertEqual(
-            [update["data"]["abilities"] for update in preparation_updates],
-            [["charged-mark"]],
-        )
 
     def test_cast_time_can_allow_basic_attack_while_charging(self):
         self._ability(
@@ -2757,7 +2661,7 @@ class TestCombatAbilities(WorldTestCase):
         mob = self._mob(health=starting_health)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "mark rat")
+            dispatch_and_drain_combat(self.player.id, "mark rat")
 
         mob.refresh_from_db()
         casts = self._messages_by_type(messages, "notification.combat.ability_casting")
@@ -2804,15 +2708,15 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
         mob = self._mob(health=self.stats["attack_power"] * 5)
 
-        dispatch_text_command(self.player.id, "charge rat")
+        dispatch_and_drain_combat(self.player.id, "charge rat")
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "jab rat")
+            dispatch_and_drain_combat(self.player.id, "jab rat")
 
         errors = self._messages_by_type(messages, "cmd.ability.error")
         self.assertEqual(errors[0]["data"]["code"], "ability_cast_in_progress")
-        encounter = CombatEncounter.objects.get(player=self.player, mob=mob, status=CombatEncounter.STATUS_ACTIVE)
-        self.assertEqual(encounter.pending_player_ability["ability"], "charged-strike")
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
+        self.assertEqual(combat_member(encounter, "player").pending_ability["ability"], "charged-strike")
 
     def test_queued_ability_can_be_replaced_before_scheduled_resolution(self):
         self.world.config.combat_resolution_interval = 1.5
@@ -2837,18 +2741,14 @@ class TestCombatAbilities(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as prepared_messages:
                 with self.captureOnCommitCallbacks(execute=True):
-                    dispatch_text_command(self.player.id, "strike rat")
-            encounter = CombatEncounter.objects.get(
-                player=self.player,
-                mob=mob,
-                status=CombatEncounter.STATUS_ACTIVE,
-            )
-            self.assertEqual(encounter.pending_player_ability["status"], "queued")
+                    dispatch_and_drain_combat(self.player.id, "strike rat")
+            encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
+            self.assertEqual(combat_member(encounter, "player").pending_ability["status"], "queued")
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "jab rat")
+                dispatch_and_drain_combat(self.player.id, "jab rat")
 
-        encounter.refresh_from_db()
-        self.assertEqual(encounter.pending_player_ability["ability"], "quick-jab")
+        refresh_combat_fixture(encounter)
+        self.assertEqual(combat_member(encounter, "player").pending_ability["ability"], "quick-jab")
         prepared = self._messages_by_type(
             prepared_messages,
             "cmd.ability.success",
@@ -2865,7 +2765,7 @@ class TestCombatAbilities(WorldTestCase):
             ["quick-jab"],
         )
         encounter.next_resolution_ts = timezone.now()
-        encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             resolve_combat_encounter(encounter.id)
@@ -2925,7 +2825,7 @@ class TestCombatAbilities(WorldTestCase):
         mob = self._mob(health=self.stats["attack_power"] * 10)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "jab rat")
+            dispatch_and_drain_combat(self.player.id, "jab rat")
 
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 9)
@@ -2937,7 +2837,7 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(state_updates[-1]["data"]["value"], 1)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "finish")
+            dispatch_and_drain_combat(self.player.id, "finish")
 
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 7)
@@ -2965,13 +2865,13 @@ class TestCombatAbilities(WorldTestCase):
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with self.captureOnCommitCallbacks(execute=True):
-                dispatch_text_command(self.player.id, "mstrike rat")
+                dispatch_and_drain_combat(self.player.id, "mstrike rat")
 
         self.player.energy = 0
         self.player.save(update_fields=["energy"])
-        encounter = CombatEncounter.objects.get(player=self.player, mob=mob, status=CombatEncounter.STATUS_ACTIVE)
+        encounter = CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=mob).get(status=CombatEncounter.STATUS_ACTIVE)
         encounter.next_resolution_ts = timezone.now()
-        encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
@@ -3001,9 +2901,9 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
         self._mob(attack_power=9, fights_back=True)
 
-        with patch("spawns.actions.combat.random.randint", side_effect=[20, 10]):
+        with patch("spawns.combat_encounters.initiative_roll", side_effect=[20, 10]):
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "bash rat")
+                dispatch_and_drain_combat(self.player.id, "bash rat")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.health, self.stats["health_max"])
@@ -3029,30 +2929,30 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
         mob = self._mob(attack_power=9, fights_back=True)
 
-        with patch("spawns.actions.combat.random.randint", side_effect=[20, 10]):
+        with patch("spawns.combat_encounters.initiative_roll", side_effect=[20, 10]):
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "bash rat")
+                dispatch_and_drain_combat(self.player.id, "bash rat")
 
         updates = self._messages_by_type(
             messages,
-            "player.combat_effects.update",
+            "notification.combat.snapshot",
         )
         mob_state = next(
             combatant
-            for combatant in updates[-1]["data"]["combatants"]
-            if combatant["target"]["key"] == mob.key
+            for combatant in updates[-1]["data"]["participants"]
+            if combatant["key"] == mob.key
         )
 
-        self.assertEqual(len(mob_state["active_effects"]), 1)
-        self.assertEqual(mob_state["active_effects"][0]["effect"], "stun")
-        self.assertEqual(mob_state["active_effects"][0]["remaining_rounds"], 1)
-        self.assertEqual(mob_state["active_effects"][0]["duration_rounds"], 2)
+        self.assertEqual(len(mob_state["effects"]), 1)
+        self.assertEqual(mob_state["effects"][0]["effect"], "stun")
+        self.assertEqual(mob_state["effects"][0]["remaining_rounds"], 1)
+        self.assertEqual(mob_state["effects"][0]["duration_rounds"], 2)
 
     def test_combatant_effect_snapshot_uses_one_query_for_both_sides(self):
         from spawns.actions.effects import active_combatant_effects
 
         mob = self._mob()
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3123,7 +3023,7 @@ class TestCombatAbilities(WorldTestCase):
         mob = self._mob()
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "wound rat")
+            dispatch_and_drain_combat(self.player.id, "wound rat")
 
         actor_effects = self._messages_by_type(messages, "notification.combat.effect")
         actor_effect = next(msg for msg in actor_effects if msg["data"]["label"] == "Wound")
@@ -3191,7 +3091,7 @@ class TestCombatAbilities(WorldTestCase):
             ],
         )
         mob = mob_definition.spawn(self.room, self.spawn_world)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3246,12 +3146,12 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
         mob = self._mob(health=self.stats["attack_power"] * 6)
 
-        dispatch_text_command(self.player.id, "bleed rat")
+        dispatch_and_drain_combat(self.player.id, "bleed rat")
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 6)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 4)
         attacks = self._messages_by_type(messages, "notification.combat.attack")
@@ -3269,7 +3169,7 @@ class TestCombatAbilities(WorldTestCase):
             attack_power=self.stats["attack_power"],
             fights_back=False,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3378,11 +3278,11 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
         mob = self._mob(health=self.stats["attack_power"] * 6)
 
-        dispatch_text_command(self.player.id, "bleed rat")
+        dispatch_and_drain_combat(self.player.id, "bleed rat")
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 5)
 
-        dispatch_text_command(self.player.id, "kill rat")
+        dispatch_and_drain_combat(self.player.id, "kill rat")
         mob.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 3)
 
@@ -3395,7 +3295,7 @@ class TestCombatAbilities(WorldTestCase):
         secondary.name = "Bat"
         secondary.keywords = "bat"
         secondary.save(update_fields=["name", "keywords"])
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3403,7 +3303,7 @@ class TestCombatAbilities(WorldTestCase):
             resolution_interval=-1,
             initiative_order=self._player_first_initiative(main),
         )
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3413,7 +3313,7 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "cleave rat")
+            dispatch_and_drain_combat(self.player.id, "cleave rat")
 
         main.refresh_from_db()
         secondary.refresh_from_db()
@@ -3439,7 +3339,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.known_abilities = ["cleave"]
         self.player.save(update_fields=["known_abilities"])
         main = self._mob(health=self.stats["attack_power"] * 5)
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3449,7 +3349,7 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "cleave rat")
+            dispatch_and_drain_combat(self.player.id, "cleave rat")
 
         main.refresh_from_db()
         self.assertEqual(main.health, self.stats["attack_power"] * 4)
@@ -3468,7 +3368,7 @@ class TestCombatAbilities(WorldTestCase):
         secondary.name = "Bat"
         secondary.keywords = "bat"
         secondary.save(update_fields=["name", "keywords"])
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3476,7 +3376,7 @@ class TestCombatAbilities(WorldTestCase):
             resolution_interval=-1,
             initiative_order=self._player_first_initiative(main),
         )
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3485,12 +3385,12 @@ class TestCombatAbilities(WorldTestCase):
             initiative_order=self._player_first_initiative(secondary),
         )
 
-        dispatch_text_command(self.player.id, "cleave rat")
+        dispatch_and_drain_combat(self.player.id, "cleave rat")
         self.player.refresh_from_db()
         self.assertEqual(self.player.active_effects[0]["remaining_rounds"], 1)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "kill rat")
+            dispatch_and_drain_combat(self.player.id, "kill rat")
 
         main.refresh_from_db()
         secondary.refresh_from_db()
@@ -3514,7 +3414,7 @@ class TestCombatAbilities(WorldTestCase):
         secondary.name = "Bat"
         secondary.keywords = "bat"
         secondary.save(update_fields=["name", "keywords"])
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3522,7 +3422,7 @@ class TestCombatAbilities(WorldTestCase):
             resolution_interval=-1,
             initiative_order=self._player_first_initiative(main),
         )
-        secondary_encounter = CombatEncounter.objects.create(
+        secondary_encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3532,12 +3432,12 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "cleave rat")
+            dispatch_and_drain_combat(self.player.id, "cleave rat")
 
         self.assertFalse(Mob.objects.filter(pk=secondary.pk).exists())
         self.assertEqual(
             CombatEncounter.objects.get(pk=secondary_encounter.pk).status,
-            CombatEncounter.STATUS_FINISHED,
+            CombatEncounter.STATUS_ACTIVE,
         )
         deaths = self._messages_by_type(messages, "notification.death")
         self.assertEqual(deaths[0]["data"]["deceased"]["key"], secondary.key)
@@ -3576,21 +3476,21 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities", "energy"])
         self._mob(health=self.stats["attack_power"] * 20)
 
-        dispatch_text_command(self.player.id, "kill rat")
-        dispatch_text_command(self.player.id, "renewfocus")
+        dispatch_and_drain_combat(self.player.id, "kill rat")
+        dispatch_and_drain_combat(self.player.id, "renewfocus")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.energy, 0)
 
-        dispatch_text_command(self.player.id, "kill rat")
+        dispatch_and_drain_combat(self.player.id, "kill rat")
         self.player.refresh_from_db()
         self.assertEqual(self.player.energy, 3)
 
-        dispatch_text_command(self.player.id, "kill rat")
+        dispatch_and_drain_combat(self.player.id, "kill rat")
         self.player.refresh_from_db()
         self.assertEqual(self.player.energy, 6)
 
-        dispatch_text_command(self.player.id, "kill rat")
+        dispatch_and_drain_combat(self.player.id, "kill rat")
         self.player.refresh_from_db()
         self.assertEqual(self.player.energy, 6)
 
@@ -3639,21 +3539,21 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities", "energy"])
         self._mob(health=self.stats["attack_power"] * 20)
 
-        dispatch_text_command(self.player.id, "kill rat")
-        dispatch_text_command(self.player.id, "energize")
+        dispatch_and_drain_combat(self.player.id, "kill rat")
+        dispatch_and_drain_combat(self.player.id, "energize")
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.energy, 0)
 
-        dispatch_text_command(self.player.id, "kill rat")
+        dispatch_and_drain_combat(self.player.id, "kill rat")
         self.player.refresh_from_db()
         self.assertEqual(self.player.energy, 3)
 
-        dispatch_text_command(self.player.id, "kill rat")
+        dispatch_and_drain_combat(self.player.id, "kill rat")
         self.player.refresh_from_db()
         self.assertEqual(self.player.energy, 6)
 
-        dispatch_text_command(self.player.id, "kill rat")
+        dispatch_and_drain_combat(self.player.id, "kill rat")
         self.player.refresh_from_db()
         self.assertEqual(self.player.energy, 6)
 
@@ -3669,6 +3569,9 @@ class TestCombatAbilities(WorldTestCase):
         ally.save(update_fields=["in_game", "known_abilities"])
         self.player.known_abilities = ["shout"]
         self.player.save(update_fields=["known_abilities"])
+        self.player.group_id = ally.group_id = "party"
+        self.player.save(update_fields=["group_id"])
+        ally.save(update_fields=["group_id"])
         mob = self._mob(health=self.stats["attack_power"] * 20)
 
         baseline = resolve_attack(
@@ -3679,15 +3582,12 @@ class TestCombatAbilities(WorldTestCase):
         ).damage_taken
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "shout")
+            dispatch_and_drain_combat(self.player.id, "shout")
         self.player.refresh_from_db()
         ally.refresh_from_db()
 
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertEqual(len(self.player.active_effects), 1)
         self.assertEqual(len(ally.active_effects), 1)
@@ -3721,7 +3621,7 @@ class TestCombatAbilities(WorldTestCase):
         ally.active_effect_records.update(remaining_rounds=2)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(ally.id, "shout")
+            dispatch_and_drain_combat(ally.id, "shout")
         self.player.refresh_from_db()
         ally.refresh_from_db()
 
@@ -3770,7 +3670,7 @@ class TestCombatAbilities(WorldTestCase):
                 ],
             }
         ])
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3867,7 +3767,7 @@ class TestCombatAbilities(WorldTestCase):
             profile_key="basic_physical",
             rng=lambda: 0.99,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3877,7 +3777,7 @@ class TestCombatAbilities(WorldTestCase):
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "shieldwall")
+                dispatch_and_drain_combat(self.player.id, "shieldwall")
                 resolve_combat_encounter(encounter.id)
 
         self.player.refresh_from_db()
@@ -3932,7 +3832,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "crest")
+            dispatch_and_drain_combat(self.player.id, "crest")
 
         self.player.refresh_from_db()
         expected_absorb = math.ceil(crest_stats["ability_power"] * 0.3)
@@ -3948,10 +3848,7 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(effect.primitives[0]["remaining"], expected_absorb)
         self.assertEqual(self.player.ability_cooldowns, {"crest": 3})
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
 
         effect_messages = self._messages_by_type(messages, "notification.ability.effect")
@@ -3967,7 +3864,7 @@ class TestCombatAbilities(WorldTestCase):
             attack_power=expected_absorb - 1,
             fights_back=True,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -3983,17 +3880,17 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(effect.remaining_rounds, 2)
         effect_updates = self._messages_by_type(
             combat_messages,
-            "player.combat_effects.update",
+            "notification.combat.snapshot",
         )
         player_snapshot = next(
             combatant
-            for combatant in effect_updates[-1]["data"]["combatants"]
-            if combatant["target"]["key"] == self.player.key
+            for combatant in effect_updates[-1]["data"]["participants"]
+            if combatant["key"] == self.player.key
         )
-        crest_snapshot = player_snapshot["active_effects"][0]
+        crest_snapshot = player_snapshot["effects"][0]
         self.assertEqual(crest_snapshot["effect"], "crest")
         self.assertEqual(crest_snapshot["remaining_rounds"], 2)
-        self.assertEqual(crest_snapshot["primitives"][0]["remaining"], 1)
+        self.assertNotIn("primitives", crest_snapshot)
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as depletion_messages:
@@ -4007,14 +3904,14 @@ class TestCombatAbilities(WorldTestCase):
         )
         depleted_updates = self._messages_by_type(
             depletion_messages,
-            "player.combat_effects.update",
+            "notification.combat.snapshot",
         )
         player_snapshot = next(
             combatant
-            for combatant in depleted_updates[-1]["data"]["combatants"]
-            if combatant["target"]["key"] == self.player.key
+            for combatant in depleted_updates[-1]["data"]["participants"]
+            if combatant["key"] == self.player.key
         )
-        self.assertEqual(player_snapshot["active_effects"], [])
+        self.assertEqual(player_snapshot["effects"], [])
 
     def test_explicit_encounter_barrier_rejects_out_of_combat_without_cooldown(self):
         self._ability(
@@ -4045,7 +3942,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "battlecrest")
+            dispatch_and_drain_combat(self.player.id, "battlecrest")
 
         self.player.refresh_from_db()
         errors = self._messages_by_type(messages, "cmd.ability.error")
@@ -4085,7 +3982,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
         expected_absorb = math.ceil(self.stats["health_max"] * 0.25)
 
-        dispatch_text_command(self.player.id, "aegis")
+        dispatch_and_drain_combat(self.player.id, "aegis")
 
         effect = ActiveEffect.objects.get(
             target_player=self.player,
@@ -4127,7 +4024,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "emptyward")
+            dispatch_and_drain_combat(self.player.id, "emptyward")
 
         self.assertFalse(
             ActiveEffect.objects.filter(
@@ -4167,7 +4064,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.health = 50
         self.player.save(update_fields=["known_abilities", "health"])
         mob = self._mob(health=self.stats["attack_power"] * 20, attack_power=7, fights_back=True)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -4177,11 +4074,11 @@ class TestCombatAbilities(WorldTestCase):
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "ward")
+                dispatch_and_drain_combat(self.player.id, "ward")
                 resolve_combat_encounter(encounter.id)
 
         self.player.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.assertEqual(self.player.health, 50)
         self.assertEqual(encounter.active_effects[0]["primitives"][0]["remaining"], 3)
         attacks = self._messages_by_type(messages, "notification.combat.attack")
@@ -4193,7 +4090,7 @@ class TestCombatAbilities(WorldTestCase):
                 resolve_combat_encounter(encounter.id)
 
         self.player.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.assertEqual(self.player.health, 46)
         self.assertEqual(encounter.active_effects, [])
         attacks = self._messages_by_type(messages, "notification.combat.attack")
@@ -4238,7 +4135,7 @@ class TestCombatAbilities(WorldTestCase):
             attack_power=5,
             fights_back=True,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -4248,10 +4145,10 @@ class TestCombatAbilities(WorldTestCase):
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "layeredward")
+                dispatch_and_drain_combat(self.player.id, "layeredward")
                 resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.assertEqual(encounter.active_effects, [])
         attacks = self._messages_by_type(messages, "notification.combat.attack")
         self.assertEqual(attacks[-1]["data"]["damage_taken"], 0)
@@ -4286,7 +4183,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.health = 50
         self.player.save(update_fields=["known_abilities", "health"])
         mob = self._mob(health=self.stats["attack_power"] * 20, attack_power=7, fights_back=True)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -4296,11 +4193,11 @@ class TestCombatAbilities(WorldTestCase):
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
-                dispatch_text_command(self.player.id, "abilityward")
+                dispatch_and_drain_combat(self.player.id, "abilityward")
                 resolve_combat_encounter(encounter.id)
 
         self.player.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         self.assertEqual(self.player.health, 43)
         self.assertEqual(encounter.active_effects[0]["primitives"][0]["remaining"], 10)
         attacks = self._messages_by_type(messages, "notification.combat.attack")
@@ -4337,7 +4234,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.known_abilities = ["power-ward"]
         self.player.save(update_fields=["known_abilities"])
         mob = self._mob(health=self.stats["attack_power"] * 20, fights_back=False)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -4346,10 +4243,10 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
-            dispatch_text_command(self.player.id, "powerward")
+            dispatch_and_drain_combat(self.player.id, "powerward")
             resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         expected_absorb = math.ceil(self.stats["ability_power"] * 0.5)
         self.assertGreater(expected_absorb, 0)
         self.assertEqual(
@@ -4388,7 +4285,7 @@ class TestCombatAbilities(WorldTestCase):
         self.player.known_abilities = ["vital-ward"]
         self.player.save(update_fields=["known_abilities"])
         mob = self._mob(health=self.stats["attack_power"] * 20, fights_back=False)
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -4397,10 +4294,10 @@ class TestCombatAbilities(WorldTestCase):
         )
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
-            dispatch_text_command(self.player.id, "vitalward")
+            dispatch_and_drain_combat(self.player.id, "vitalward")
             resolve_combat_encounter(encounter.id)
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter)
         expected_absorb = math.ceil(
             self.stats["ability_power"] * 0.1
             + self.stats["health_max"] * 0.3
@@ -4431,9 +4328,9 @@ class TestCombatAbilities(WorldTestCase):
         self.player.save(update_fields=["known_abilities", "health"])
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "mend")
+            dispatch_and_drain_combat(self.player.id, "mend")
 
         self.player.refresh_from_db()
         self.assertGreater(self.player.health, 1)
-        self.assertFalse(CombatEncounter.objects.filter(player=self.player, status=CombatEncounter.STATUS_ACTIVE).exists())
+        self.assertFalse(CombatEncounter.objects.filter(participants__player=self.player).filter(status=CombatEncounter.STATUS_ACTIVE).exists())
         self.assertEqual(len(self._messages_by_type(messages, "notification.ability.heal")), 1)

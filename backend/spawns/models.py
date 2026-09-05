@@ -977,8 +977,9 @@ class DuelParticipant(BaseModel):
 
 class CombatEncounter(BaseModel):
     STATUS_ACTIVE = "active"
+    STATUS_PAUSED = "paused"
     STATUS_FINISHED = "finished"
-    STATUS_CHOICES = list_to_choice((STATUS_ACTIVE, STATUS_FINISHED))
+    STATUS_CHOICES = list_to_choice((STATUS_ACTIVE, STATUS_PAUSED, STATUS_FINISHED))
 
     world = models.ForeignKey(
         'worlds.World',
@@ -990,21 +991,9 @@ class CombatEncounter(BaseModel):
         on_delete=models.CASCADE,
         related_name='combat_encounters',
     )
-    player = models.ForeignKey(
-        'spawns.Player',
-        on_delete=models.CASCADE,
-        related_name='combat_encounters',
-    )
     duel_match = models.ForeignKey(
         'spawns.DuelMatch',
         on_delete=models.CASCADE,
-        related_name='combat_encounters',
-        blank=True,
-        null=True,
-    )
-    mob = models.ForeignKey(
-        'spawns.Mob',
-        on_delete=models.SET_NULL,
         related_name='combat_encounters',
         blank=True,
         null=True,
@@ -1018,18 +1007,19 @@ class CombatEncounter(BaseModel):
     round_number = models.PositiveIntegerField(default=0)
     next_resolution_ts = models.DateTimeField(db_index=True, **optional)
     last_resolution_ts = models.DateTimeField(db_index=True, **optional)
-    pending_player_ability = models.JSONField(default=dict)
-    pending_mob_ability = models.JSONField(default=dict)
-    pending_flee = models.JSONField(default=dict)
-    initiative_order = models.JSONField(default=list)
     opening_priority = models.JSONField(default=list)
-    faceoff_override = models.BooleanField(default=False)
+    random_seed = models.UUIDField(default=uuid.uuid4, editable=False)
+    state_revision = models.PositiveBigIntegerField(default=0)
+    schedule_generation = models.PositiveBigIntegerField(default=0)
+    npc_active_until = models.DateTimeField(**optional)
+    merged_into = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, related_name='merged_encounters',
+        **optional,
+    )
 
     class Meta(BaseModel.Meta):
         indexes = [
             models.Index(fields=['status', 'next_resolution_ts']),
-            models.Index(fields=['player', 'status']),
-            models.Index(fields=['mob', 'status']),
             models.Index(fields=['duel_match', 'status']),
         ]
         constraints = [
@@ -1055,8 +1045,51 @@ class CombatEncounter(BaseModel):
         return int(self.round_number or 0) > 0
 
 
+class CombatSide(BaseModel):
+    """An encounter-local alliance; independent of factions and match teams."""
+
+    encounter = models.ForeignKey(
+        CombatEncounter, on_delete=models.CASCADE, related_name='sides',
+    )
+    position = models.PositiveSmallIntegerField()
+
+    class Meta(BaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['encounter', 'position'], name='combat_side_position_unique',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(position__in=[1, 2]), name='combat_side_two_teams',
+            ),
+        ]
+
+
+class CombatSideRelation(BaseModel):
+    lower_side = models.ForeignKey(
+        CombatSide, on_delete=models.CASCADE, related_name='lower_relations',
+    )
+    higher_side = models.ForeignKey(
+        CombatSide, on_delete=models.CASCADE, related_name='higher_relations',
+    )
+    relation = models.CharField(max_length=8, default='hostile')
+
+    class Meta(BaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['lower_side', 'higher_side'], name='combat_relation_pair_unique',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(lower_side__lt=models.F('higher_side')),
+                name='combat_relation_ordered',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(relation='hostile'), name='combat_relation_hostile',
+            ),
+        ]
+
+
 class CombatParticipant(BaseModel):
-    """Actor-local state for PvP and future multi-participant encounters."""
+    """Authoritative actor membership, targeting, and intent for spatial combat."""
 
     encounter = models.ForeignKey(
         'spawns.CombatEncounter',
@@ -1065,14 +1098,14 @@ class CombatParticipant(BaseModel):
     )
     player = models.ForeignKey(
         'spawns.Player',
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name='combat_participations',
         blank=True,
         null=True,
     )
     mob = models.ForeignKey(
         'spawns.Mob',
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name='combat_participations',
         blank=True,
         null=True,
@@ -1081,6 +1114,19 @@ class CombatParticipant(BaseModel):
     is_active = models.BooleanField(default=True, db_index=True)
     pending_ability = models.JSONField(default=dict, blank=True)
     pending_flee = models.JSONField(default=dict, blank=True)
+    side = models.ForeignKey(
+        CombatSide, on_delete=models.CASCADE, related_name='participants', **optional,
+    )
+    current_target = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, related_name='targeted_by', **optional,
+    )
+    actor_snapshot = models.JSONField(default=dict, blank=True)
+    initiative = models.FloatField(default=0)
+    first_eligible_round = models.PositiveIntegerField(default=1)
+    intent_ready = models.BooleanField(default=False)
+    revision = models.PositiveBigIntegerField(default=0)
+    exit_reason = models.CharField(max_length=32, blank=True)
+    contributions = models.JSONField(default=dict, blank=True)
 
     class Meta(BaseModel.Meta):
         constraints = [
@@ -1088,6 +1134,7 @@ class CombatParticipant(BaseModel):
                 condition=(
                     models.Q(player__isnull=False, mob__isnull=True)
                     | models.Q(player__isnull=True, mob__isnull=False)
+                    | models.Q(is_active=False, player__isnull=True, mob__isnull=True)
                 ),
                 name='spawns_combat_participant_one_actor',
             ),
@@ -1095,15 +1142,17 @@ class CombatParticipant(BaseModel):
                 condition=models.Q(team__gte=1),
                 name='spawns_combat_participant_team_positive',
             ),
-            models.UniqueConstraint(
-                fields=['encounter', 'player'],
-                condition=models.Q(player__isnull=False),
-                name='spawns_combat_unique_player',
+            models.CheckConstraint(
+                condition=models.Q(is_active=False) | models.Q(side__isnull=False),
+                name='combat_active_member_has_side',
             ),
             models.UniqueConstraint(
-                fields=['encounter', 'mob'],
-                condition=models.Q(mob__isnull=False),
-                name='spawns_combat_unique_mob',
+                fields=['player'], condition=models.Q(is_active=True, player__isnull=False),
+                name='combat_player_one_active',
+            ),
+            models.UniqueConstraint(
+                fields=['mob'], condition=models.Q(is_active=True, mob__isnull=False),
+                name='combat_mob_one_active',
             ),
         ]
         indexes = [
@@ -1122,6 +1171,44 @@ class CombatParticipant(BaseModel):
     @property
     def actor(self):
         return self.player or self.mob
+
+    @property
+    def actor_key(self):
+        if self.player_id:
+            return f'player.{self.player_id}'
+        if self.mob_id:
+            return f'mob.{self.mob_id}'
+        return self.actor_snapshot.get('key')
+
+
+class CombatRoomState(BaseModel):
+    """Durable, paged room reconciliation; never a world/room polling heartbeat."""
+
+    world = models.ForeignKey('worlds.World', on_delete=models.CASCADE)
+    room = models.ForeignKey('worlds.Room', on_delete=models.CASCADE)
+    dirty_generation = models.PositiveBigIntegerField(default=0)
+    applied_generation = models.PositiveBigIntegerField(default=0)
+    frozen_generation = models.PositiveBigIntegerField(default=0)
+    changed_actors = models.JSONField(default=list)
+    frozen_actors = models.JSONField(default=list)
+    cursor = models.JSONField(default=dict)
+    lease_until = models.DateTimeField(**optional)
+    next_run_ts = models.DateTimeField(db_index=True, **optional)
+    active_until = models.DateTimeField(**optional)
+
+    class Meta(BaseModel.Meta):
+        constraints = [models.UniqueConstraint(
+            fields=['world', 'room'], name='combat_room_scope_unique',
+        )]
+
+
+class CombatRewardReceipt(BaseModel):
+    """One final reward decision per runtime mob, retained after actor deletion."""
+
+    encounter = models.ForeignKey(CombatEncounter, on_delete=models.CASCADE)
+    mob_runtime_id = models.PositiveBigIntegerField(unique=True)
+    mob_snapshot = models.JSONField(default=dict)
+    awards = models.JSONField(default=list)
 
 
 class ActiveEffect(BaseModel):

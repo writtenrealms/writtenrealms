@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat, drain_queued_combat
 from unittest.mock import patch
 
 from config import constants as adv_consts
@@ -75,13 +76,14 @@ class TestMobTracker(WorldTestCase):
             health_max=max(self.stats["attack_power"] * 100, 100),
             attack_power=0,
             fights_back=False,
-            aggression=adv_consts.MOB_AGGRESSION_ALL,
+            aggression=adv_consts.MOB_AGGRESSION_PLAYERS,
+            group_id="tracker-pack",
             target_priority=target_priority,
             trait_instances=trait_instances,
         )
 
     def _encounter(self, mob, *, round_number=0, resolution_interval=1.5):
-        return CombatEncounter.objects.create(
+        return create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -117,19 +119,10 @@ class TestMobTracker(WorldTestCase):
         self.assertEqual(tracker.room_id, self.destination.id)
         self.assertEqual(ordinary_mob.room_id, self.room.id)
         self.assertTrue(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                room=self.destination,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(room=self.destination, status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                room=self.room,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(room=self.room, status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertTrue(
             self._player_messages_by_type(messages, "cmd.move.success")
@@ -151,7 +144,7 @@ class TestMobTracker(WorldTestCase):
 
         self.player.refresh_from_db()
         tracker.refresh_from_db()
-        origin_encounter.refresh_from_db()
+        refresh_combat_fixture(origin_encounter, )
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertEqual(tracker.room_id, self.room.id)
         self.assertEqual(
@@ -159,30 +152,25 @@ class TestMobTracker(WorldTestCase):
             CombatEncounter.STATUS_FINISHED,
         )
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                room=self.destination,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(room=self.destination, status=CombatEncounter.STATUS_ACTIVE).exists()
         )
 
     def test_pre_lock_move_clears_prepared_ability_without_a_tracker(self):
         ordinary_mob = self._mob("an ordinary guard", tracker=False)
         encounter = self._encounter(ordinary_mob)
-        encounter.pending_player_ability = {
+        combat_member(encounter, "player").pending_ability = {
             "ability": "bash",
             "status": "queued",
         }
-        encounter.save(update_fields=["pending_player_ability"])
+        save_combat_fixture(encounter, update_fields=["pending_player_ability"])
 
         with capture_game_messages() as messages:
             with self.captureOnCommitCallbacks(execute=True):
                 dispatch_text_command(self.player.id, "east")
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
-        self.assertEqual(encounter.pending_player_ability, {})
+        self.assertEqual(combat_member(encounter, "player").pending_ability, {})
         preparation_updates = self._player_messages_by_type(
             messages,
             "player.ability_preparations.update",
@@ -203,7 +191,7 @@ class TestMobTracker(WorldTestCase):
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with patch(
                 "spawns.handlers.movement.transaction.on_commit",
-                side_effect=lambda callback: callback(),
+                side_effect=lambda callback, **kwargs: callback(),
             ):
                 with capture_game_messages() as messages:
                     dispatch_text_command(self.player.id, "east")
@@ -237,12 +225,7 @@ class TestMobTracker(WorldTestCase):
         self.assertEqual(len(kill_messages), 1)
         self.assertEqual(kill_messages[0]["data"]["target"]["key"], tracker.key)
         self.assertEqual(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                room=self.destination,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).count(),
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(room=self.destination, status=CombatEncounter.STATUS_ACTIVE).count(),
             1,
         )
 
@@ -260,16 +243,12 @@ class TestMobTracker(WorldTestCase):
 
         self.player.refresh_from_db()
         tracker.refresh_from_db()
-        origin_encounter.refresh_from_db()
+        refresh_combat_fixture(origin_encounter, )
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertEqual(tracker.room_id, self.room.id)
         self.assertEqual(origin_encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertTrue(
             self._player_messages_by_type(messages, "cmd.move.success")
@@ -285,6 +264,7 @@ class TestMobTracker(WorldTestCase):
         with capture_game_messages() as messages:
             with self.captureOnCommitCallbacks(execute=False) as callbacks:
                 dispatch_text_command(self.player.id, "east")
+            callbacks = [callback for callback in callbacks if callback.__name__ == '_resolve_tracker_chase']
             self.assertEqual(len(callbacks), 1)
             RoomFlag.objects.create(
                 room=self.destination,
@@ -297,11 +277,7 @@ class TestMobTracker(WorldTestCase):
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertEqual(tracker.room_id, self.room.id)
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertFalse(
             self._player_messages_by_type(messages, "cmd.kill.success")
@@ -324,11 +300,7 @@ class TestMobTracker(WorldTestCase):
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertEqual(tracker.room_id, self.room.id)
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertTrue(
             self._player_messages_by_type(messages, "cmd.move.success")
@@ -350,7 +322,8 @@ class TestMobTracker(WorldTestCase):
                 origin_room_id=self.room.id,
             )
 
-        self.assertEqual(len(encounters), 5)
+        self.assertEqual(len(encounters), 1)
+        self.assertEqual(len(encounters[0]._escape_opponents), 5)
         self.assertEqual(len(queries), 1)
 
     def test_tracker_room_boundary_lookup_remains_one_bounded_query(self):
@@ -380,7 +353,7 @@ class TestMobTracker(WorldTestCase):
 
         self.player.refresh_from_db()
         tracker.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.assertEqual(self.player.room_id, self.room.id)
         self.assertEqual(tracker.room_id, self.room.id)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
@@ -393,7 +366,7 @@ class TestMobTracker(WorldTestCase):
         self._encounter(tracker, round_number=1)
 
         with capture_game_messages() as messages:
-            dispatch_text_command(self.player.id, "north")
+            dispatch_and_drain_combat(self.player.id, "north")
 
         errors = self._player_messages_by_type(messages, "cmd.move.error")
         self.assertEqual(errors[0]["data"]["code"], "in_combat")
@@ -402,7 +375,7 @@ class TestMobTracker(WorldTestCase):
         tracker = self._mob()
         encounter = self._encounter(tracker, round_number=1)
         encounter.status = CombatEncounter.STATUS_FINISHED
-        encounter.save(update_fields=["status"])
+        save_combat_fixture(encounter, update_fields=["status"])
 
         with capture_game_messages() as messages:
             with self.captureOnCommitCallbacks(execute=True):
@@ -468,20 +441,20 @@ class TestMobTracker(WorldTestCase):
         tracker_encounter = self._encounter(tracker, resolution_interval=-1)
         ordinary_encounter = self._encounter(ordinary_mob, resolution_interval=-1)
 
-        dispatch_text_command(self.player.id, "flee")
-        tracker_encounter.refresh_from_db()
-        self.assertEqual(tracker_encounter.pending_flee["status"], "ready")
+        dispatch_and_drain_combat(self.player.id, "flee")
+        refresh_combat_fixture(tracker_encounter, )
+        self.assertEqual(combat_member(tracker_encounter, "player").pending_flee["status"], "ready")
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
                 with self.captureOnCommitCallbacks(execute=True):
-                    dispatch_text_command(self.player.id, "flee")
+                    dispatch_and_drain_combat(self.player.id, "flee")
 
         self.player.refresh_from_db()
         tracker.refresh_from_db()
         ordinary_mob.refresh_from_db()
-        tracker_encounter.refresh_from_db()
-        ordinary_encounter.refresh_from_db()
+        refresh_combat_fixture(tracker_encounter, )
+        refresh_combat_fixture(ordinary_encounter, )
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertEqual(tracker.room_id, self.destination.id)
         self.assertEqual(ordinary_mob.room_id, self.room.id)
@@ -491,19 +464,10 @@ class TestMobTracker(WorldTestCase):
             CombatEncounter.STATUS_FINISHED,
         )
         self.assertTrue(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                room=self.destination,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(room=self.destination, status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=ordinary_mob,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=ordinary_mob).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         flee_messages = self._player_messages_by_type(messages, "cmd.flee.success")
         self.assertTrue(
@@ -539,26 +503,22 @@ class TestMobTracker(WorldTestCase):
         tracker = self._mob()
         encounter = self._encounter(tracker, resolution_interval=-1)
 
-        dispatch_text_command(self.player.id, "flee")
-        encounter.refresh_from_db()
-        self.assertEqual(encounter.pending_flee["status"], "ready")
+        dispatch_and_drain_combat(self.player.id, "flee")
+        refresh_combat_fixture(encounter, )
+        self.assertEqual(combat_member(encounter, "player").pending_flee["status"], "ready")
 
         with capture_game_messages() as messages:
             with self.captureOnCommitCallbacks(execute=True):
-                dispatch_text_command(self.player.id, "flee")
+                dispatch_and_drain_combat(self.player.id, "flee")
 
         self.player.refresh_from_db()
         tracker.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertEqual(tracker.room_id, self.room.id)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertTrue(
             self._player_messages_by_type(messages, "cmd.flee.success")
@@ -575,26 +535,22 @@ class TestMobTracker(WorldTestCase):
         tracker = self._mob()
         encounter = self._encounter(tracker, resolution_interval=-1)
 
-        dispatch_text_command(self.player.id, "flee")
-        encounter.refresh_from_db()
-        self.assertEqual(encounter.pending_flee["status"], "ready")
+        dispatch_and_drain_combat(self.player.id, "flee")
+        refresh_combat_fixture(encounter, )
+        self.assertEqual(combat_member(encounter, "player").pending_flee["status"], "ready")
 
         with capture_game_messages() as messages:
             with self.captureOnCommitCallbacks(execute=True):
-                dispatch_text_command(self.player.id, "flee")
+                dispatch_and_drain_combat(self.player.id, "flee")
 
         self.player.refresh_from_db()
         tracker.refresh_from_db()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertEqual(tracker.room_id, self.room.id)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertTrue(
             self._player_messages_by_type(messages, "cmd.flee.success")
@@ -617,12 +573,7 @@ class TestMobTracker(WorldTestCase):
         tracker.refresh_from_db()
         self.assertEqual(tracker.room_id, self.destination.id)
         self.assertTrue(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                room=self.destination,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(room=self.destination, status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertTrue(
             self._player_messages_by_type(messages, "cmd.kill.success")
@@ -641,6 +592,7 @@ class TestMobTracker(WorldTestCase):
             with capture_game_messages() as messages:
                 with self.captureOnCommitCallbacks(execute=False) as callbacks:
                     dispatch_text_command(self.player.id, "east")
+                callbacks = [callback for callback in callbacks if callback.__name__ == '_resolve_tracker_chase']
                 self.assertEqual(len(callbacks), 1)
                 callbacks[0]()
                 callbacks[0]()
@@ -648,12 +600,7 @@ class TestMobTracker(WorldTestCase):
         tracker.refresh_from_db()
         self.assertEqual(tracker.room_id, self.destination.id)
         self.assertEqual(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                room=self.destination,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).count(),
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(room=self.destination, status=CombatEncounter.STATUS_ACTIVE).count(),
             1,
         )
         self.assertEqual(
@@ -664,16 +611,17 @@ class TestMobTracker(WorldTestCase):
     def test_failed_reengagement_rolls_back_movement_and_can_retry(self):
         tracker = self._mob()
         origin_encounter = self._encounter(tracker)
-        origin_encounter.pending_player_ability = {
+        combat_member(origin_encounter, "player").pending_ability = {
             "ability": "bash",
             "status": "queued",
         }
-        origin_encounter.save(update_fields=["pending_player_ability"])
+        save_combat_fixture(origin_encounter, update_fields=["pending_player_ability"])
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
                 with self.captureOnCommitCallbacks(execute=False) as callbacks:
                     dispatch_text_command(self.player.id, "east")
+                callbacks = [callback for callback in callbacks if callback.__name__ == '_resolve_tracker_chase']
                 self.assertEqual(len(callbacks), 1)
                 with self.assertLogs("spawns.handlers.movement", level="ERROR"):
                     with patch(
@@ -684,7 +632,7 @@ class TestMobTracker(WorldTestCase):
                         callbacks[0]()
 
                 tracker.refresh_from_db()
-                origin_encounter.refresh_from_db()
+                refresh_combat_fixture(origin_encounter, )
                 self.assertEqual(tracker.room_id, self.room.id)
                 self.assertEqual(
                     origin_encounter.status,
@@ -696,6 +644,8 @@ class TestMobTracker(WorldTestCase):
                     .get("processed_chase_keys")
                 )
 
+                from spawns.events import flush_game_event_outbox
+                flush_game_event_outbox()
                 preparation_updates = self._player_messages_by_type(
                     messages,
                     "player.ability_preparations.update",
@@ -713,12 +663,7 @@ class TestMobTracker(WorldTestCase):
         tracker.refresh_from_db()
         self.assertEqual(tracker.room_id, self.destination.id)
         self.assertEqual(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                room=self.destination,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).count(),
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(room=self.destination, status=CombatEncounter.STATUS_ACTIVE).count(),
             1,
         )
         self.assertEqual(
@@ -734,6 +679,8 @@ class TestMobTracker(WorldTestCase):
             with capture_game_messages() as messages:
                 with self.captureOnCommitCallbacks(execute=False) as callbacks:
                     dispatch_text_command(self.player.id, "east")
+                callbacks = [callback for callback in callbacks if callback.__name__ == '_resolve_tracker_chase']
+                self.assertEqual(len(callbacks), 1)
                 with self.assertLogs("spawns.handlers.movement", level="ERROR"):
                     with patch(
                         "spawns.actions.mob_movement._tracker_movement_events",
@@ -771,6 +718,7 @@ class TestMobTracker(WorldTestCase):
         with capture_game_messages() as messages:
             with self.captureOnCommitCallbacks(execute=True):
                 dispatch_text_command(self.player.id, "east")
+            drain_queued_combat()
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, self.destination.id)
@@ -870,10 +818,7 @@ class TestMobTracker(WorldTestCase):
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertEqual(tracker.room_id, self.room.id)
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertFalse(
             self._player_messages_by_type(messages, "cmd.kill.success")
@@ -888,24 +833,19 @@ class TestMobTracker(WorldTestCase):
         )
         encounter = self._encounter(tracker, resolution_interval=-1)
 
-        dispatch_text_command(self.player.id, "flee")
-        encounter.refresh_from_db()
-        self.assertEqual(encounter.pending_flee["status"], "ready")
+        dispatch_and_drain_combat(self.player.id, "flee")
+        refresh_combat_fixture(encounter, )
+        self.assertEqual(combat_member(encounter, "player").pending_flee["status"], "ready")
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async"):
             with capture_game_messages() as messages:
                 with self.captureOnCommitCallbacks(execute=True):
-                    dispatch_text_command(self.player.id, "flee")
+                    dispatch_and_drain_combat(self.player.id, "flee")
 
         tracker.refresh_from_db()
         self.assertEqual(tracker.room_id, self.destination.id)
         self.assertTrue(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                room=self.destination,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(room=self.destination, status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertTrue(
             self._player_messages_by_type(messages, "cmd.kill.success")
@@ -930,12 +870,7 @@ class TestMobTracker(WorldTestCase):
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertEqual(tracker.room_id, self.room.id)
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                room=self.destination,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(room=self.destination, status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertFalse(
             self._player_messages_by_type(messages, "cmd.kill.success")
@@ -961,12 +896,7 @@ class TestMobTracker(WorldTestCase):
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertEqual(tracker.room_id, other_room.id)
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                room=self.destination,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(room=self.destination, status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertFalse(
             self._player_messages_by_type(messages, "cmd.kill.success")
@@ -982,19 +912,15 @@ class TestMobTracker(WorldTestCase):
                     dispatch_text_command(self.player.id, "east")
                 self.assertTrue(callbacks)
                 tracker.delete()
-                encounter.refresh_from_db()
-                self.assertIsNone(encounter.mob_id)
+                refresh_combat_fixture(encounter, )
+                self.assertIsNone(combat_member(encounter, "mob").mob_id)
                 for callback in callbacks:
                     callback()
 
         self.player.refresh_from_db()
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                room=self.destination,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(room=self.destination, status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertFalse(
             self._player_messages_by_type(messages, "cmd.kill.success")
@@ -1020,11 +946,7 @@ class TestMobTracker(WorldTestCase):
         self.assertEqual(self.player.room_id, later_room.id)
         self.assertEqual(tracker.room_id, self.room.id)
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertFalse(
             self._player_messages_by_type(messages, "cmd.kill.success")
@@ -1062,11 +984,7 @@ class TestMobTracker(WorldTestCase):
         self.assertEqual(self.player.room_id, self.destination.id)
         self.assertEqual(tracker.room_id, self.room.id)
         self.assertFalse(
-            CombatEncounter.objects.filter(
-                player=self.player,
-                mob=tracker,
-                status=CombatEncounter.STATUS_ACTIVE,
-            ).exists()
+            CombatEncounter.objects.filter(participants__player=self.player).filter(participants__mob=tracker).filter(status=CombatEncounter.STATUS_ACTIVE).exists()
         )
         self.assertFalse(
             self._player_messages_by_type(messages, "cmd.kill.success")

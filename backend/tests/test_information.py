@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 from builders.models import Faction, ItemDefinition
 from config import constants as adv_consts
 from core.computations import compute_stats
@@ -331,7 +332,7 @@ class TestScanCommand(WorldTestCase):
         target = self.create_player("Target", room=self.exit_room)
         target.in_game = True
         target.save(update_fields=["in_game"])
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.exit_room,
             player=target,
@@ -356,7 +357,7 @@ class TestScanCommand(WorldTestCase):
         target = self.create_player("Target", room=self.room)
         target.in_game = True
         target.save(update_fields=["in_game"])
-        CombatEncounter.objects.create(
+        create_combat_encounter(
             world=self.spawn_world,
             room=self.exit_room,
             player=target,

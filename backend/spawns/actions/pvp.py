@@ -588,53 +588,6 @@ def _locked_opener_players(
     return match, attacker, opponent
 
 
-def _duel_teams(
-    match: DuelMatch,
-    player_ids: list[int],
-) -> dict[int, int]:
-    teams = dict(
-        DuelParticipant.objects.filter(
-            match=match,
-            player_id__in=player_ids,
-            role=DuelParticipant.ROLE_CONTESTANT,
-        ).values_list("player_id", "team")
-    )
-    if set(teams) != set(player_ids):
-        raise ActionError(
-            "Only the duel contestants can fight here.",
-            code="duel_not_contestant",
-        )
-    if len({teams[player_id] for player_id in player_ids}) != len(player_ids):
-        raise ActionError(
-            "You cannot attack someone on your team.",
-            code="duel_same_team",
-        )
-    return teams
-
-
-def _initiative_order(
-    encounter: CombatEncounter,
-    participants: list[CombatParticipant],
-    players: dict[int, Player],
-) -> list[dict]:
-    combat = _combat()
-    refs = [
-        combat._encounter_actor_ref(
-            players[participant.player_id],
-            side=f"team.{participant.team}",
-        )
-        for participant in participants
-        if participant.player_id in players
-    ]
-    if not combat._valid_initiative_order(
-        encounter.initiative_order or [],
-        refs,
-    ):
-        encounter.initiative_order = combat._roll_initiative_order(refs)
-        encounter.save(update_fields=["initiative_order", "modified_ts"])
-    return list(encounter.initiative_order or [])
-
-
 def _engage_events(
     *,
     attacker: Player,
@@ -693,114 +646,13 @@ def _engage_events(
     return events
 
 
-def _create_encounter(
-    *,
-    match: DuelMatch,
-    attacker: Player,
-    target: Player,
-) -> tuple[CombatEncounter, list[CombatParticipant], bool]:
-    existing = (
-        CombatEncounter.objects.select_for_update()
-        .filter(
-            duel_match=match,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        .first()
-    )
-    if existing is not None:
-        all_participants = list(
-            CombatParticipant.objects.select_for_update()
-            .filter(
-                encounter=existing,
-            )
-            .order_by("player_id")
-        )
-        participants = [
-            participant
-            for participant in all_participants
-            if (
-                participant.is_active
-                and participant.player_id in {attacker.id, target.id}
-            )
-        ]
-        encounter_is_spatially_current = (
-            existing.world_id == attacker.world_id == target.world_id
-            and existing.room_id == attacker.room_id == target.room_id
-            and len(participants) == 2
-            and {row.player_id for row in participants}
-            == {attacker.id, target.id}
-        )
-        if encounter_is_spatially_current:
-            return existing, participants, False
+def _create_encounter(*, match, attacker, target):
+    from spawns.combat_encounters import engage
 
-        # A committed move can outlive its on-commit cleanup callback if the
-        # worker dies. Reconcile the stale encounter while holding the normal
-        # run/match/encounter/player locks, then create the new room encounter
-        # as part of this same command.
-        _finish_locked_context(
-            LockedPvpContext(
-                run=match.run,
-                match=match,
-                encounter=existing,
-                participants=all_participants,
-                players={
-                    attacker.id: attacker,
-                    target.id: target,
-                },
-            )
-        )
-
-    teams = _duel_teams(match, [attacker.id, target.id])
-    raw_interval = _combat()._combat_interval(
-        inherited_system_config(attacker.world)
-    )
-    # Immediate full auto-resolution leaves no opportunity for arena movement.
-    # Treat zero as explicit/manual advancement for PvP.
-    interval = -1 if raw_interval == 0 else raw_interval
-    try:
-        with transaction.atomic():
-            encounter = CombatEncounter.objects.create(
-                world=attacker.world,
-                room_id=attacker.room_id,
-                player=attacker,
-                duel_match=match,
-                resolution_interval=interval,
-                next_resolution_ts=(
-                    timezone.now() + timedelta(seconds=interval)
-                    if interval > 0
-                    else None
-                ),
-            )
-    except IntegrityError:
-        encounter = (
-            CombatEncounter.objects.select_for_update()
-            .get(
-                duel_match=match,
-                status=CombatEncounter.STATUS_ACTIVE,
-            )
-        )
-        participants = list(
-            CombatParticipant.objects.select_for_update()
-            .filter(
-                encounter=encounter,
-                player_id__in=[attacker.id, target.id],
-                is_active=True,
-            )
-            .order_by("player_id")
-        )
-        return encounter, participants, False
-
-    participants = [
-        CombatParticipant.objects.create(
-            encounter=encounter,
-            player=actor,
-            team=teams[actor.id],
-        )
-        for actor in sorted([attacker, target], key=lambda value: value.id)
-    ]
-    players = {attacker.id: attacker, target.id: target}
-    _initiative_order(encounter, participants, players)
-    return encounter, participants, True
+    # Admission validates the complete existing encounter and creates both sides
+    # and memberships under the same lock boundary as PVE.
+    encounter, left, right, changed = engage(attacker, target, match=match)
+    return encounter, [left, right], changed
 
 
 def _opponent_for(
@@ -1103,10 +955,8 @@ def _try_execute_room_opener_ability(
                     source=ability.slug,
                 )
             ]
-            encounter.faceoff_override = True
             encounter.save(update_fields=[
                 "opening_priority",
-                "faceoff_override",
                 "modified_ts",
             ])
         attacker_participant.pending_ability = (
@@ -1697,417 +1547,33 @@ def _resolve_defeat(
     )
 
 
-def _ordered_participants(
-    context: LockedPvpContext,
-) -> list[CombatParticipant]:
-    by_player = _participant_map(context)
-    order = _initiative_order(
-        context.encounter,
-        context.participants,
-        context.players,
-    )
-    opening_priority = _combat()._opening_priority_for_round(
-        context.encounter,
-    )
-    if opening_priority:
-        prioritized_tokens = [
-            _combat()._actor_ref_token(ref)
-            for ref in opening_priority
-        ]
-        prioritized_set = set(prioritized_tokens)
-        order = [
-            ref
-            for token in prioritized_tokens
-            for ref in order
-            if _combat()._actor_ref_token(ref) == token
-        ] + [
-            ref
-            for ref in order
-            if _combat()._actor_ref_token(ref) not in prioritized_set
-        ]
-    ordered = [
-        by_player[int(ref.get("id") or 0)]
-        for ref in order
-        if (
-            str(ref.get("type") or "") == "player"
-            and int(ref.get("id") or 0) in by_player
-        )
-    ]
-    for participant in context.participants:
-        if participant not in ordered:
-            ordered.append(participant)
-    return ordered
+def resolve_pvp_encounter_step(encounter_id: int, *, auto_advance: bool,
+                               leading_events=None):
+    from spawns.combat_encounters import transact
+    from spawns.combat_rounds import finish_encounter, resolve_locked
+    from spawns.combat_commands import schedule
+    from spawns.combat_publication import snapshot_event
 
-
-def _primary_ordered_participants(
-    ordered: list[CombatParticipant],
-) -> list[CombatParticipant]:
-    participants_by_key = {
-        ("player", participant.player_id): participant
-        for participant in ordered
-    }
-    actor_keys = prioritize_ready_interrupts(
-        participants_by_key,
-        pending_by_actor={
-            actor_key: participant.pending_ability
-            for actor_key, participant in participants_by_key.items()
-        },
-    )
-    return [participants_by_key[actor_key] for actor_key in actor_keys]
-
-
-def resolve_pvp_encounter_step(
-    encounter_id: int,
-    *,
-    auto_advance: bool,
-    leading_events: list[GameEvent] | None = None,
-):
-    combat = _combat()
-    next_delay: float | None = None
-    with transaction.atomic():
-        context = _locked_context(encounter_id)
-        if (
-            context is None
-            or context.encounter.status != CombatEncounter.STATUS_ACTIVE
-        ):
-            return combat.CombatStepResult(
-                actor_key=None,
-                events=[],
-                encounter_active=False,
-            )
-        if (
-            context.match.status != DuelMatch.STATUS_ACTIVE
-            or context.run.status not in InstanceRun.ACTIVE_STATUSES
-        ):
-            player_ids = list(context.players)
-            _finish_locked_context(context)
-            return combat.CombatStepResult(
-                actor_key=context.encounter.player.key,
-                events=ability_prepare_state_events_for_players(player_ids),
-                encounter_active=False,
-            )
-
-        active_participants = [
-            participant
-            for participant in context.participants
-            if participant.is_active and participant.player_id in context.players
-        ]
-        if len(active_participants) != 2:
-            _finish_locked_context(context)
-            return combat.CombatStepResult(
-                actor_key=context.encounter.player.key,
-                events=[],
-                encounter_active=False,
-            )
-        actors = [context.players[row.player_id] for row in active_participants]
-        if any(
-            not actor.in_game
-            or actor.world_id != context.encounter.world_id
-            or actor.room_id != context.encounter.room_id
-            for actor in actors
-        ):
-            _finish_locked_context(context)
-            return combat.CombatStepResult(
-                actor_key=context.encounter.player.key,
-                events=ability_prepare_state_events_for_players(
-                    actor.id for actor in actors
-                ),
-                encounter_active=False,
-            )
-        if active_participants[0].team == active_participants[1].team:
-            _finish_locked_context(context)
-            return combat.CombatStepResult(
-                actor_key=context.encounter.player.key,
-                events=[],
-                encounter_active=False,
-            )
-        _remove_invalid_duel_hostile_effects(context)
-
-        now = timezone.now()
-        if (
-            auto_advance
-            and context.encounter.next_resolution_ts
-            and context.encounter.next_resolution_ts > now
-        ):
-            return combat.CombatStepResult(
-                actor_key=context.encounter.player.key,
-                events=[],
-                encounter_active=True,
-            )
-
-        context.encounter.round_number = int(
-            context.encounter.round_number or 0
-        ) + 1
-        context.encounter.last_resolution_ts = now
-        context.encounter.save(
-            update_fields=[
-                "round_number",
-                "last_resolution_ts",
-                "modified_ts",
-            ]
-        )
-        round_id = (
-            f"encounter:{context.encounter.id}:"
-            f"{context.encounter.round_number}"
-        )
-        ordered = _ordered_participants(context)
-        events: list[GameEvent] = list(leading_events or [])
-        skip_primary: set[int] = set()
-
-        for participant in ordered:
-            if (participant.pending_flee or {}).get("status") != "ready":
-                continue
-            player = context.players[participant.player_id]
-            completed, consumed, flee_events = _complete_ready_flee(
-                context=context,
-                participant=participant,
-                player=player,
-                round_id=round_id,
-            )
-            events.extend(flee_events)
-            if completed:
-                return combat.CombatStepResult(
-                    actor_key=player.key,
-                    events=persist_follow_dependent_game_events(events),
-                    encounter_active=False,
-                )
-            if consumed:
-                skip_primary.add(player.id)
-            break
-
-        locked_player_ids = set(context.players)
-        for participant in ordered:
-            player = context.players[participant.player_id]
-            opponent_participant = _opponent_for(
-                participant,
-                active_participants,
-            )
-            opponent = context.players[opponent_participant.player_id]
-            outcome = combat._advance_character_periodic_effects(
-                target_player=player,
-                target_mob=None,
-                encounter=context.encounter,
-                viewer=player,
-                round_id=round_id,
-                locked_source_player_ids=locked_player_ids,
-            )
-            events.extend(outcome.events)
-            if int(player.health or 0) <= 0:
-                winner = (
-                    outcome.killer
-                    if isinstance(outcome.killer, Player)
-                    and outcome.killer.id == opponent.id
-                    else opponent
-                )
-                return _resolve_defeat(
-                    context=context,
-                    winner=winner,
-                    loser=player,
-                    reason="effect",
-                    prior_events=events,
-                )
-
-        for participant in ordered:
-            if (participant.pending_flee or {}).get("status") != "preparing":
-                continue
-            participant.pending_flee = {
-                **participant.pending_flee,
-                "status": "ready",
-            }
-            participant.pending_ability = {}
-            participant.save(
-                update_fields=[
-                    "pending_flee",
-                    "pending_ability",
-                    "modified_ts",
-                ]
-            )
-            player = context.players[participant.player_id]
-            skip_primary.add(player.id)
-            events.append(
-                GameEvent(
-                    type="notification.combat.flee",
-                    recipients=[player.key],
-                    data={"status": "preparing", "round_id": round_id},
-                    text="You look for an opening to flee.",
-                )
-            )
-
-        cooldown_excludes: dict[int, str | None] = {}
-        for participant in _primary_ordered_participants(ordered):
-            actor = context.players[participant.player_id]
-            opponent_participant = _opponent_for(
-                participant,
-                active_participants,
-            )
-            target = context.players[opponent_participant.player_id]
-            stats = combat._player_combat_stats(actor)
-            actor.health_max = stats.player_health_max
-            actor.energy_max = stats.player_energy_max
-            actor.stamina_max = stats.player_stamina_max
-            if actor.id in skip_primary:
-                continue
-
-            stunned = combat._consume_stun(
-                context.encounter,
-                target_type="player",
-                target_id=actor.id,
-            )
-            if stunned:
-                actor_payload = combat._combat_state_payload(
-                    combat.serialize_char_from_player(actor).model_dump(),
-                    target_payload=combat.serialize_char_from_player(
-                        target
-                    ).model_dump(),
-                )
-                events.extend(
-                    combat._stun_event(
-                        player=actor,
-                        room=context.encounter.room,
-                        target_name=actor.name,
-                        target_payload=actor_payload,
-                        round_id=round_id,
-                    )
-                )
-                participant.pending_ability = {}
-                participant.save(
-                    update_fields=["pending_ability", "modified_ts"]
-                )
-                continue
-
-            context.encounter.pending_player_ability = (
-                participant.pending_ability or {}
-            )
-            ability_events, ability_result = (
-                combat._execute_pending_player_ability(
-                    encounter=context.encounter,
-                    player=actor,
-                    target_mob=target,
-                    room=context.encounter.room,
-                    round_id=round_id,
-                    player_health_max=stats.player_health_max,
-                    target_pending_ability=opponent_participant.pending_ability,
-                )
-            )
-            events.extend(ability_events)
-            participant.pending_ability = (
-                context.encounter.pending_player_ability or {}
-            )
-            context.encounter.pending_player_ability = {}
-            participant.save(
-                update_fields=["pending_ability", "modified_ts"]
-            )
-            if ability_result.target_interrupted:
-                opponent_participant.pending_ability = {}
-                opponent_participant.save(
-                    update_fields=["pending_ability", "modified_ts"]
-                )
-            cooldown_excludes[actor.id] = ability_result.cooldown_exclude
-            if int(target.health or 0) <= 0:
-                return _resolve_defeat(
-                    context=context,
-                    winner=actor,
-                    loser=target,
-                    reason="ability",
-                    prior_events=events,
-                )
-            if ability_result.consumed_primary:
-                continue
-
-            for strike in resolve_attack_routine(
-                actor=actor,
-                target=target,
-                world=actor.world,
-            ):
-                if str(getattr(strike, "target", "target")) != "target":
-                    continue
-                strike_outcome = combat._apply_combat_strike(
-                    encounter=context.encounter,
-                    player=actor,
-                    target_mob=target,
-                    room=context.encounter.room,
-                    actor=actor,
-                    target=target,
-                    strike=strike,
-                    round_id=round_id,
-                )
-                events.extend(strike_outcome.events)
-                if strike_outcome.target_defeated:
-                    return _resolve_defeat(
-                        context=context,
-                        winner=actor,
-                        loser=target,
-                        reason="defeat",
-                        prior_events=events,
-                    )
-
-        combat._advance_non_ticking_effect_durations(context.encounter)
-        effect_combatants = [
-            context.players[participant.player_id]
-            for participant in active_participants
-        ]
-        actor_state_changed: dict[int, bool] = {}
-        for participant in active_participants:
-            actor = context.players[participant.player_id]
-            cooldown_exclude = cooldown_excludes.get(actor.id)
-            cooldowns_changed = combat.decrement_ability_cooldowns(
-                actor,
-                exclude={cooldown_exclude} if cooldown_exclude else set(),
-            )
-            effects_changed = advance_character_effect_durations(
-                actor,
-                current_round_id=round_id,
-                encounter=context.encounter,
-            )
-            if cooldowns_changed:
-                actor.save(
-                    update_fields=["ability_cooldowns", "modified_ts"]
-                )
-            actor_state_changed[actor.id] = bool(
-                cooldown_exclude or cooldowns_changed or effects_changed
-            )
-
-        effects_by_key = active_combatant_effects(effect_combatants)
-        for participant in active_participants:
-            actor = context.players[participant.player_id]
-            if actor_state_changed[actor.id]:
-                events.append(combat._character_effect_state_event(actor))
-            events.append(
-                combat._combat_effect_state_event(
-                    actor,
-                    *(
-                        combatant
-                        for combatant in effect_combatants
-                        if combatant.id != actor.id
-                    ),
-                    effects_by_key=effects_by_key,
-                )
-            )
-            events.append(ability_prepare_state_event(actor))
-
-        context.encounter.pending_player_ability = {}
-        context.encounter.pending_flee = {}
-        context.encounter.pending_mob_ability = {}
-        if auto_advance and context.encounter.resolution_interval > 0:
-            context.encounter.next_resolution_ts = timezone.now() + timedelta(
-                seconds=context.encounter.resolution_interval
-            )
-            next_delay = context.encounter.resolution_interval
-        context.encounter.save(
-            update_fields=[
-                "pending_player_ability",
-                "pending_flee",
-                "pending_mob_ability",
-                "next_resolution_ts",
-                "modified_ts",
-            ]
-        )
-        result = combat.CombatStepResult(
-            actor_key=context.encounter.player.key,
-            events=events,
-            encounter_active=True,
-        )
-
-    if next_delay:
-        combat._schedule_encounter_resolution(encounter_id, next_delay)
-    return result
+    def run(ctx):
+        encounter = ctx.encounters.get(encounter_id)
+        if encounter is None:
+            return _combat().CombatStepResult(None, [], False)
+        match = ctx.matches.get(encounter.duel_match_id)
+        if match is None or match.status != DuelMatch.STATUS_ACTIVE or ctx.runs[match.run_id].status not in InstanceRun.ACTIVE_STATUSES:
+            finish_encounter(ctx, encounter)
+            return _combat().CombatStepResult(None, [snapshot_event(ctx, encounter)], False)
+        duel_context = LockedPvpContext(ctx.runs[match.run_id], match, encounter, ctx.members(encounter),
+                                        {a.pk: a for a in ctx.actors.values() if isinstance(a, Player)})
+        _remove_invalid_duel_hostile_effects(duel_context)
+        # Existing arena manual commands are explicit advance requests: the
+        # opponent keeps their queued choice or takes their default attack.
+        if not auto_advance:
+            for participant in ctx.members(encounter):
+                participant.intent_ready = True
+        generation = encounter.schedule_generation
+        result = resolve_locked(ctx, encounter, auto_advance=auto_advance, leading_events=leading_events)
+        result.events[:] = persist_follow_dependent_game_events(result.events, force=True)
+        if generation != encounter.schedule_generation:
+            schedule(encounter)
+        return result
+    return transact(run, encounter_ids=[encounter_id])

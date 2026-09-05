@@ -381,39 +381,18 @@ class ScanAction:
             and not getattr(char, "sneak_ts", None)
         ]
 
-    def _active_target_lookup(
-        self,
-        exit_room,
-        *,
-        runtime_world,
-    ) -> dict[str, dict]:
-        lookup: dict[str, dict] = {}
-        encounters = (
-            CombatEncounter.objects.filter(
-                world=runtime_world,
-                room=exit_room,
-                status=CombatEncounter.STATUS_ACTIVE,
-                player__room=exit_room,
-                player__in_game=True,
-                mob__room=exit_room,
-                mob__is_pending_deletion=False,
-                mob__health__gt=0,
-            )
-            .select_related("player", "mob")
-            .order_by("id")
-        )
-        for encounter in encounters:
-            if not encounter.player or not encounter.mob:
-                continue
-            lookup.setdefault(
-                encounter.player.key,
-                self._target_payload(encounter.mob),
-            )
-            lookup.setdefault(
-                encounter.mob.key,
-                self._target_payload(encounter.player),
-            )
-        return lookup
+    def _active_target_lookup(self, exit_room, *, runtime_world):
+        from spawns.models import CombatParticipant
+
+        members = CombatParticipant.objects.filter(
+            encounter__world=runtime_world, encounter__room=exit_room, is_active=True,
+            current_target__is_active=True,
+        ).select_related('player', 'mob', 'current_target__player', 'current_target__mob')
+        return {p.actor.key: self._target_payload(p.current_target.actor) for p in members
+                if p.actor and p.current_target.actor and not p.actor.is_invisible
+                and not p.current_target.actor.is_invisible
+                and p.actor.room_id == p.current_target.actor.room_id == exit_room.pk
+                and p.actor.world_id == p.current_target.actor.world_id == runtime_world.pk}
 
     def _target_payload(self, char: Player | Mob) -> dict:
         if isinstance(char, Player):

@@ -1,3 +1,4 @@
+from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 from unittest.mock import patch
 
 from django.utils import timezone
@@ -206,7 +207,7 @@ class TestEnterWorld(WorldTestCase):
             health=10,
             health_max=10,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=self.spawn_world,
             room=self.room,
             player=self.player,
@@ -230,7 +231,7 @@ class TestEnterWorld(WorldTestCase):
         self.assertTrue(enqueue.called)
 
         WorldGate(world=self.spawn_world, player=self.player).exit()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.player.refresh_from_db()
         self.assertFalse(self.player.in_game)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
@@ -239,12 +240,12 @@ class TestEnterWorld(WorldTestCase):
 
         # Simulate a worker/broker gap that left no future ETA deadline.
         encounter.next_resolution_ts = None
-        encounter.save(update_fields=["next_resolution_ts"])
+        save_combat_fixture(encounter, update_fields=["next_resolution_ts"])
 
         with patch("spawns.tasks.resolve_combat_encounter.apply_async") as enqueue:
             with self.captureOnCommitCallbacks(execute=True):
                 WorldGate(world=self.spawn_world, player=self.player).enter()
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.player.refresh_from_db()
         self.assertTrue(self.player.in_game)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_ACTIVE)
@@ -264,7 +265,7 @@ class TestEnterWorld(WorldTestCase):
         )
         self.player.stamina = 5
         self.player.save(update_fields=["stamina"])
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=other_runtime,
             room=self.room,
             player=self.player,
@@ -285,10 +286,10 @@ class TestEnterWorld(WorldTestCase):
 
         WorldGate(world=self.spawn_world, player=self.player).enter()
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.player.refresh_from_db()
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
-        self.assertEqual(encounter.pending_flee, {})
+        self.assertEqual(combat_member(encounter, "player").pending_flee, {})
         self.assertIsNone(encounter.next_resolution_ts)
         self.assertEqual(self.player.stamina, 7)
         self.assertFalse(ActiveEffect.objects.filter(pk=effect.pk).exists())
@@ -308,7 +309,7 @@ class TestEnterWorld(WorldTestCase):
             health=10,
             health_max=10,
         )
-        encounter = CombatEncounter.objects.create(
+        encounter = create_combat_encounter(
             world=other_runtime,
             room=self.room,
             player=self.player,
@@ -319,7 +320,7 @@ class TestEnterWorld(WorldTestCase):
 
         WorldGate(world=self.spawn_world, player=self.player).exit()
 
-        encounter.refresh_from_db()
+        refresh_combat_fixture(encounter, )
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertIsNone(encounter.next_resolution_ts)
 

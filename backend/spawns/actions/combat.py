@@ -317,28 +317,6 @@ class CombatStepResult:
     tracker_chase: dict | None = None
 
 
-def _persist_combat_step_events(
-    result: CombatStepResult,
-    *,
-    durable_events: bool,
-) -> CombatStepResult:
-    if not durable_events or not result.events:
-        return result
-    enqueue_game_events(result.events)
-    return replace(result, events=[])
-
-
-def _prepared_player_ability_slug(
-    encounter: CombatEncounter | None,
-) -> str | None:
-    if not encounter or encounter.status != CombatEncounter.STATUS_ACTIVE:
-        return None
-    pending = encounter.pending_player_ability
-    if not isinstance(pending, dict):
-        return None
-    return str(pending.get("ability") or "").strip().lower() or None
-
-
 def _with_ability_prepare_transition(
     result: CombatStepResult,
     *,
@@ -525,104 +503,18 @@ def _target_priority_sort_key(mob: Mob) -> tuple[int, int]:
     return (-_mob_target_priority(mob), int(mob.id or 0))
 
 
-def _encounter_target_priority_sort_key(encounter: CombatEncounter) -> tuple[int, int, int]:
-    mob = getattr(encounter, "mob", None)
-    mob_id = int(getattr(mob, "id", None) or encounter.mob_id or 0)
-    return (
-        -int(bool(getattr(encounter, "faceoff_override", False))),
-        -_mob_target_priority(mob),
-        mob_id,
-        int(encounter.id or 0),
-    )
+def primary_active_encounter_for_player(player, *, room=None, lock=False):
+    from spawns.models import CombatParticipant
 
-
-def _active_faceoff_encounter_queryset(
-    player: Player,
-    *,
-    room: Room | None = None,
-    lock: bool = False,
-):
-    queryset = (
-        CombatEncounter.objects
-        .select_related("mob")
-        .filter(
-            player=player,
-            world_id=player.world_id,
-            room_id=player.room_id,
-            status=CombatEncounter.STATUS_ACTIVE,
-            mob_id__isnull=False,
-            mob__world_id=player.world_id,
-            mob__room_id=player.room_id,
-            mob__is_pending_deletion=False,
-            mob__health__gt=0,
-        )
-    )
-    if room is not None:
-        queryset = queryset.filter(room=room, mob__room=room)
+    query = CombatParticipant.objects.filter(player=player, is_active=True,
+        encounter__world_id=player.world_id, encounter__room_id=room.pk if room else player.room_id)
     if lock:
-        queryset = queryset.select_for_update(of=("self",))
-    return queryset
-
-
-def primary_active_encounter_for_player(
-    player: Player,
-    *,
-    room: Room | None = None,
-    lock: bool = False,
-) -> CombatEncounter | None:
-    encounters = list(_active_faceoff_encounter_queryset(player, room=room, lock=lock))
-    if not encounters:
+        query = query.select_for_update(of=('self',))
+    participant = query.select_related('encounter', 'current_target__mob', 'current_target__player').first()
+    if participant is None:
         return None
-    return sorted(encounters, key=_encounter_target_priority_sort_key)[0]
-
-
-def active_player_encounter_for_mob(
-    player: Player,
-    *,
-    mob_id: int,
-    room: Room | None = None,
-    lock: bool = False,
-) -> CombatEncounter | None:
-    return (
-        _active_faceoff_encounter_queryset(player, room=room, lock=lock)
-        .filter(mob_id=mob_id)
-        .first()
-    )
-
-
-def set_faceoff_override(encounter: CombatEncounter) -> None:
-    if encounter._state.adding:
-        encounter.faceoff_override = True
-        return
-
-    CombatEncounter.objects.filter(
-        player_id=encounter.player_id,
-        status=CombatEncounter.STATUS_ACTIVE,
-    ).exclude(pk=encounter.pk).update(faceoff_override=False)
-    if not encounter.faceoff_override:
-        encounter.faceoff_override = True
-        encounter.save(update_fields=["faceoff_override"])
-
-
-def _is_primary_faceoff_encounter(
-    *,
-    encounter: CombatEncounter,
-    player: Player,
-    room: Room,
-) -> bool:
-    primary = primary_active_encounter_for_player(player, room=room)
-    return bool(primary and primary.id == encounter.id)
-
-
-def _encounter_mob_name(encounter: CombatEncounter | None) -> str:
-    mob = getattr(encounter, "mob", None)
-    if not mob:
-        return "them"
-    if mob.name:
-        return mob.name
-    if getattr(mob, "definition", None):
-        return mob.definition.name or "them"
-    return "them"
+    encounter = participant.encounter
+    return encounter
 
 
 def _encounter_actor_ref(actor: Player | Mob, *, side: str) -> dict:
@@ -639,124 +531,10 @@ def _actor_ref_token(ref: dict) -> str:
     return f"{ref.get('type')}:{int(ref.get('id') or 0)}"
 
 
-def _actor_ref_key(ref: dict) -> tuple[str, int]:
-    return str(ref.get("type") or ""), int(ref.get("id") or 0)
-
-
-def _actor_ref_matches(ref: dict, *, actor_type: str, actor_id: int) -> bool:
-    return str(ref.get("type") or "") == actor_type and int(ref.get("id") or 0) == int(actor_id)
-
-
-def _current_encounter_participants(*, player: Player, target_mob: Mob) -> list[dict]:
-    # Near-term WR2 combat is still one player plus one mob. Keep the stored
-    # refs typed and side-aware so future CombatParticipant rows can feed this
-    # same ordering contract for parties, hostile packs, summons, and hirelings.
-    return [
-        _encounter_actor_ref(player, side="player_party"),
-        _encounter_actor_ref(target_mob, side="hostile"),
-    ]
-
-
 def encounter_opening_priority_ref(actor: Player | Mob, *, side: str, source: str) -> dict:
     ref = _encounter_actor_ref(actor, side=side)
     ref["source"] = source
     return ref
-
-
-def _roll_initiative_order(participants: list[dict]) -> list[dict]:
-    rolls = []
-    for participant in participants:
-        rolls.append({
-            **participant,
-            "initiative": random.randint(1, 1_000_000),
-            "source": "roll",
-        })
-    return sorted(
-        rolls,
-        key=lambda ref: (
-            -int(ref.get("initiative") or 0),
-            str(ref.get("type") or ""),
-            int(ref.get("id") or 0),
-        ),
-    )
-
-
-def _valid_initiative_order(order: object, participants: list[dict]) -> bool:
-    if not isinstance(order, list) or not order:
-        return False
-    expected = {_actor_ref_token(ref) for ref in participants}
-    actual = {_actor_ref_token(ref) for ref in order if isinstance(ref, dict)}
-    return expected.issubset(actual)
-
-
-def ensure_encounter_initiative_order(
-    encounter: CombatEncounter,
-    *,
-    player: Player,
-    target_mob: Mob,
-    save: bool = True,
-) -> list[dict]:
-    participants = _current_encounter_participants(player=player, target_mob=target_mob)
-    order = encounter.initiative_order or []
-    if not _valid_initiative_order(order, participants):
-        order = _roll_initiative_order(participants)
-        encounter.initiative_order = order
-        if save and not encounter._state.adding:
-            encounter.save(update_fields=["initiative_order"])
-    return order
-
-
-def _opening_priority_for_round(encounter: CombatEncounter) -> list[dict]:
-    if int(encounter.round_number or 0) != 1:
-        return []
-    priority = encounter.opening_priority or []
-    if not isinstance(priority, list):
-        return []
-    return [ref for ref in priority if isinstance(ref, dict)]
-
-
-def _primary_turn_order(
-    encounter: CombatEncounter,
-    *,
-    player: Player,
-    target_mob: Mob,
-) -> list[dict]:
-    base_order = ensure_encounter_initiative_order(
-        encounter,
-        player=player,
-        target_mob=target_mob,
-    )
-    opening_priority = _opening_priority_for_round(encounter)
-    ordered = base_order
-    if opening_priority:
-        # Hook for charge/ambush/prepared attacks: populate `opening_priority`
-        # before the first round with the actor refs that should override normal
-        # initiative for their first primary action only. The persistent
-        # initiative order remains unchanged for later rounds.
-        prioritized_tokens = [_actor_ref_token(ref) for ref in opening_priority]
-        prioritized_token_set = set(prioritized_tokens)
-        prioritized = [
-            ref
-            for token in prioritized_tokens
-            for ref in base_order
-            if _actor_ref_token(ref) == token
-        ]
-        remaining = [
-            ref
-            for ref in base_order
-            if _actor_ref_token(ref) not in prioritized_token_set
-        ]
-        ordered = [*prioritized, *remaining]
-
-    refs_by_key = {_actor_ref_key(ref): ref for ref in ordered}
-    actor_keys = prioritize_ready_interrupts(
-        (_actor_ref_key(ref) for ref in ordered),
-        pending_by_actor={
-            ("player", player.id): encounter.pending_player_ability,
-            ("mob", target_mob.id): encounter.pending_mob_ability,
-        },
-    )
-    return [refs_by_key[actor_key] for actor_key in actor_keys]
 
 
 def _ensure_corpse(mob: Mob) -> int:
@@ -1373,7 +1151,8 @@ def apply_player_death(
     corpse_id = None
     door_cancellation_events: list[GameEvent] = []
 
-    with transaction.atomic():
+    from spawns.combat_encounters import locked_combat
+    with locked_combat(keys=[player.key]):
         # Shared routing locks are acquired before the Player row and remain
         # held through movement and receipt creation. They do not conflict
         # with other deaths, but route/config publication must wait until this
@@ -1598,12 +1377,7 @@ def apply_player_death(
             ),
         )
 
-        active_encounters = CombatEncounter.objects.select_for_update().filter(
-            player=updated_player,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-        for encounter in active_encounters:
-            _finish_encounter(encounter)
+        finish_locked_player_pve_encounters(player=updated_player)
 
         from spawns.follow_lifecycle import (
             clear_movement_follows_for_players,
@@ -1850,9 +1624,17 @@ def _combat_state_payload(char_payload: dict, *, target_payload: dict | None) ->
 
 
 def _engage_events(*, player: Player, room: Room, mob: Mob) -> list[GameEvent]:
+    from spawns.combat_encounters import current_context
+    from spawns.combat_rounds import target_for
+    ctx = current_context()
+    selected = mob
+    if ctx and ctx.participant(player.key):
+        target = target_for(ctx, ctx.participant(player.key), intent=False)
+        if target:
+            selected = ctx.actors[target.actor_key]
     player_payload = _combat_state_payload(
         serialize_char_from_player(player).model_dump(),
-        target_payload=serialize_char_from_mob(mob).model_dump(),
+        target_payload=_serialize_combat_char(selected),
     )
     target_payload = _combat_state_payload(
         serialize_char_from_mob(mob).model_dump(),
@@ -1869,120 +1651,6 @@ def _engage_events(*, player: Player, room: Room, mob: Mob) -> list[GameEvent]:
                 "room": _room_payload(player, room),
             },
             text=f"You engage {target_name}.",
-        )
-    ]
-
-
-def _disengage_events(
-    *,
-    player: Player,
-    room: Room,
-    mob: Mob,
-    encounter_id: int,
-    next_encounter: CombatEncounter | None,
-) -> list[GameEvent]:
-    actor_base_payload = serialize_char_from_player(player).model_dump()
-    actor_payload = actor_base_payload
-    next_target_payload = None
-    if next_encounter and next_encounter.mob:
-        serialized_next_target = serialize_char_from_mob(
-            next_encounter.mob
-        ).model_dump()
-        actor_payload = _combat_state_payload(
-            actor_payload,
-            target_payload=serialized_next_target,
-        )
-        next_target_payload = _combat_state_payload(
-            serialized_next_target,
-            target_payload=actor_base_payload,
-        )
-    target_payload = serialize_char_from_mob(mob).model_dump()
-    target_name = target_payload.get("name") or "them"
-    data = {
-        "actor": actor_payload,
-        "target": target_payload,
-        "encounter_id": encounter_id,
-        "still_in_combat": bool(next_encounter),
-    }
-    if next_target_payload:
-        data["next_target"] = next_target_payload
-    events = [
-        GameEvent(
-            type="cmd.disengage.success",
-            recipients=[player.key],
-            data=data,
-            text=f"You disengage from {target_name}.",
-        )
-    ]
-    if player.is_invisible:
-        return events
-
-    recipients = _combat_recipients(player, room)
-    if recipients:
-        events.append(
-            GameEvent(
-                type="notification.combat.disengage",
-                recipients=recipients,
-                data=data,
-                text=(
-                    f"{safe_capitalize(player.name)} disengages from "
-                    f"{target_name}."
-                ),
-            )
-        )
-    return events
-
-
-def _aggro_engage_events(
-    *,
-    player: Player,
-    room: Room,
-    mob: Mob,
-    primary_mob: Mob | None = None,
-    player_char_payload: dict | None = None,
-    mob_char_payload: dict | None = None,
-    primary_mob_char_payload: dict | None = None,
-    room_payload: dict | None = None,
-) -> list[GameEvent]:
-    serialized_player = (
-        player_char_payload
-        if player_char_payload is not None
-        else serialize_char_from_player(player).model_dump()
-    )
-    serialized_mob = (
-        mob_char_payload
-        if mob_char_payload is not None
-        else serialize_char_from_mob(mob).model_dump()
-    )
-    if primary_mob_char_payload is not None:
-        serialized_primary_mob = primary_mob_char_payload
-    elif primary_mob is None or primary_mob.id == mob.id:
-        serialized_primary_mob = serialized_mob
-    else:
-        serialized_primary_mob = serialize_char_from_mob(primary_mob).model_dump()
-    player_payload = _combat_state_payload(
-        serialized_player,
-        target_payload=serialized_primary_mob,
-    )
-    target_payload = _combat_state_payload(
-        serialized_mob,
-        target_payload=serialized_player,
-    )
-    mob_name = target_payload.get("name") or "Something"
-    return [
-        GameEvent(
-            type="cmd.kill.success",
-            recipients=[player.key],
-            data={
-                "actor": player_payload,
-                "target": target_payload,
-                "room": (
-                    room_payload
-                    if room_payload is not None
-                    else _room_payload(player, room)
-                ),
-            },
-            text=f"{safe_capitalize(mob_name)} attacks you!",
         )
     ]
 
@@ -2008,6 +1676,28 @@ def _combat_attack_events(
         "round_id": round_id,
     }
     data.update(result.event_data())
+    from spawns.combat_encounters import current_context
+
+    context = current_context()
+    if context is not None:
+        from spawns.combat_publication import room_recipients
+
+        encounter = next(e for e in context.encounters.values() if e.room_id == room.pk)
+        recipients = list(room_recipients(context, encounter))
+        actor_key = actor_payload.get('key')
+        target_key = target_payload.get('key')
+        hidden = [key for key in (actor_key, target_key)
+                  if key in context.actors and context.actors[key].is_invisible]
+        if hidden:
+            recipients = [key for key in recipients if key in hidden]
+        data['_combat_narration'] = {}
+        if str(actor_key).startswith('player.'):
+            data['_combat_narration'][actor_key] = actor_text
+        if str(target_key).startswith('player.') and target_key != actor_key:
+            data['_combat_narration'][target_key] = (actor_text if viewer.key == target_key else
+                _actor_hit_text(actor_payload.get('name') or 'Something', result))
+        return [GameEvent(type='notification.combat.attack', data=data,
+                          recipients=recipients, text=room_text)]
     events = [
         GameEvent(
             type="notification.combat.attack",
@@ -2138,110 +1828,21 @@ def _combat_effect_application_events(
     return events
 
 
-def _finish_encounter(encounter: CombatEncounter) -> None:
+def _finish_encounter(encounter):
+    from spawns.combat_encounters import transact
+    from spawns.combat_rounds import finish_encounter
+
     if encounter._state.adding:
         encounter.status = CombatEncounter.STATUS_FINISHED
         encounter.next_resolution_ts = None
         return
-
-    ActiveEffect.objects.filter(
-        encounter=encounter,
-        scope=ActiveEffect.SCOPE_ENCOUNTER,
-    ).delete()
-    update_fields: list[str] = []
-    if encounter.status != CombatEncounter.STATUS_FINISHED:
-        encounter.status = CombatEncounter.STATUS_FINISHED
-        update_fields.append("status")
-    if encounter.next_resolution_ts is not None:
-        encounter.next_resolution_ts = None
-        update_fields.append("next_resolution_ts")
-    if update_fields:
-        encounter.save(update_fields=update_fields)
-
-
-def _clear_pending_encounter_actions(encounter: CombatEncounter) -> None:
-    if encounter._state.adding:
-        encounter.pending_flee = {}
-        encounter.pending_player_ability = {}
-        encounter.pending_mob_ability = {}
-        return
-
-    update_fields: list[str] = []
-    if encounter.pending_flee:
-        encounter.pending_flee = {}
-        update_fields.append("pending_flee")
-    if encounter.pending_player_ability:
-        encounter.pending_player_ability = {}
-        update_fields.append("pending_player_ability")
-    if encounter.pending_mob_ability:
-        encounter.pending_mob_ability = {}
-        update_fields.append("pending_mob_ability")
-    if update_fields:
-        encounter.save(update_fields=update_fields)
-
-
-def _finish_player_encounters_in_room(*, player: Player, room_id: int) -> None:
-    active_encounters = CombatEncounter.objects.select_for_update().filter(
-        player=player,
-        room_id=room_id,
-        status=CombatEncounter.STATUS_ACTIVE,
-    )
-    for active_encounter in active_encounters:
-        _clear_pending_encounter_actions(active_encounter)
-        _finish_encounter(active_encounter)
-
-
-def _resume_detached_character_effect_ticks(
-    *,
-    player: Player,
-    mob_ids: Iterable[int],
-) -> None:
-    """Move surviving character effects back onto the detached tick cadence."""
-    next_effect_tick = next_character_effect_tick_ts(player.world)
-    if not CombatEncounter.objects.filter(
-        player=player,
-        status=CombatEncounter.STATUS_ACTIVE,
-    ).exists():
-        ActiveEffect.objects.filter(
-            scope=ActiveEffect.SCOPE_CHARACTER,
-            target_player=player,
-            remaining_rounds__gt=0,
-        ).update(next_tick_ts=next_effect_tick)
-
-    candidate_mob_ids = {int(mob_id) for mob_id in mob_ids if mob_id}
-    if not candidate_mob_ids:
-        return
-    engaged_mob_ids = set(
-        CombatEncounter.objects.filter(
-            mob_id__in=candidate_mob_ids,
-            status=CombatEncounter.STATUS_ACTIVE,
-        ).values_list("mob_id", flat=True)
-    )
-    detached_mob_ids = candidate_mob_ids.difference(engaged_mob_ids)
-    if detached_mob_ids:
-        detached_mobs = (
-            Mob.objects.filter(id__in=detached_mob_ids)
-            .select_related(
-                "world",
-                "world__config",
-                "world__context",
-                "world__context__config",
-                "world__context__instance_of",
-                "world__context__instance_of__config",
-            )
-            .order_by("world_id", "id")
-        )
-        mob_ids_by_world: dict[int, tuple[World, list[int]]] = {}
-        for mob in detached_mobs:
-            if mob.world_id not in mob_ids_by_world:
-                mob_ids_by_world[mob.world_id] = (mob.world, [])
-            mob_ids_by_world[mob.world_id][1].append(mob.id)
-        for mob_world, world_mob_ids in mob_ids_by_world.values():
-            ActiveEffect.objects.filter(
-                scope=ActiveEffect.SCOPE_CHARACTER,
-                target_mob_id__in=world_mob_ids,
-                remaining_rounds__gt=0,
-            ).update(next_tick_ts=next_character_effect_tick_ts(mob_world))
+    def finish(ctx):
+        locked = ctx.encounters.get(encounter.pk)
+        if locked:
+            finish_encounter(ctx, locked)
+            encounter.status = locked.status
+            encounter.next_resolution_ts = None
+    transact(finish, encounter_ids=[encounter.pk])
 
 
 def _schedule_encounter_resolution(encounter_id: int, delay_seconds: float) -> None:
@@ -2593,205 +2194,54 @@ def _reconciled_flee_stamina(
     return min(reconciled, stamina_max) if stamina_max > 0 else reconciled
 
 
-def _refund_pending_flee_reservation(
-    *,
-    player: Player,
-    encounter: CombatEncounter,
-) -> None:
-    pending_flee = encounter.pending_flee or {}
-    try:
-        reserved_flee_cost = max(
-            0,
-            int(pending_flee.get("movement_cost") or 0),
-        )
-    except (TypeError, ValueError):
-        reserved_flee_cost = 0
-    if not reserved_flee_cost:
-        return
-    player.stamina = _reconciled_flee_stamina(
-        player,
-        reserved_cost=reserved_flee_cost,
-        replacement_cost=0,
-    )
-    player.save(update_fields=["stamina"])
+def finish_locked_player_pve_encounters(*, player, encounters=None):
+    """Detach one player during a transfer; preserve the remaining participants.
 
-
-def _pending_flee_movement_cost(encounter: CombatEncounter) -> int:
-    try:
-        return max(
-            0,
-            int((encounter.pending_flee or {}).get("movement_cost") or 0),
-        )
-    except (TypeError, ValueError):
-        return 0
-
-
-def finish_locked_player_pve_encounters(
-    *,
-    player: Player,
-    encounters: Iterable[CombatEncounter] | None = None,
-) -> list[int]:
-    """Finish a locked player's spatial PVE combat before a runtime transfer.
-
-    PVE mutations use Player -> CombatEncounter -> Mob lock order. Callers must
-    hold ``player``'s row lock and be inside the surrounding transaction.
+    Transfer callers enter the combat coordinator before taking actor locks.
     """
-    if not transaction.get_connection().in_atomic_block:
-        raise RuntimeError("PVE encounter cleanup requires an atomic transaction.")
+    from spawns.combat_encounters import transact
+    from spawns.combat_rounds import detach_actor
 
-    if encounters is None:
-        encounters = list(
-            CombatEncounter.objects.select_for_update(of=("self",))
-            .filter(
-                player_id=player.id,
-                status=CombatEncounter.STATUS_ACTIVE,
-                duel_match_id__isnull=True,
-            )
-            .order_by("id")
-        )
-    active_encounters = [
-        encounter
-        for encounter in encounters
-        if (
-            encounter.status == CombatEncounter.STATUS_ACTIVE
-            and encounter.duel_match_id is None
-            and encounter.player_id == player.id
-        )
-    ]
-    encounter_ids = [encounter.id for encounter in active_encounters]
-    if not encounter_ids:
-        return []
-
-    reserved_stamina = sum(
-        _pending_flee_movement_cost(encounter)
-        for encounter in active_encounters
-    )
-    if reserved_stamina:
-        player.stamina = _reconciled_flee_stamina(
-            player,
-            reserved_cost=reserved_stamina,
-            replacement_cost=0,
-        )
-        player.save(update_fields=["stamina"])
-
-    mob_ids = [encounter.mob_id for encounter in active_encounters if encounter.mob_id]
-    ActiveEffect.objects.filter(
-        encounter_id__in=encounter_ids,
-        scope=ActiveEffect.SCOPE_ENCOUNTER,
-    ).delete()
-    CombatEncounter.objects.filter(
-        pk__in=encounter_ids,
-        status=CombatEncounter.STATUS_ACTIVE,
-        duel_match_id__isnull=True,
-    ).update(
-        status=CombatEncounter.STATUS_FINISHED,
-        next_resolution_ts=None,
-        pending_player_ability={},
-        pending_mob_ability={},
-        pending_flee={},
-    )
-    for encounter in active_encounters:
-        encounter.status = CombatEncounter.STATUS_FINISHED
-        encounter.next_resolution_ts = None
-        encounter.pending_player_ability = {}
-        encounter.pending_mob_ability = {}
-        encounter.pending_flee = {}
-    _resume_detached_character_effect_ticks(player=player, mob_ids=mob_ids)
-    return encounter_ids
+    return transact(lambda ctx: detach_actor(ctx, player.key, reason='transferred'), keys=[player.key])
 
 
-def _pve_encounter_is_spatially_valid(
-    *,
-    encounter: CombatEncounter,
-    player: Player,
-    target_mob: Mob | None,
-) -> bool:
-    return bool(
-        target_mob
-        and not target_mob.is_pending_deletion
-        and int(target_mob.health or 0) > 0
-        and int(player.health or 0) > 0
-        and player.world_id == encounter.world_id == target_mob.world_id
-        and player.room_id == encounter.room_id == target_mob.room_id
-    )
+def reconcile_locked_player_pve_combat(*, player, resume):
+    from spawns.combat_encounters import transact
+    from spawns.combat_rounds import detach_actor
+    from spawns.combat_commands import schedule
+
+    def reconcile(ctx):
+        result = {'finished': [], 'resumed': []}
+        member = ctx.participant(player.key)
+        if member is None:
+            return result
+        encounter = ctx.encounters[member.encounter_id]
+        if player.health <= 0 or (player.world_id, player.room_id) != (encounter.world_id, encounter.room_id):
+            result['finished'] = detach_actor(ctx, player.key, reason='unavailable')
+        elif resume and encounter.resolution_interval >= 0 and (
+                encounter.status == CombatEncounter.STATUS_PAUSED or encounter.next_resolution_ts is None
+                or encounter.next_resolution_ts <= timezone.now()):
+            encounter.status = CombatEncounter.STATUS_ACTIVE
+            encounter.next_resolution_ts = timezone.now()
+            encounter.schedule_generation += 1
+            encounter.save(update_fields=['status', 'next_resolution_ts', 'schedule_generation'])
+            schedule(encounter)
+            result['resumed'].append(encounter.pk)
+        return result
+    return transact(reconcile, keys=[player.key])
 
 
-def reconcile_locked_player_pve_combat(
-    *,
-    player: Player,
-    resume: bool,
-) -> dict[str, list[int]]:
-    """Repair one locked player's PVE encounters at a world lifecycle edge."""
-    if not transaction.get_connection().in_atomic_block:
-        raise RuntimeError("PVE reconciliation requires an atomic transaction.")
-
-    encounters = list(
-        CombatEncounter.objects.select_for_update(of=("self",))
-        .filter(
-            player_id=player.id,
-            status=CombatEncounter.STATUS_ACTIVE,
-            duel_match_id__isnull=True,
-        )
-        .order_by("id")
-    )
-    mob_ids = sorted({encounter.mob_id for encounter in encounters if encounter.mob_id})
-    mobs_by_id = {
-        mob.id: mob
-        for mob in Mob.objects.select_for_update(of=("self",))
-        .filter(id__in=mob_ids)
-        .order_by("id")
-    }
-    stale = [
-        encounter
-        for encounter in encounters
-        if not _pve_encounter_is_spatially_valid(
-            encounter=encounter,
-            player=player,
-            target_mob=mobs_by_id.get(encounter.mob_id),
-        )
-    ]
-    finished_ids = finish_locked_player_pve_encounters(
-        player=player,
-        encounters=stale,
-    )
-
-    valid = [encounter for encounter in encounters if encounter not in stale]
-    resumed_ids: list[int] = []
-    if not resume:
-        return {"finished": finished_ids, "resumed": resumed_ids}
-
-    now = timezone.now()
-    for encounter in valid:
-        if encounter.resolution_interval <= 0:
-            continue
-        if encounter.next_resolution_ts and encounter.next_resolution_ts > now:
-            continue
-        delay = 0.05
-        if encounter.next_resolution_ts is None:
-            encounter.next_resolution_ts = now
-            encounter.save(update_fields=["next_resolution_ts"])
-        _schedule_encounter_resolution(encounter.id, delay)
-        resumed_ids.append(encounter.id)
-    return {"finished": finished_ids, "resumed": resumed_ids}
-
-
-def reconcile_player_pve_combat(
-    player_id: int,
-    *,
-    resume: bool = True,
-) -> dict[str, list[int]]:
-    with transaction.atomic():
-        player = (
-            Player.objects.select_for_update(of=("self",))
-            .select_related("world")
-            .get(pk=player_id)
-        )
-        return reconcile_locked_player_pve_combat(player=player, resume=resume)
+def reconcile_player_pve_combat(player_id, *, resume=True):
+    from spawns.combat_encounters import transact
+    return transact(lambda ctx: reconcile_locked_player_pve_combat(
+        player=ctx.actors[f'player.{player_id}'], resume=resume,
+    ), keys=[f'player.{player_id}'])
 
 
 def _cancel_prevented_flee_completion(
     *,
     encounter: CombatEncounter,
+    participant: CombatParticipant,
     player: Player,
     reserved_cost: int,
     round_id: str,
@@ -2799,10 +2249,10 @@ def _cancel_prevented_flee_completion(
     code: str,
     data: dict | None = None,
 ) -> FleeCompletionOutcome:
-    encounter.pending_flee = {}
-    encounter.pending_player_ability = {}
+    participant.pending_flee = {}
+    participant.pending_ability = {}
     if not encounter._state.adding:
-        encounter.save(update_fields=["pending_flee", "pending_player_ability"])
+        participant.save(update_fields=["pending_flee", "pending_ability"])
 
     player.stamina = _reconciled_flee_stamina(
         player,
@@ -2828,16 +2278,17 @@ def _cancel_prevented_flee_completion(
 def _complete_flee(
     *,
     encounter: CombatEncounter,
+    participant: CombatParticipant,
     player: Player,
     round_id: str,
 ) -> FleeCompletionOutcome:
-    pending = encounter.pending_flee or {}
+    pending = participant.pending_flee or {}
     destination_room_id = int(pending.get("destination_room_id") or 0)
     direction = str(pending.get("direction") or "").strip()
     if not destination_room_id or direction not in adv_consts.DIRECTIONS:
-        encounter.pending_flee = {}
+        participant.pending_flee = {}
         if not encounter._state.adding:
-            encounter.save(update_fields=["pending_flee"])
+            participant.save(update_fields=["pending_flee"])
         return FleeCompletionOutcome(
             terminal_result=CombatStepResult(
                 actor_key=player.key,
@@ -2861,7 +2312,7 @@ def _complete_flee(
     )
     if prevention:
         return _cancel_prevented_flee_completion(
-            encounter=encounter,
+            encounter=encounter, participant=participant,
             player=player,
             reserved_cost=reserved_cost,
             round_id=round_id,
@@ -2893,14 +2344,12 @@ def _complete_flee(
                 route_context=route_context,
             )
         except ActionError as err:
-            encounter.pending_flee = {}
-            encounter.pending_player_ability = {}
-            encounter.pending_mob_ability = {}
+            participant.pending_flee = {}
+            participant.pending_ability = {}
             if not encounter._state.adding:
-                encounter.save(update_fields=[
+                participant.save(update_fields=[
                     "pending_flee",
-                    "pending_player_ability",
-                    "pending_mob_ability",
+                    "pending_ability",
                 ])
             player.stamina = _reconciled_flee_stamina(
                 player,
@@ -2944,7 +2393,7 @@ def _complete_flee(
         adv_consts.DOOR_STATE_LOCKED,
     ):
         return _cancel_prevented_flee_completion(
-            encounter=encounter,
+            encounter=encounter, participant=participant,
             player=player,
             reserved_cost=reserved_cost,
             round_id=round_id,
@@ -2958,6 +2407,16 @@ def _complete_flee(
             reserved_cost=reserved_cost,
             replacement_cost=destination.movement_cost,
         )
+
+    from spawns.actions.mob_movement import plan_player_escape
+
+    tracker_plan = plan_player_escape(
+        player=player,
+        origin_room_id=origin_room_id,
+        destination_room_id=destination_room_id,
+        direction=direction,
+        source="flee",
+    )
 
     player.room_id = destination_room_id
     player.location_sequence = int(player.location_sequence or 0) + 1
@@ -2974,34 +2433,18 @@ def _complete_flee(
     player.save(update_fields=player_update_fields)
     player.viewed_rooms.add(destination_room_id)
 
-    from spawns.actions.mob_movement import plan_player_escape
+    participant.pending_flee = {}
+    participant.pending_ability = {}
+    from spawns.combat_encounters import current_context
+    from spawns.combat_rounds import leave_participant, finish_encounter, _has_hostility
 
-    tracker_plan = plan_player_escape(
-        player=player,
-        origin_room_id=origin_room_id,
-        destination_room_id=destination_room_id,
-        direction=direction,
-        source="flee",
-    )
-
-    encounter.pending_flee = {}
-    encounter.pending_player_ability = {}
-    encounter.pending_mob_ability = {}
-    finished_encounters = list(
-        CombatEncounter.objects.filter(
-            player=player,
-            room_id=origin_room_id,
-            status=CombatEncounter.STATUS_ACTIVE,
-        ).values_list("id", "mob_id")
-    )
-    _finish_player_encounters_in_room(player=player, room_id=origin_room_id)
-    _resume_detached_character_effect_ticks(
-        player=player,
-        mob_ids=(mob_id for _, mob_id in finished_encounters if mob_id),
-    )
-    encounter.status = CombatEncounter.STATUS_FINISHED
-    encounter.next_resolution_ts = None
-
+    context = current_context()
+    if context is not None:
+        participant = context.participant(player.key)
+        if participant:
+            leave_participant(context, participant, reason='fled', refund=False)
+        if not _has_hostility(context, encounter):
+            finish_encounter(context, encounter)
     return FleeCompletionOutcome(
         terminal_result=CombatStepResult(
             actor_key=player.key,
@@ -3016,7 +2459,7 @@ def _complete_flee(
                 ),
                 ability_prepare_state_event(player),
             ],
-            encounter_active=False,
+            encounter_active=encounter.status == CombatEncounter.STATUS_ACTIVE,
             tracker_chase=(
                 tracker_plan.action_payload()
                 if tracker_plan.tracker_mob_ids
@@ -3025,30 +2468,6 @@ def _complete_flee(
         ),
         events=[],
     )
-
-
-def _advance_flee_preparation(
-    *,
-    encounter: CombatEncounter,
-    player: Player,
-    round_id: str,
-) -> list[GameEvent]:
-    pending = encounter.pending_flee or {}
-    if pending.get("status") != "preparing":
-        return []
-    encounter.pending_flee = {
-        **pending,
-        "status": "ready",
-    }
-    encounter.pending_player_ability = {}
-    return [
-        GameEvent(
-            type="notification.combat.flee",
-            recipients=[player.key],
-            data={"status": "preparing", "round_id": round_id},
-            text="You look for an opening to flee.",
-        )
-    ]
 
 
 def _append_mob_defeat_events(
@@ -3077,26 +2496,9 @@ def _append_mob_defeat_events(
         for code in sorted(reward_currencies)
         if int(reward_snapshot[code]) > 0
     }
-    finished_encounter_ids: set[int] = set()
-    if encounter is not None:
-        _finish_encounter(encounter)
-        if encounter.id:
-            finished_encounter_ids.add(encounter.id)
-    active_encounters = CombatEncounter.objects.select_for_update().filter(
-        mob=target_mob,
-        status=CombatEncounter.STATUS_ACTIVE,
-    )
-    if finished_encounter_ids:
-        active_encounters = active_encounters.exclude(pk__in=finished_encounter_ids)
-    other_active_encounters = list(active_encounters)
-    for active_encounter in other_active_encounters:
-        _finish_encounter(active_encounter)
-    events.extend(
-        ability_prepare_state_events_for_players(
-            active_encounter.player_id
-            for active_encounter in other_active_encounters
-        )
-    )
+    from spawns.combat_encounters import transact
+    from spawns.combat_rounds import detach_actor
+    transact(lambda ctx: detach_actor(ctx, target_mob.key, reason='defeated'), keys=[target_mob.key])
 
     from spawns.merchants import deactivate_merchant_runtime
 
@@ -3233,20 +2635,9 @@ def _append_uncredited_mob_defeat_events(
     """Finalize a snapshot-attributed kill when no live player can be rewarded."""
     corpse_id = _ensure_corpse(target_mob)
     deceased_payload = serialize_char_from_mob(target_mob).model_dump()
-    active_encounters = list(
-        CombatEncounter.objects.select_for_update().filter(
-            mob=target_mob,
-            status=CombatEncounter.STATUS_ACTIVE,
-        )
-    )
-    for active_encounter in active_encounters:
-        _finish_encounter(active_encounter)
-    events.extend(
-        ability_prepare_state_events_for_players(
-            active_encounter.player_id
-            for active_encounter in active_encounters
-        )
-    )
+    from spawns.combat_encounters import transact
+    from spawns.combat_rounds import detach_actor
+    transact(lambda ctx: detach_actor(ctx, target_mob.key, reason='defeated'), keys=[target_mob.key])
 
     from spawns.merchants import deactivate_merchant_runtime
 
@@ -3283,28 +2674,6 @@ def _append_uncredited_mob_defeat_events(
             data=data,
             text=_mob_death_text(deceased_payload.get("name")),
         )
-    )
-
-
-def _handle_mob_defeated(
-    *,
-    encounter: CombatEncounter,
-    player: Player,
-    target_mob: Mob,
-    room: Room,
-    events: list[GameEvent],
-) -> CombatStepResult:
-    _append_mob_defeat_events(
-        encounter=encounter,
-        player=player,
-        target_mob=target_mob,
-        room=room,
-        events=events,
-    )
-    return CombatStepResult(
-        actor_key=player.key,
-        events=events,
-        encounter_active=False,
     )
 
 
@@ -3814,7 +3183,7 @@ def _mob_ability_target_ref(
     target_type = str((ability.target or {}).get("type") or "hostile").strip().lower()
     if target_type in {"self", "ally"}:
         return "mob", mob.id
-    return "player", player.id
+    return _combat_actor_type(player), player.id
 
 
 def _mob_loadout_entries(mob: Mob) -> list[dict]:
@@ -4087,78 +3456,6 @@ def _consume_stun(
     return bool(effects)
 
 
-def _stun_event(
-    *,
-    player: Player,
-    room: Room,
-    target_name: str,
-    target_payload: dict,
-    round_id: str,
-) -> list[GameEvent]:
-    data = {
-        "target": target_payload,
-        "effect": "stun",
-        "round_id": round_id,
-    }
-    player_text = (
-        "You are stunned and cannot act."
-        if target_payload.get("key") == player.key
-        else f"{safe_capitalize(target_name)} is stunned and cannot act."
-    )
-    events = [
-        GameEvent(
-            type="notification.combat.effect",
-            recipients=[player.key],
-            data=data,
-            text=player_text,
-        )
-    ]
-    if not player.is_invisible:
-        recipients = _combat_recipients(player, room)
-        if recipients:
-            events.append(
-                GameEvent(
-                    type="notification.combat.effect",
-                    recipients=recipients,
-                    data=data,
-                    text=f"{safe_capitalize(target_name)} is stunned and cannot act.",
-                )
-            )
-    return events
-
-
-def _combat_effect_state_event(
-    player: Player,
-    *combatants: Player | Mob,
-    effects_by_key: dict[str, list[dict]] | None = None,
-) -> GameEvent:
-    ordered_combatants = list(
-        {actor.key: actor for actor in (player, *combatants)}.values()
-    )
-    effect_states = effects_by_key or active_combatant_effects(ordered_combatants)
-    player_effects = effect_states.get(player.key, [])
-    return GameEvent(
-        type="player.combat_effects.update",
-        recipients=[player.key],
-        data={
-            "target": {"key": player.key},
-            # Preserve the original player-only payload for older clients.
-            "active_effects": [
-                effect
-                for effect in player_effects
-                if effect.get("scope") == ActiveEffect.SCOPE_ENCOUNTER
-            ],
-            "combatants": [
-                {
-                    "target": {"key": actor.key},
-                    "active_effects": effect_states.get(actor.key, []),
-                }
-                for actor in ordered_combatants
-            ],
-        },
-    )
-
-
 def _character_effect_state_event(player: Player) -> GameEvent:
     event = ability_state_event(player)
     return replace(
@@ -4398,6 +3695,12 @@ def _execute_after_damage_procs(
                 ),
             ):
                 continue
+            from spawns.combat_encounters import current_context, MAX_REACTIONS
+            ctx = current_context()
+            if ctx is not None:
+                if ctx.reactions >= MAX_REACTIONS:
+                    return events
+                ctx.reactions += 1
             events.extend(
                 _execute_effect_primitives(
                     primitives=primitive.get("actions") or [],
@@ -4567,6 +3870,13 @@ def _serialize_combat_char(actor: Player | Mob) -> dict:
     return serialize_char_from_mob(actor).model_dump()
 
 
+def _round_rng():
+    from spawns.combat_encounters import current_context
+
+    context = current_context()
+    return context.rng.random if context is not None and context.rng is not None else None
+
+
 def _apply_combat_strike(
     *,
     encounter: CombatEncounter,
@@ -4579,6 +3889,7 @@ def _apply_combat_strike(
     round_id: str,
 ) -> StrikeOutcome:
     result = resolve_attack(
+        rng=_round_rng(),
         actor=actor,
         target=target,
         world=player.world,
@@ -4598,6 +3909,11 @@ def _apply_combat_strike(
     if result.damage_taken > 0:
         target.health = max(0, int(target.health or 0) - result.damage_taken)
         target.save(update_fields=["health"])
+        from spawns.combat_encounters import current_context
+        context = current_context()
+        if context is not None:
+            from spawns.combat_rounds import _record_damage
+            _record_damage(context, actor, target, result.damage_taken)
 
     actor_base = _serialize_combat_char(actor)
     target_base = _serialize_combat_char(target)
@@ -4625,7 +3941,7 @@ def _apply_combat_strike(
 
     events.extend(
         _combat_attack_events(
-            viewer=player,
+            viewer=target if isinstance(target, Player) and not isinstance(actor, Player) else player,
             room=room,
             actor_payload=actor_payload,
             target_payload=target_payload,
@@ -4681,6 +3997,28 @@ def _execute_output_component(
     label = _component_label(component, ability)
     events: list[GameEvent] = []
     actor = actor or player
+    from spawns.combat_encounters import current_context
+    context = current_context()
+    if context is not None and encounter is not None and periodic_effect is None:
+        selector = str(component.get('target') or 'target')
+        member = context.participant(actor.key)
+        pending = member.pending_ability if member else {}
+        ref = pending.get('target') or {}
+        selected = context.actors.get(f'{ref.get("type")}.{ref.get("id")}') or target or target_mob
+        if selector.startswith('room.'):
+            from spawns.combat_targeting import targets
+            hit = False
+            for candidate in targets(context, encounter, actor, selector, selected):
+                component_events, landed = _execute_output_component(
+                    encounter=encounter, player=player, target_mob=target_mob, room=room,
+                    component={**component, 'target': 'target'}, ability=ability, round_id=round_id,
+                    player_health_max=_resource_limit(candidate, 'health'), actor=actor, target=candidate,
+                )
+                events.extend(component_events)
+                hit = hit or landed
+            return events, hit
+        if target is None:
+            target = actor if selector in {'self', 'actor'} else selected
     if target is None:
         if target_mob is None and component_type != "healing":
             return [], False
@@ -4688,6 +4026,7 @@ def _execute_output_component(
 
     if component_type == "healing":
         result = resolve_attack(
+        rng=_round_rng(),
             actor=actor,
             target=target,
             world=player.world,
@@ -4704,7 +4043,7 @@ def _execute_output_component(
         _apply_healing(
             result=result,
             target=target,
-            health_max=player_health_max if isinstance(target, Player) else _resource_limit(target, "health"),
+            health_max=_resource_limit(target, "health"),
         )
         actor_payload = _combat_state_payload(
             _combat_actor_payload(actor),
@@ -4737,6 +4076,7 @@ def _execute_output_component(
         return events, result.healing_done > 0
 
     result = resolve_attack(
+        rng=_round_rng(),
         actor=actor,
         target=target,
         world=player.world,
@@ -4762,6 +4102,11 @@ def _execute_output_component(
     if result.damage_taken > 0:
         target.health = max(0, int(target.health or 0) - result.damage_taken)
         target.save(update_fields=["health"])
+        from spawns.combat_encounters import current_context
+        context = current_context()
+        if context is not None:
+            from spawns.combat_rounds import _record_damage
+            _record_damage(context, actor, target, result.damage_taken)
 
     actor_char = _combat_state_payload(
         _combat_actor_payload(actor),
@@ -4835,36 +4180,6 @@ def _execute_output_component(
     return events, result.outcome != "dodged" and result.damage_taken > 0
 
 
-def _secondary_hostile_target(
-    *,
-    encounter: CombatEncounter,
-    player: Player,
-    target_mob: Mob,
-    room: Room,
-) -> Mob | None:
-    encounters = sorted(
-        _active_faceoff_encounter_queryset(player, room=room, lock=True).exclude(
-            pk=encounter.pk,
-            mob_id=target_mob.id,
-        ),
-        key=_encounter_target_priority_sort_key,
-    )
-    for secondary_encounter in encounters:
-        mob = (
-            Mob.objects.select_for_update()
-            .filter(
-                pk=secondary_encounter.mob_id,
-                room=room,
-                is_pending_deletion=False,
-                health__gt=0,
-            )
-            .first()
-        )
-        if mob and getattr(mob, "attackable", True):
-            return mob
-    return None
-
-
 def _combat_strike_target(
     *,
     encounter: CombatEncounter,
@@ -4876,15 +4191,14 @@ def _combat_strike_target(
     default_target: Player | Mob,
 ) -> Player | Mob | None:
     selector = str(getattr(strike, "target", "target") or "target").strip().lower()
+    from spawns.combat_encounters import current_context
+    context = current_context()
+    if context is not None:
+        from spawns.combat_targeting import targets
+        candidates = targets(context, encounter, actor, selector, default_target)
+        return candidates[0] if candidates else None
     if selector == "room.secondary_hostile":
-        if not isinstance(actor, Player):
-            return None
-        return _secondary_hostile_target(
-            encounter=encounter,
-            player=player,
-            target_mob=target_mob,
-            room=room,
-        )
+        return None
     return default_target
 
 
@@ -5144,6 +4458,7 @@ def _advance_character_periodic_effects(
             elif not tick_primitives:
                 component = tick.get("component") or {}
                 result = resolve_attack(
+        rng=_round_rng(),
                     actor=source,
                     target=target,
                     world=effect_row.world,
@@ -5305,22 +4620,9 @@ def _resolve_detached_actor_effects(
     ):
         return []
 
-    active_encounter_filter = Q(status=CombatEncounter.STATUS_ACTIVE)
-    if isinstance(target, Player):
-        active_encounter_filter &= Q(player=target)
-    else:
-        active_encounter_filter &= Q(mob=target)
-    if CombatEncounter.objects.filter(active_encounter_filter).exists():
-        return []
-    if (
-        isinstance(target, Player)
-        and CombatParticipant.objects.filter(
-            player=target,
-            is_active=True,
-            encounter__status=CombatEncounter.STATUS_ACTIVE,
-            encounter__duel_match_id__isnull=False,
-        ).exists()
-    ):
+    if CombatParticipant.objects.filter(is_active=True, **{
+        'player_id' if isinstance(target, Player) else 'mob_id': target.pk,
+    }).exists():
         return []
 
     pulse_id = f"effect-pulse:{target_type}:{target_id}:{int(due_at.timestamp())}"
@@ -5495,6 +4797,13 @@ def _effect_target_for_component(
     pending_target = pending.get("target") or {}
     pending_target_type = str(pending_target.get("type") or "").strip().lower()
     pending_target_id = int(pending_target.get("id") or 0)
+    from spawns.combat_encounters import current_context
+
+    context = current_context()
+    if context is not None and selector in {"target", "ability.target", "effect.target"}:
+        target = context.actors.get(f'{pending_target_type}.{pending_target_id}')
+        if target is not None:
+            return _combat_actor_type(target), target.pk, target
     if selector in {"target", "ability.target", "effect.target"}:
         if pending_target_type == "player":
             if pending_target_id == player.id:
@@ -5529,6 +4838,8 @@ def _advance_non_ticking_effect_durations(encounter: CombatEncounter) -> None:
 def _execute_pending_player_ability(
     *,
     encounter: CombatEncounter,
+    participant: CombatParticipant,
+    opponent: CombatParticipant,
     player: Player,
     target_mob: Player | Mob,
     room: Room,
@@ -5536,11 +4847,11 @@ def _execute_pending_player_ability(
     player_health_max: int,
     target_pending_ability: dict | None = None,
 ) -> tuple[list[GameEvent], AbilityRoundResult]:
-    pending = encounter.pending_player_ability or {}
+    pending = participant.pending_ability or {}
     if not pending:
         return [], AbilityRoundResult(consumed_primary=False)
 
-    encounter.pending_player_ability = {}
+    participant.pending_ability = {}
     ability_slug = str(pending.get("ability") or "").strip().lower()
     ability = _ability_definition_for_player(player, ability_slug)
     if not ability:
@@ -5618,7 +4929,7 @@ def _execute_pending_player_ability(
             pending["cast_cooldown_started"] = True
             player.save(update_fields=["ability_cooldowns"])
         next_remaining = cast_rounds_remaining - 1
-        encounter.pending_player_ability = {
+        participant.pending_ability = {
             **pending,
             "ability_name": ability.name,
             "status": ABILITY_INTENT_STATUS_CASTING,
@@ -5703,7 +5014,7 @@ def _execute_pending_player_ability(
             if component.get("apply") == "on_hit" and not hit_landed:
                 continue
             target_pending = (
-                encounter.pending_mob_ability
+                opponent.pending_ability
                 if isinstance(target_mob, Mob)
                 else target_pending_ability
             )
@@ -5711,7 +5022,7 @@ def _execute_pending_player_ability(
             if interrupted is None:
                 continue
             if isinstance(target_mob, Mob):
-                encounter.pending_mob_ability = {}
+                opponent.pending_ability = {}
             elif target_pending_ability is not None:
                 target_pending_ability.clear()
             else:
@@ -5731,6 +5042,12 @@ def _execute_pending_player_ability(
         if component_type != "effect":
             continue
         if component.get("apply") == "on_hit" and not hit_landed:
+            continue
+        from spawns.combat_encounters import current_context
+        context = current_context()
+        if context is not None and str(component.get('target') or '').startswith('room.'):
+            from spawns.combat_targeting import apply_group_effect
+            events.extend(apply_group_effect(context, encounter, player, component, ability, player, round_id))
             continue
         if component_targets_character_effect(component, ability=ability):
             target_selector = str(component.get("target") or "").strip().lower()
@@ -5838,17 +5155,19 @@ def _execute_pending_player_ability(
 def _execute_pending_mob_ability(
     *,
     encounter: CombatEncounter,
+    participant: CombatParticipant,
+    opponent: CombatParticipant,
     player: Player,
     target_mob: Mob,
     room: Room,
     round_id: str,
     player_health_max: int,
 ) -> tuple[list[GameEvent], AbilityRoundResult]:
-    pending = encounter.pending_mob_ability or {}
+    pending = participant.pending_ability or {}
     if not pending:
         return [], AbilityRoundResult(consumed_primary=False)
 
-    encounter.pending_mob_ability = {}
+    participant.pending_ability = {}
     ability_slug = str(pending.get("ability") or "").strip().lower()
     ability = _ability_definition_for_mob(target_mob, ability_slug)
     if not ability:
@@ -5864,9 +5183,9 @@ def _execute_pending_mob_ability(
     target = pending.get("target") or {}
     pending_target_type = str(target.get("type") or "").strip().lower()
     pending_target_id = int(target.get("id") or 0)
-    if pending_target_type == "player" and pending_target_id != player.id:
-        return [], AbilityRoundResult(consumed_primary=False)
-    if pending_target_type == "mob" and pending_target_id != target_mob.id:
+    if (pending_target_type, pending_target_id) not in {
+        (_combat_actor_type(player), player.pk), ("mob", target_mob.pk),
+    }:
         return [], AbilityRoundResult(consumed_primary=False)
 
     cast_rounds_remaining = _pending_cast_rounds_remaining(pending, ability)
@@ -5881,7 +5200,7 @@ def _execute_pending_mob_ability(
             pending["cast_cooldown_started"] = True
             target_mob.save(update_fields=["ability_cooldowns"])
         next_remaining = cast_rounds_remaining - 1
-        encounter.pending_mob_ability = {
+        participant.pending_ability = {
             **pending,
             "ability_name": ability.name,
             "status": ABILITY_INTENT_STATUS_CASTING,
@@ -5956,11 +5275,11 @@ def _execute_pending_mob_ability(
             if component.get("apply") == "on_hit" and not hit_landed:
                 continue
             interrupted = interruptible_ability_intent(
-                encounter.pending_player_ability
+                opponent.pending_ability
             )
             if interrupted is None:
                 continue
-            encounter.pending_player_ability = {}
+            opponent.pending_ability = {}
             target_interrupted = True
             events.extend(
                 _combat_interrupt_events(
@@ -5976,6 +5295,12 @@ def _execute_pending_mob_ability(
         if component_type != "effect":
             continue
         if component.get("apply") == "on_hit" and not hit_landed:
+            continue
+        from spawns.combat_encounters import current_context
+        context = current_context()
+        if context is not None and str(component.get('target') or '').startswith('room.'):
+            from spawns.combat_targeting import apply_group_effect
+            events.extend(apply_group_effect(context, encounter, target_mob, component, ability, player, round_id))
             continue
         if component_targets_character_effect(component, ability=ability):
             _target_type, _target_id, effect_target = _effect_target_for_component(
@@ -6059,703 +5384,13 @@ def _execute_pending_mob_ability(
     )
 
 
-def _finalize_active_round(
-    *,
-    encounter: CombatEncounter,
-    player: Player,
-    target_mob: Mob,
-    cooldown_exclude: str | None,
-    mob_cooldown_exclude: str | None,
-    advance_player_state: bool = True,
-    round_id: str | None = None,
-) -> bool:
-    cooldowns_changed = False
-    effects_changed = False
-    if advance_player_state:
-        cooldowns_changed = decrement_ability_cooldowns(
-            player,
-            exclude={cooldown_exclude} if cooldown_exclude else set(),
-        )
-        effects_changed = advance_character_effect_durations(
-            player,
-            current_round_id=round_id,
-            encounter=encounter,
-        )
-    mob_effects_changed = advance_character_effect_durations(
-        target_mob,
-        current_round_id=round_id,
-        encounter=encounter,
-    )
-    mob_cooldowns_changed = _decrement_mob_ability_cooldowns(
-        target_mob,
-        exclude={mob_cooldown_exclude} if mob_cooldown_exclude else set(),
-    )
-    update_fields: list[str] = []
-    if cooldowns_changed:
-        update_fields.append("ability_cooldowns")
-    if update_fields:
-        player.save(update_fields=update_fields)
-    if mob_cooldowns_changed:
-        target_mob.save(update_fields=["ability_cooldowns"])
-    if not encounter._state.adding:
-        encounter.save(update_fields=[
-            "pending_player_ability",
-            "pending_mob_ability",
-            "pending_flee",
-        ])
-    return (
-        cooldowns_changed
-        or mob_cooldowns_changed
-        or effects_changed
-        or mob_effects_changed
-    )
+def resolve_combat_encounter_step(encounter_id: int, *, auto_advance: bool,
+                                  durable_events: bool = False, expected_round=None,
+                                  expected_generation=None) -> CombatStepResult:
+    from spawns.combat_rounds import resolve
 
-
-def _apply_player_primary_turn(
-    *,
-    encounter: CombatEncounter,
-    player: Player,
-    target_mob: Mob,
-    room: Room,
-    round_id: str,
-    player_health_max: int,
-    allow_basic_attack: bool,
-    skip_turn: bool,
-) -> PlayerTurnOutcome:
-    events: list[GameEvent] = []
-    if skip_turn:
-        return PlayerTurnOutcome(events=events)
-
-    has_pending_ability = bool(encounter.pending_player_ability)
-    if not allow_basic_attack and not has_pending_ability:
-        return PlayerTurnOutcome(events=events)
-
-    player_stunned = _consume_stun(
-        encounter,
-        target_type="player",
-        target_id=player.id,
-    )
-    if player_stunned:
-        player_payload = _combat_state_payload(
-            serialize_char_from_player(player).model_dump(),
-            target_payload=serialize_char_from_mob(target_mob).model_dump(),
-        )
-        events.extend(
-            _stun_event(
-                player=player,
-                room=room,
-                target_name=player.name,
-                target_payload=player_payload,
-                round_id=round_id,
-            )
-        )
-        encounter.pending_player_ability = {}
-        return PlayerTurnOutcome(events=events)
-
-    ability_events, ability_result = _execute_pending_player_ability(
-        encounter=encounter,
-        player=player,
-        target_mob=target_mob,
-        room=room,
-        round_id=round_id,
-        player_health_max=player_health_max,
-    )
-    events.extend(ability_events)
-    cooldown_exclude = ability_result.cooldown_exclude
-
-    if target_mob.health <= 0:
-        return PlayerTurnOutcome(
-            events=events,
-            cooldown_exclude=cooldown_exclude,
-            target_defeated=True,
-            target_interrupted=ability_result.target_interrupted,
-        )
-
-    if ability_result.consumed_primary:
-        return PlayerTurnOutcome(
-            events=events,
-            cooldown_exclude=cooldown_exclude,
-            target_interrupted=ability_result.target_interrupted,
-        )
-
-    if not allow_basic_attack:
-        return PlayerTurnOutcome(
-            events=events,
-            cooldown_exclude=cooldown_exclude,
-            target_interrupted=ability_result.target_interrupted,
-        )
-
-    for strike in resolve_attack_routine(actor=player, target=target_mob, world=player.world):
-        strike_target = _combat_strike_target(
-            encounter=encounter,
-            player=player,
-            target_mob=target_mob,
-            room=room,
-            actor=player,
-            strike=strike,
-            default_target=target_mob,
-        )
-        if strike_target is None:
-            continue
-        is_primary_target = (
-            isinstance(strike_target, Mob)
-            and strike_target.pk == target_mob.pk
-        )
-        strike_outcome = _apply_combat_strike(
-            encounter=encounter,
-            player=player,
-            target_mob=target_mob,
-            room=room,
-            actor=player,
-            target=strike_target,
-            strike=strike,
-            round_id=round_id,
-        )
-        events.extend(strike_outcome.events)
-        if is_primary_target and strike_outcome.target_defeated:
-            break
-        if (
-            not is_primary_target
-            and isinstance(strike_target, Mob)
-            and strike_outcome.target_defeated
-        ):
-            _append_mob_defeat_events(
-                player=player,
-                target_mob=strike_target,
-                room=room,
-                events=events,
-            )
-
-    return PlayerTurnOutcome(
-        events=events,
-        cooldown_exclude=cooldown_exclude,
-        target_defeated=target_mob.health <= 0,
-        target_interrupted=ability_result.target_interrupted,
-    )
-
-
-def _apply_mob_primary_turn(
-    *,
-    encounter: CombatEncounter,
-    player: Player,
-    target_mob: Mob,
-    room: Room,
-    round_id: str,
-    config,
-    suppress_ability_selection: bool = False,
-) -> MobTurnOutcome:
-    events: list[GameEvent] = []
-    if not target_mob.fights_back:
-        return MobTurnOutcome(events=events)
-
-    mob_stunned = _consume_stun(
-        encounter,
-        target_type="mob",
-        target_id=target_mob.id,
-    )
-    if mob_stunned:
-        mob_payload = _combat_state_payload(
-            serialize_char_from_mob(target_mob).model_dump(),
-            target_payload=serialize_char_from_player(player).model_dump(),
-        )
-        events.extend(
-            _stun_event(
-                player=player,
-                room=room,
-                target_name=mob_payload.get("name") or "Something",
-                target_payload=mob_payload,
-                round_id=round_id,
-            )
-        )
-        encounter.pending_mob_ability = {}
-        return MobTurnOutcome(events=events)
-
-    if not suppress_ability_selection and not encounter.pending_mob_ability:
-        selection = _choose_mob_ability(
-            mob=target_mob,
-            player=player,
-            room=room,
-        )
-        if selection:
-            ability = selection.ability
-            target_type, target_id = _mob_ability_target_ref(
-                ability=ability,
-                mob=target_mob,
-                player=player,
-            )
-            encounter.pending_mob_ability = _pending_ability_payload(
-                ability=ability,
-                command=ability.slug,
-                target_type=target_type,
-                target_id=target_id,
-                queued_round=encounter.round_number,
-                cooldown_override=selection.cooldown_override,
-            )
-
-    ability_events, ability_result = _execute_pending_mob_ability(
-        encounter=encounter,
-        player=player,
-        target_mob=target_mob,
-        room=room,
-        round_id=round_id,
-        player_health_max=player.health_max,
-    )
-    events.extend(ability_events)
-    cooldown_exclude = ability_result.cooldown_exclude
-
-    mob_name = target_mob.name or "Something"
-    if player.health <= 0:
-        updated_player, death_events = apply_player_death(
-            player=player,
-            origin_room=room,
-            killer=target_mob,
-            target_text="You have been slain.",
-            room_text=f"{mob_name} kills {player.name}.",
-            config=config,
-            death_token=f"{round_id}:player:{player.id}",
-            cause="combat",
-        )
-        events.extend(death_events)
-        return MobTurnOutcome(
-            events=events,
-            player_defeated=True,
-            actor_key=updated_player.key,
-            cooldown_exclude=cooldown_exclude,
-            target_interrupted=ability_result.target_interrupted,
-        )
-
-    if ability_result.consumed_primary:
-        return MobTurnOutcome(
-            events=events,
-            cooldown_exclude=cooldown_exclude,
-            target_interrupted=ability_result.target_interrupted,
-        )
-
-    for strike in resolve_attack_routine(actor=target_mob, target=player, world=player.world):
-        strike_target = _combat_strike_target(
-            encounter=encounter,
-            player=player,
-            target_mob=target_mob,
-            room=room,
-            actor=target_mob,
-            strike=strike,
-            default_target=player,
-        )
-        if strike_target is None:
-            continue
-        strike_outcome = _apply_combat_strike(
-            encounter=encounter,
-            player=player,
-            target_mob=target_mob,
-            room=room,
-            actor=target_mob,
-            target=strike_target,
-            strike=strike,
-            round_id=round_id,
-        )
-        events.extend(strike_outcome.events)
-        if strike_outcome.target_defeated:
-            break
-
-    if player.health <= 0:
-        updated_player, death_events = apply_player_death(
-            player=player,
-            origin_room=room,
-            killer=target_mob,
-            target_text="You have been slain.",
-            room_text=f"{mob_name} kills {player.name}.",
-            config=config,
-            death_token=f"{round_id}:player:{player.id}",
-            cause="combat",
-        )
-        events.extend(death_events)
-        return MobTurnOutcome(
-            events=events,
-            player_defeated=True,
-            actor_key=updated_player.key,
-            cooldown_exclude=cooldown_exclude,
-            target_interrupted=ability_result.target_interrupted,
-        )
-
-    return MobTurnOutcome(
-        events=events,
-        cooldown_exclude=cooldown_exclude,
-        target_interrupted=ability_result.target_interrupted,
-    )
-
-
-def _apply_encounter_round(
-    *,
-    encounter: CombatEncounter,
-    player: Player,
-    target_mob: Mob,
-    config,
-    player_primary_enabled: bool = True,
-    locked_source_player_ids: set[int] | None = None,
-) -> CombatStepResult:
-    room = Room.objects.select_related("world", "zone").get(pk=encounter.room_id)
-    stand_player(player)
-    stats = _player_combat_stats(player)
-    player.health_max = stats.player_health_max
-    player.energy_max = stats.player_energy_max
-    player.stamina_max = stats.player_stamina_max
-
-    encounter.round_number = int(encounter.round_number or 0) + 1
-    encounter.last_resolution_ts = timezone.now()
-    if not encounter._state.adding:
-        encounter.save(update_fields=["round_number", "last_resolution_ts"])
-    round_id = f"encounter:{encounter.id}:{encounter.round_number}"
-
-    events: list[GameEvent] = []
-    cooldown_exclude: str | None = None
-    mob_cooldown_exclude: str | None = None
-    flee_completion_consumed_primary = False
-
-    if (encounter.pending_flee or {}).get("status") == "ready":
-        flee_outcome = _complete_flee(
-            encounter=encounter,
-            player=player,
-            round_id=round_id,
-        )
-        if flee_outcome.terminal_result is not None:
-            return flee_outcome.terminal_result
-        events.extend(flee_outcome.events)
-        flee_completion_consumed_primary = flee_outcome.player_primary_consumed
-
-    effect_outcome = _advance_character_periodic_effects(
-        target_player=player,
-        target_mob=target_mob,
-        encounter=encounter,
-        viewer=player,
-        round_id=round_id,
-        advance_player_character_effects=player_primary_enabled,
-        locked_source_player_ids=locked_source_player_ids,
-    )
-    events.extend(effect_outcome.events)
-
-    if isinstance(effect_outcome.defeated_target, Player):
-        killer = effect_outcome.killer
-        killer_name = _combat_name(killer) if killer is not None else "An effect"
-        updated_player, death_events = apply_player_death(
-            player=player,
-            origin_room=player.room,
-            killer=killer,
-            target_text="You succumb to your wounds.",
-            room_text=f"{killer_name} kills {player.name}.",
-            config=config,
-            death_token=f"{round_id}:player:{player.id}",
-            cause="character_effect",
-        )
-        events.extend(death_events)
-        return CombatStepResult(
-            actor_key=updated_player.key,
-            events=events,
-            encounter_active=False,
-        )
-
-    if target_mob.health <= 0:
-        if isinstance(effect_outcome.killer, Player):
-            return _handle_mob_defeated(
-                encounter=encounter,
-                player=effect_outcome.killer,
-                target_mob=target_mob,
-                room=room,
-                events=events,
-            )
-        _append_uncredited_mob_defeat_events(
-            target_mob=target_mob,
-            room=room,
-            killer=effect_outcome.killer,
-            events=events,
-        )
-        return CombatStepResult(
-            actor_key=player.key,
-            events=events,
-            encounter_active=False,
-        )
-
-    flee_preparation_events = _advance_flee_preparation(
-        encounter=encounter,
-        player=player,
-        round_id=round_id,
-    )
-    events.extend(flee_preparation_events)
-    player_had_pending_ability = bool(encounter.pending_player_ability)
-    mob_ability_interrupted = False
-
-    for actor_ref in _primary_turn_order(
-        encounter,
-        player=player,
-        target_mob=target_mob,
-    ):
-        if _actor_ref_matches(actor_ref, actor_type="player", actor_id=player.id):
-            player_turn = _apply_player_primary_turn(
-                encounter=encounter,
-                player=player,
-                target_mob=target_mob,
-                room=room,
-                round_id=round_id,
-                player_health_max=stats.player_health_max,
-                allow_basic_attack=player_primary_enabled,
-                skip_turn=(
-                    bool(flee_preparation_events)
-                    or flee_completion_consumed_primary
-                ),
-            )
-            events.extend(player_turn.events)
-            cooldown_exclude = player_turn.cooldown_exclude or cooldown_exclude
-            mob_ability_interrupted = (
-                player_turn.target_interrupted or mob_ability_interrupted
-            )
-            if player_turn.target_defeated:
-                return _handle_mob_defeated(
-                    encounter=encounter,
-                    player=player,
-                    target_mob=target_mob,
-                    room=room,
-                    events=events,
-                )
-            continue
-
-        if _actor_ref_matches(actor_ref, actor_type="mob", actor_id=target_mob.id):
-            mob_turn = _apply_mob_primary_turn(
-                encounter=encounter,
-                player=player,
-                target_mob=target_mob,
-                room=room,
-                round_id=round_id,
-                config=config,
-                suppress_ability_selection=mob_ability_interrupted,
-            )
-            events.extend(mob_turn.events)
-            mob_cooldown_exclude = mob_turn.cooldown_exclude or mob_cooldown_exclude
-            if mob_turn.player_defeated:
-                return CombatStepResult(
-                    actor_key=mob_turn.actor_key,
-                    events=events,
-                    encounter_active=False,
-                )
-            continue
-
-        # Future multi-participant encounters should resolve additional actor
-        # refs here after CombatParticipant runtime state lands.
-
-    _advance_non_ticking_effect_durations(encounter)
-    cooldowns_changed = _finalize_active_round(
-        encounter=encounter,
-        player=player,
-        target_mob=target_mob,
-        cooldown_exclude=cooldown_exclude,
-        mob_cooldown_exclude=mob_cooldown_exclude,
-        advance_player_state=player_primary_enabled or player_had_pending_ability,
-        round_id=round_id,
-    )
-    if cooldown_exclude or cooldowns_changed or effect_outcome.effects_changed:
-        events.append(_character_effect_state_event(player))
-    return CombatStepResult(
-        actor_key=player.key,
-        events=events,
-        encounter_active=True,
-    )
-
-
-def resolve_combat_encounter_step(
-    encounter_id: int,
-    *,
-    auto_advance: bool,
-    durable_events: bool = False,
-) -> CombatStepResult:
-    if CombatEncounter.objects.filter(
-        pk=encounter_id,
-        duel_match_id__isnull=False,
-    ).exists():
-        from spawns.actions.pvp import resolve_pvp_encounter_step
-
-        return resolve_pvp_encounter_step(
-            encounter_id,
-            auto_advance=auto_advance,
-        )
-
-    encounter_snapshot = (
-        CombatEncounter.objects.filter(pk=encounter_id)
-        .values("player_id", "mob_id")
-        .first()
-    )
-    if not encounter_snapshot:
-        return CombatStepResult(actor_key=None, events=[], encounter_active=False)
-
-    next_delay: float | None = None
-
-    with transaction.atomic():
-        source_target_filter = Q(
-            target_player_id=encounter_snapshot["player_id"],
-        )
-        if encounter_snapshot["mob_id"]:
-            source_target_filter |= Q(
-                target_mob_id=encounter_snapshot["mob_id"],
-            )
-        source_player_ids = set(
-            ActiveEffect.objects.filter(
-                scope=ActiveEffect.SCOPE_CHARACTER,
-                remaining_rounds__gt=0,
-                source_player_id__isnull=False,
-            )
-            .filter(source_target_filter)
-            .values_list("source_player_id", flat=True)
-        )
-        source_player_ids.add(encounter_snapshot["player_id"])
-        locked_players = {
-            actor.id: actor
-            for actor in Player.objects.select_for_update(of=("self",))
-            .select_related("world")
-            .filter(id__in=sorted(source_player_ids))
-            .order_by("id")
-        }
-        player = locked_players.get(encounter_snapshot["player_id"])
-        if player is None:
-            return CombatStepResult(actor_key=None, events=[], encounter_active=False)
-
-        # All PVE writers acquire Player before CombatEncounter. This matches
-        # flee, disengage, abilities, aggro, and instance lifecycle paths and
-        # removes the inverse lock edge that caused the stranded-combat bug.
-        encounter = (
-            CombatEncounter.objects.select_for_update(of=("self",))
-            .select_related("world", "room")
-            .filter(pk=encounter_id, player_id=player.id)
-            .first()
-        )
-        if not encounter or encounter.status != CombatEncounter.STATUS_ACTIVE:
-            return CombatStepResult(actor_key=None, events=[], encounter_active=False)
-
-        previous_prepared_slug = _prepared_player_ability_slug(encounter)
-        now = timezone.now()
-        if auto_advance and encounter.next_resolution_ts and encounter.next_resolution_ts > now:
-            return CombatStepResult(
-                actor_key=player.key,
-                events=[],
-                encounter_active=True,
-            )
-
-        target_mob = (
-            Mob.objects.select_for_update(of=("self",))
-            .select_related("definition")
-            .filter(pk=encounter.mob_id, is_pending_deletion=False)
-            .first()
-        )
-        if not target_mob:
-            finish_locked_player_pve_encounters(
-                player=player,
-                encounters=[encounter],
-            )
-            cleanup_result = _with_ability_prepare_transition(
-                CombatStepResult(
-                    actor_key=player.key,
-                    events=[_combat_effect_state_event(player)],
-                    encounter_active=False,
-                ),
-                player=player,
-                previous_slug=previous_prepared_slug,
-                current_slug=None,
-            )
-            return _persist_combat_step_events(
-                cleanup_result,
-                durable_events=durable_events,
-            )
-
-        if not _pve_encounter_is_spatially_valid(
-            encounter=encounter,
-            player=player,
-            target_mob=target_mob,
-        ):
-            finish_locked_player_pve_encounters(
-                player=player,
-                encounters=[encounter],
-            )
-            cleanup_result = _with_ability_prepare_transition(
-                CombatStepResult(
-                    actor_key=player.key,
-                    events=[_combat_effect_state_event(player)],
-                    encounter_active=False,
-                ),
-                player=player,
-                previous_slug=previous_prepared_slug,
-                current_slug=None,
-            )
-            return _persist_combat_step_events(
-                cleanup_result,
-                durable_events=durable_events,
-            )
-
-        config = player.world.effective_config
-        result = _apply_encounter_round(
-            encounter=encounter,
-            player=player,
-            target_mob=target_mob,
-            config=config,
-            player_primary_enabled=_is_primary_faceoff_encounter(
-                encounter=encounter,
-                player=player,
-                room=encounter.room,
-            ),
-            locked_source_player_ids=set(locked_players),
-        )
-
-        if result.encounter_active and auto_advance and encounter.resolution_interval > 0:
-            encounter.next_resolution_ts = timezone.now() + timedelta(
-                seconds=encounter.resolution_interval
-            )
-            encounter.save(update_fields=["next_resolution_ts"])
-            next_delay = encounter.resolution_interval
-        elif not result.encounter_active:
-            _finish_encounter(encounter)
-
-        result = replace(
-            result,
-            events=[*result.events, _combat_effect_state_event(player, target_mob)],
-        )
-        result = _with_ability_prepare_transition(
-            result,
-            player=player,
-            previous_slug=previous_prepared_slug,
-            current_slug=_prepared_player_ability_slug(encounter),
-        )
-        result = replace(
-            result,
-            events=persist_follow_dependent_game_events(result.events),
-        )
-        result = _persist_combat_step_events(
-            result,
-            durable_events=durable_events,
-        )
-
-    if result.tracker_chase:
-        from spawns.actions.mob_movement import ResolveTrackerChaseAction
-
-        try:
-            tracker_result = ResolveTrackerChaseAction().execute(
-                **result.tracker_chase
-            )
-        except Exception:
-            logger.exception(
-                "Failed to resolve tracker chase %s.",
-                result.tracker_chase.get("chase_key"),
-            )
-        else:
-            result = replace(
-                result,
-                events=[*result.events, *tracker_result.events],
-                tracker_chase=None,
-            )
-
-    result = _persist_combat_step_events(
-        result,
-        durable_events=durable_events,
-    )
-
-    if next_delay:
-        _schedule_encounter_resolution(encounter_id, next_delay)
-
-    return result
+    return resolve(encounter_id, auto_advance=auto_advance, durable_events=durable_events,
+                   expected_round=expected_round, expected_generation=expected_generation)
 
 
 def process_due_combat_encounters(
@@ -6775,10 +5410,8 @@ def process_due_combat_encounters(
     candidate_ids = list(
         CombatEncounter.objects.filter(
             status=CombatEncounter.STATUS_ACTIVE,
-            duel_match_id__isnull=True,
-            resolution_interval__gt=0,
-            player__in_game=True,
-            player__world__lifecycle=adv_consts.WORLD_LIFECYCLE_RUNNING,
+            resolution_interval__gte=0,
+            world__lifecycle=adv_consts.WORLD_LIFECYCLE_RUNNING,
         )
         .filter(
             Q(next_resolution_ts__isnull=True)
@@ -6819,149 +5452,30 @@ class ScanRoomAggroAction:
             and int(getattr(mob, "health", 0) or 0) > 0
         )
 
-    def _start_aggro_encounter(
-        self,
-        *,
-        player: Player,
-        room: Room,
-        mob: Mob,
-        primary_mob: Mob | None,
-        rules_config,
-        death_config,
-        player_char_payload: dict | None = None,
-        mob_char_payload: dict | None = None,
-        primary_mob_char_payload: dict | None = None,
-        room_payload: dict | None = None,
-    ) -> ActionResult:
-        interval = _combat_interval(rules_config)
-        events = _aggro_engage_events(
-            player=player,
-            room=room,
-            mob=mob,
-            primary_mob=primary_mob,
-            player_char_payload=player_char_payload,
-            mob_char_payload=mob_char_payload,
-            primary_mob_char_payload=primary_mob_char_payload,
-            room_payload=room_payload,
-        )
+    def _start_aggro_encounter(self, *, player, room, mob, **kwargs):
+        from spawns.combat_encounters import transact, engage_locked
+        from spawns.combat_commands import schedule
+        from spawns.combat_publication import snapshot_event
 
-        if interval == 0:
-            stand_player(player)
-            result = KillAction()._resolve_immediately(
-                player=player,
-                target_mob=mob,
-                config=death_config,
-            )
-            return ActionResult(events=[*events, *result.events])
-
-        stand_player(player)
-        encounter = CombatEncounter.objects.create(
-            world=player.world,
-            room=room,
-            player=player,
-            mob=mob,
-            resolution_interval=interval,
-            next_resolution_ts=(
-                timezone.now() + timedelta(seconds=interval)
-                if interval > 0
-                else None
-            ),
-        )
-        ensure_encounter_initiative_order(encounter, player=player, target_mob=mob)
-
-        if interval == -1:
-            step = resolve_combat_encounter_step(
-                encounter.id,
-                auto_advance=False,
-            )
-            return ActionResult(events=[*events, *step.events])
-
-        _schedule_encounter_resolution(encounter.id, interval)
-        return ActionResult(events=events)
+        def run(ctx):
+            encounter, _, _, changed = engage_locked(ctx, ctx.actors[mob.key], ctx.actors[player.key])
+            if not changed:
+                return ActionResult()
+            schedule(encounter)
+            stand_player(ctx.actors[player.key])
+            events = _engage_events(player=ctx.actors[player.key], room=room, mob=ctx.actors[mob.key])
+            events[0] = replace(events[0], text=f'{safe_capitalize(mob.name)} attacks you!')
+            return ActionResult(events=[*events, snapshot_event(ctx, encounter)])
+        return transact(run, keys=[player.key, mob.key])
 
     def execute(self, player_id: int, mob_ids: Iterable[int] | None = None) -> ActionResult:
-        limited_mob_ids = set(mob_ids) if mob_ids is not None else None
-        if limited_mob_ids is not None and not limited_mob_ids:
-            return ActionResult()
+        from spawns.combat_reconciliation import request_reconciliation
 
-        with transaction.atomic():
-            player = (
-                Player.objects.select_for_update()
-                .select_related("world")
-                .prefetch_related("faction_assignments__faction")
-                .get(pk=player_id)
-            )
-            if (
-                player.is_invisible
-                or not player.room_id
-                or int(player.health or 0) <= 0
-            ):
-                return ActionResult()
-
-            from spawns import duels
-
-            if duels.duel_combat_block_reason(player):
-                return ActionResult()
-            rules_config = inherited_system_config(player.world)
-            if rules_config and not rules_config.allow_combat:
-                return ActionResult()
-            death_config = player.world.effective_config
-
-            room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
-            active_mob_ids = set(
-                CombatEncounter.objects.select_for_update()
-                .filter(
-                    world=player.world,
-                    room=room,
-                    status=CombatEncounter.STATUS_ACTIVE,
-                    mob_id__isnull=False,
-                )
-                .values_list("mob_id", flat=True)
-            )
-            mobs = (
-                Mob.objects.select_for_update()
-                .prefetch_related(
-                    "faction_assignments__faction",
-                )
-                .filter(world=player.world, room=room, is_pending_deletion=False)
-                .order_by("id")
-            )
-            if limited_mob_ids is not None:
-                mobs = mobs.filter(id__in=limited_mob_ids)
-            aggro_mobs: list[Mob] = []
-            for mob in mobs:
-                if mob.id in active_mob_ids or not self._can_aggro(mob):
-                    continue
-                if mob_should_aggro_player(mob, player):
-                    aggro_mobs.append(mob)
-
-            if not aggro_mobs:
-                return ActionResult()
-
-            aggro_mobs = sorted(aggro_mobs, key=_target_priority_sort_key)
-            existing_primary = primary_active_encounter_for_player(player, room=room)
-            primary_mob = (
-                existing_primary.mob
-                if existing_primary and existing_primary.mob
-                else aggro_mobs[0]
-            )
-            events: list[GameEvent] = []
-            for mob in aggro_mobs:
-                result = self._start_aggro_encounter(
-                    player=player,
-                    room=room,
-                    mob=mob,
-                    primary_mob=primary_mob,
-                    rules_config=rules_config,
-                    death_config=death_config,
-                )
-                events.extend(result.events)
-                active_mob_ids.add(mob.id)
-                player.refresh_from_db(fields=["health", "room"])
-                if int(player.health or 0) <= 0 or player.room_id != room.id:
-                    break
-            return ActionResult(events=events)
-
+        player = Player.objects.filter(pk=player_id, in_game=True, health__gt=0).first()
+        if player and player.room_id and not player.is_invisible:
+            keys = [player.key] if mob_ids is None else [f'mob.{pk}' for pk in mob_ids]
+            if keys:
+                request_reconciliation(player.world_id, player.room_id, keys, observed=True)
         return ActionResult()
 
 
@@ -6980,216 +5494,17 @@ def _cancel_pending_door_for_physical_action(
 
 
 class DisengageAction:
-    def execute(self, player_id: int) -> ActionResult:
-        with transaction.atomic():
-            player = (
-                Player.objects.select_for_update()
-                .select_related("world")
-                .get(pk=player_id)
-            )
-            room = (
-                Room.objects.select_related("world", "zone")
-                .filter(pk=player.room_id)
-                .first()
-                if player.room_id
-                else None
-            )
-            encounter = primary_active_encounter_for_player(
-                player,
-                room=room,
-                lock=True,
-            )
-            if not encounter:
-                raise ActionError("You are not in combat.", code="not_in_combat")
+    def execute(self, player_id: int, target_selector=None) -> ActionResult:
+        from spawns.combat_commands import disengage
 
-            target_mob = (
-                Mob.objects.select_for_update(of=("self",))
-                .select_related("definition")
-                .filter(
-                    pk=encounter.mob_id,
-                    room=room,
-                    is_pending_deletion=False,
-                    health__gt=0,
-                )
-                .first()
-            )
-            if not target_mob:
-                _refund_pending_flee_reservation(
-                    player=player,
-                    encounter=encounter,
-                )
-                _clear_pending_encounter_actions(encounter)
-                _finish_encounter(encounter)
-                _resume_detached_character_effect_ticks(
-                    player=player,
-                    mob_ids=[encounter.mob_id] if encounter.mob_id else [],
-                )
-                message = "You are no longer in that fight."
-                return ActionResult(
-                    events=[
-                        GameEvent(
-                            type="cmd.disengage.error",
-                            recipients=[player.key],
-                            data={"error": message, "code": "combat_ended"},
-                            text=message,
-                        ),
-                        _combat_effect_state_event(player),
-                        ability_prepare_state_event(player),
-                    ]
-                )
-            if target_mob.fights_back:
-                target_name = target_mob.name or "that mob"
-                raise ActionError(
-                    f"You cannot disengage while {target_name} is fighting back.",
-                    code="target_fights_back",
-                )
-
-            cancellation_events = _cancel_pending_door_for_physical_action(
-                player,
-                message="You stop working with the door to disengage.",
-            )
-            _refund_pending_flee_reservation(
-                player=player,
-                encounter=encounter,
-            )
-
-            _clear_pending_encounter_actions(encounter)
-            _finish_encounter(encounter)
-            _resume_detached_character_effect_ticks(
-                player=player,
-                mob_ids=[target_mob.id],
-            )
-            next_encounter = primary_active_encounter_for_player(
-                player,
-                room=room,
-            )
-            combat_effect_targets = [target_mob]
-            if next_encounter and next_encounter.mob:
-                combat_effect_targets.append(next_encounter.mob)
-            return ActionResult(
-                events=[
-                    *cancellation_events,
-                    *_disengage_events(
-                        player=player,
-                        room=room,
-                        mob=target_mob,
-                        encounter_id=encounter.id,
-                        next_encounter=next_encounter,
-                    ),
-                    _combat_effect_state_event(player, *combat_effect_targets),
-                    ability_prepare_state_event(player),
-                ]
-            )
+        return disengage(player_id, target_selector)
 
 
 class FleeAction:
     def execute(self, player_id: int) -> ActionResult:
-        from spawns.actions.pvp import try_execute_flee
+        from spawns.combat_commands import flee
 
-        pvp_result = try_execute_flee(player_id)
-        if pvp_result is not None:
-            return pvp_result
-
-        with transaction.atomic():
-            player = Player.objects.select_for_update().get(pk=player_id)
-            room = Room.objects.filter(pk=player.room_id).first() if player.room_id else None
-            encounter = primary_active_encounter_for_player(
-                player,
-                room=room,
-                lock=True,
-            )
-            if not encounter:
-                raise ActionError("You are not in combat.", code="not_in_combat")
-
-            if player.room_id != encounter.room_id:
-                _finish_encounter(encounter)
-                message = "You are no longer in that fight."
-                return ActionResult(events=[
-                    GameEvent(
-                        type="cmd.flee.error",
-                        recipients=[player.key],
-                        data={"error": message, "code": "combat_ended"},
-                        text=message,
-                    ),
-                    ability_prepare_state_event(player),
-                ])
-
-            pending = encounter.pending_flee or {}
-            if pending.get("status") == "ready" and encounter.resolution_interval == -1:
-                cancellation_events = _cancel_pending_door_for_physical_action(
-                    player,
-                    message="You stop working with the door to flee.",
-                )
-                step = resolve_combat_encounter_step(encounter.id, auto_advance=False)
-                return ActionResult(events=[*cancellation_events, *step.events])
-            if pending:
-                return ActionResult(
-                    events=[
-                        *_cancel_pending_door_for_physical_action(
-                            player,
-                            message="You stop working with the door to flee.",
-                        ),
-                        GameEvent(
-                            type="cmd.flee.success",
-                            recipients=[player.key],
-                            data={"status": pending.get("status", "preparing")},
-                            text="You are already trying to flee.",
-                        )
-                    ]
-                )
-
-            prevention = preventing_action_effect(
-                player,
-                "flee",
-                phase="before_action",
-            )
-            if prevention:
-                raise ActionError(
-                    _action_prevention_message(prevention, action="flee"),
-                    code="action_prevented",
-                    data=_action_prevention_data(prevention, action="flee"),
-                )
-
-            destination = _choose_flee_destination(player)
-            cancellation_events = _cancel_pending_door_for_physical_action(
-                player,
-                message="You stop working with the door to flee.",
-            )
-            player.stamina = max(0, int(player.stamina or 0) - destination.movement_cost)
-            player.save(update_fields=["stamina"])
-            prepared_ability_slug = _prepared_player_ability_slug(encounter)
-            encounter.pending_flee = {
-                "status": "preparing",
-                "queued_round": int(encounter.round_number or 0),
-                "direction": destination.direction,
-                "destination_room_id": destination.room_id,
-                "movement_cost": destination.movement_cost,
-            }
-            encounter.pending_player_ability = {}
-            encounter.save(update_fields=["pending_flee", "pending_player_ability"])
-
-            events = [
-                *cancellation_events,
-                GameEvent(
-                    type="cmd.flee.success",
-                    recipients=[player.key],
-                    data={
-                        "status": "queued",
-                        "direction": destination.direction,
-                        "destination_room_id": destination.room_id,
-                        "movement_cost": destination.movement_cost,
-                    },
-                    text="You prepare to flee.",
-                )
-            ]
-            if prepared_ability_slug:
-                events.append(ability_prepare_state_event(player))
-
-            if encounter.resolution_interval == -1:
-                step = resolve_combat_encounter_step(encounter.id, auto_advance=False)
-                return ActionResult(events=[*events, *step.events])
-
-            return ActionResult(events=events)
+        return flee(player_id)
 
 
 class KillAction:
@@ -7201,181 +5516,8 @@ class KillAction:
             and int(getattr(mob, "health", 0) or 0) > 0
         )
 
-    def _resolve_immediately(self, *, player: Player, target_mob: Mob, config) -> ActionResult:
-        events: list[GameEvent] = []
-        room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
-        stats = _player_combat_stats(player)
-        player.health_max = stats.player_health_max
-        player.energy_max = stats.player_energy_max
-        player.stamina_max = stats.player_stamina_max
-
-        encounter = CombatEncounter.objects.create(
-            world=player.world,
-            room=room,
-            player=player,
-            mob=target_mob,
-            resolution_interval=0,
-        )
-        ensure_encounter_initiative_order(
-            encounter,
-            player=player,
-            target_mob=target_mob,
-        )
-        for round_no in range(1, MAX_AUTO_RESOLVE_ROUNDS + 1):
-            step = _apply_encounter_round(
-                encounter=encounter,
-                player=player,
-                target_mob=target_mob,
-                config=config,
-            )
-            events.extend(step.events)
-            if not step.encounter_active:
-                return ActionResult(events=events)
-
-        raise ActionError("Combat stalled before anyone died.", code="combat_stalled")
 
     def execute(self, player_id: int, target_selector: str | None) -> ActionResult:
-        from spawns.actions.pvp import try_execute_kill
+        from spawns.combat_commands import kill
 
-        pvp_result = try_execute_kill(player_id, target_selector)
-        if pvp_result is not None:
-            return pvp_result
-
-        with transaction.atomic():
-            player = Player.objects.select_for_update().get(pk=player_id)
-            if not player.room_id:
-                raise ActionError("You are nowhere. Cannot kill anything.", code="no_room")
-
-            from spawns import duels
-
-            duel_block_reason = duels.duel_combat_block_reason(player)
-            if duel_block_reason:
-                raise ActionError(
-                    str(duel_block_reason),
-                    code="duel_combat_disabled",
-                )
-            rules_config = inherited_system_config(player.world)
-            if rules_config and not rules_config.allow_combat:
-                raise ActionError("Combat is disabled here.", code="combat_disabled")
-            death_config = player.world.effective_config
-
-            room = Room.objects.select_related("world", "zone").get(pk=player.room_id)
-            active_player_encounter = primary_active_encounter_for_player(
-                player,
-                room=room,
-                lock=True,
-            )
-            if active_player_encounter and not str(target_selector or "").strip():
-                target_ref = active_player_encounter.mob
-            else:
-                target_ref = resolve_room_mob_target(
-                    room,
-                    target_selector,
-                    world=player.world,
-                    empty_error="Kill what?",
-                    not_found_error="You don't see them here.",
-                    allow_single_match_when_empty=True,
-                    allow_first_match_when_empty=True,
-                    empty_candidate_filter=self._is_implicit_target_candidate,
-                )
-            target_mob = (
-                Mob.objects.select_for_update()
-                .filter(
-                    pk=target_ref.id,
-                    world=player.world,
-                    room=room,
-                    is_pending_deletion=False,
-                )
-                .first()
-            )
-            if not target_mob:
-                raise ActionError("You don't see them here.", code="target_missing")
-            if not getattr(target_mob, "attackable", True):
-                raise ActionError("You cannot attack them.", code="not_attackable")
-
-            interval = _combat_interval(rules_config)
-
-            if active_player_encounter:
-                active_name = _encounter_mob_name(active_player_encounter)
-                if active_player_encounter.mob_id != target_mob.id:
-                    raise ActionError(
-                        f"You are already fighting {active_name}.",
-                        code="combat_in_progress",
-                    )
-                if interval != -1:
-                    raise ActionError(
-                        f"You are already fighting {active_name}.",
-                        code="combat_in_progress",
-                    )
-                cancellation_events = _cancel_pending_door_for_physical_action(
-                    player,
-                    message="You stop working with the door to fight.",
-                )
-                step = resolve_combat_encounter_step(
-                    active_player_encounter.id,
-                    auto_advance=False,
-                )
-                return ActionResult(events=[*cancellation_events, *step.events])
-
-            active_mob_encounter = (
-                # The target Mob lock serializes encounter creation. Do not
-                # take an existing Encounter lock after Mob; the resolver owns
-                # the opposite Encounter -> Mob suffix while advancing it.
-                CombatEncounter.objects
-                .filter(
-                    mob=target_mob,
-                    status=CombatEncounter.STATUS_ACTIVE,
-                )
-                .first()
-            )
-            if active_mob_encounter:
-                raise ActionError(
-                    f"{target_mob.name or 'They'} are already fighting someone else.",
-                    code="target_busy",
-                )
-
-            cancellation_events = _cancel_pending_door_for_physical_action(
-                player,
-                message="You stop working with the door to fight.",
-            )
-            if interval == 0:
-                stand_player(player)
-                resolved = self._resolve_immediately(
-                    player=player,
-                    target_mob=target_mob,
-                    config=death_config,
-                )
-                return ActionResult(
-                    events=[*cancellation_events, *resolved.events],
-                    data=resolved.data,
-                )
-
-            stand_player(player)
-            encounter = CombatEncounter.objects.create(
-                world=player.world,
-                room=room,
-                player=player,
-                mob=target_mob,
-                resolution_interval=interval,
-                next_resolution_ts=(
-                    timezone.now() + timedelta(seconds=interval)
-                    if interval > 0
-                    else None
-                ),
-            )
-            ensure_encounter_initiative_order(encounter, player=player, target_mob=target_mob)
-
-            events = [
-                *cancellation_events,
-                *_engage_events(player=player, room=room, mob=target_mob),
-            ]
-
-            if interval == -1:
-                step = resolve_combat_encounter_step(
-                    encounter.id,
-                    auto_advance=False,
-                )
-                return ActionResult(events=[*events, *step.events])
-
-            _schedule_encounter_resolution(encounter.id, interval)
-            return ActionResult(events=events)
+        return kill(player_id, target_selector)

@@ -1,11 +1,67 @@
 # Multi-Participant Combat Encounters
 
-Status: proposal
+Status: initial two-sided implementation; later extensions remain proposals.
+
+## Implemented Boundary
+
+The initial implementation uses `combat_encounters.py` for admission and lock
+coordination, `combat_rounds.py` for PVE/PVP/NPC turns, and
+`combat_reconciliation.py` for durable room checks. Participant rows own targets,
+intents, initiative, and contribution counters. The obsolete encounter-level
+player/mob ownership and intent fields have been removed. Ordered events and
+filtered complete roster snapshots share the state transaction's outbox.
+
+Current policy is deliberately narrow:
+
+- two sides; existing allies must be mutually compatible; player hostility
+  requires an active duel with opposing contestant teams
+- at most 32 participants, 256 active effects across locked actors, 16 reactive
+  applications per round, and 1,024 generated round events; oversized admission
+  rejects atomically and effect/event overflow rolls the transaction back
+- manual rounds wait for connected player participants' readiness; disconnected
+  participants retain membership; manual duels preserve either-contestant
+  advancement, and NPC-only manual fights require explicit steps
+- NPC-only paced fights pause when their 30-second observation/activity lease
+  expires and resume on renewed room activity
+- positive damage to the defeated mob qualifies an active, living opposing
+  player for equal XP/currency shares and quest credit; deterministic remainders
+  preserve totals, one receipt protects rewards, and loot rolls once
+- no eligible player contributor means no reward or loot corpse; party-wide
+  sharing, departed-player credit, and healing contribution are deferred
+- room reconciliation pages 8 sources against 32 targets, admits at most 8
+  changes per task, and saves its cursor and dirty generation for continuation
+- ordinary joins preserve due time and schedule generation; merges, pause,
+  completion, and resolver advancement invalidate stale scheduled work
+
+Ordinary instance combat takes a shared run lifecycle lock before encounter
+locks; teardown/reset takes an exclusive run lock. Duels take exclusive match
+and run authority. Actor and membership discovery is revalidated after locking,
+with up to three retries for topology, uniqueness, deadlock, or serialization
+races. Commands currently lock their bounded encounter together; narrowing
+intent-only locks is a future optimization, not a second locking protocol.
+
+The query regression probe measures ordinary rounds at 2, 8, and 32 participants.
+The current measurements are 37, 79, and 247 queries respectively, with the
+32-participant round taking roughly 0.3 seconds in the local container test run.
+Policy comparisons themselves are query-free after the bounded policy load.
+These probes establish linear query growth for this scenario; they do not prove
+fleet throughput or a production latency budget. Deployment load testing must
+still measure many simultaneous encounters, instance lifecycle contention,
+crowded rooms, and publication fan-out before raising capacity.
+
+The migrations explicitly finish transient WR2 encounters, refund reserved flee
+stamina, and remove encounter effects before replacing pair ownership. They are
+validated in a disposable database. Applying them to a populated development or
+production runtime requires a deployment boundary; this is not a WR1 state
+migration. See the player [combat guide](../guides/players/combat.md) and builder
+[mob guide](../guides/builders/mob-definition-builder-guide.md) for the enabled
+behavior. The remainder of this document records the design, rationale, and
+future release checks; later-extension sections do not describe enabled code.
 
 This document extends the encounter-scoped combat direction in
 [combat-encounter-model.md](combat-encounter-model.md) so one fight can contain
-multiple players and mobs on multiple sides. It defines the target runtime
-shape for:
+multiple players and mobs on multiple sides. It defines the long-term runtime
+shape below, with a smaller initial release defined separately:
 
 - one player fighting several mobs
 - several players fighting one or more mobs
@@ -56,6 +112,38 @@ hostile actor pairs exist inside it.
 This is a unified combat engine. PVE, mob-versus-mob combat, parties, duels, and
 team PVP should differ in admission and policy, not in their fundamental turn
 resolver.
+
+## Initial Release Boundary
+
+The first usable group-combat milestone is the freed-Greek scenario, backed by
+ordinary two-sided group combat. It includes:
+
+- multiple combatants of either actor kind across two opposing sides
+- parity for existing one-on-one PVE and two-player duels
+- per-participant turns, targets, intents, effects, and exits
+- compatible encounter merges within measured hard limits
+- actor-neutral aggression, explicit assistance, and bounded NPC-only activity
+- minimum contribution, quest-credit, reward, and loot rules
+- viewer-filtered snapshots, readable narration, basic ally/enemy rosters, and
+  the corresponding builder/player guides
+
+Keep `CombatSide` and `CombatSideRelation` as the extensible representation.
+Initially an active encounter has two sides and one hostile edge. Admission
+must preserve that shape and reject an engagement that would require a third
+side, a side split, or an unauthorized relationship. A shared enemy alone does
+not make two actors allies. These are explicit initial product limits, not
+permission to misrepresent relationships to fit the schema.
+
+Multiple independently hostile sides, alliances between separate sides,
+allegiance changes, and automatic side/encounter splitting are later extensions.
+Real parties, advanced contribution formulas, and a viewer-specific delta
+protocol also follow demonstrated gameplay or performance needs. Sections
+describing those extensions establish constraints for later work; they are not
+prerequisites for the first group fight.
+
+The first release still requires durable due state, idempotent resolution,
+transactional events, coordinated locking, bounded work, and measured query and
+publication costs. Reducing feature scope does not remove those guarantees.
 
 ## Motivating Acceptance Scenario
 
@@ -146,11 +234,13 @@ The implementation should preserve the following invariants:
 
 1. An active actor belongs to at most one spatial combat encounter.
 2. Every active participant belongs to exactly one encounter-local side.
-3. A participant cannot target itself or an inactive participant.
+3. A participant's current hostile target cannot be itself or an inactive
+   participant. Abilities may still legally target their caster.
 4. A participant's hostile target must belong to a side connected to its side
    by an active hostility edge.
-5. No two sides exist unless their participants need independent relation or
-   victory state.
+5. Participants on one side share alliance and victory identity and have the
+   same admitted relations to other sides. Minimizing the number of sides is
+   not itself a runtime invariant.
 6. Each participant becomes eligible for at most one primary action per round.
 7. Effects, cooldowns, and durations advance at most once per logical round.
 8. Duplicate or stale resolver delivery cannot advance a round twice.
@@ -160,6 +250,8 @@ The implementation should preserve the following invariants:
 11. Spatial combatants share the same runtime-world and room scope. Reused
     authored room ids in different instance runs do not make actors colocated.
 12. PVP authorization is checked before players are placed on hostile sides.
+13. Admission never exceeds the supported topology or hard encounter limits.
+    Rejected admission leaves existing fights and actor state unchanged.
 
 ## Domain Model
 
@@ -178,7 +270,7 @@ It should own or reference:
 - logical round number
 - pacing mode and next-resolution deadline
 - deterministic random seed
-- monotonic state revision for snapshots and deltas
+- monotonic state revision for client snapshots and future deltas
 - separate schedule generation for resolver idempotency
 - encounter sides
 - side-relation edges
@@ -219,11 +311,12 @@ the authored faction attitude that caused admission was directional.
 Participants on the same side are always allied. An explicit `allied` relation
 between different sides preserves cooperation when the groups still need
 different match, reward, or victory identity. `encounter.allies` includes both
-the actor's own side and sides connected by that relation.
+the actor's own side and sides directly connected by that relation. Alliance
+is not transitive: an ally of an ally is not automatically a valid ally target.
 
-Explicit relations support:
+The initial release materializes only the two opposing sides' hostile edge.
+The same schema can later support:
 
-- ordinary two-side combat
 - three-way fights
 - two allied sides that are both hostile to a third side
 - partial hostility where side A fights side B while side C is present but
@@ -257,9 +350,10 @@ Each row identifies exactly one player or mob and should include:
 - contribution counters needed for reward policy
 - timestamps and a participant revision where useful
 
-The database should enforce that exactly one actor reference is present. It
-should also use partial uniqueness constraints so an active player or mob
-cannot be active in two encounters at once.
+The database should enforce exactly one live actor reference for an active
+participant and prohibit both actor references on any row. Partial uniqueness
+constraints prevent an active player or mob from belonging to two encounters.
+A paused encounter retains active membership for this constraint.
 
 `current_target` is a self-referential participant key. This prevents
 player-only and mob-only target columns from multiplying as new actor types or
@@ -278,6 +372,12 @@ actor snapshot needed after deletion, such as:
 
 Snapshots are not a second canonical actor model. They preserve audit and event
 meaning across actor lifecycle changes.
+
+If actor deletion clears a participant's live foreign key, first deactivate the
+participant and retain its immutable identity and unfinished contribution data
+in the same transaction. The inactive-row constraint must allow this snapshot
+form. Cascading away the only reward record, or requiring a live foreign key
+after deletion, would defeat the retention contract.
 
 ### Suggested Relationship Shape
 
@@ -322,7 +422,9 @@ combat/room snapshot:
 relationship(actor_a, actor_b, context) -> allied | neutral | hostile
 ```
 
-The initial precedence should be:
+The target precedence is below. The initial release evaluates only implemented
+policy sources; future party and allegiance mechanics do not need placeholder
+engines or configuration:
 
 1. explicit encounter control effects, such as charm or scripted allegiance
 2. existing encounter side and relation state
@@ -373,7 +475,8 @@ coherent.
 Side membership and hostility are snapshotted runtime decisions. Ordinary
 faction-content edits affect later admission; they do not silently move an
 active participant to another side halfway through a round. An explicit
-allegiance or cease-hostility mechanic may change topology at a round boundary.
+allegiance or cease-hostility mechanic may later change topology at a round
+boundary, once the advanced topology contract is implemented.
 
 ### Aggression
 
@@ -528,9 +631,9 @@ cases:
 | Existing state | Result |
 | --- | --- |
 | Neither actor is in combat | Create an encounter, two sides, one hostile relation, and two participants. |
-| One actor is in combat | Add the other actor to an allied or new hostile side as policy requires. |
-| Both actors are in the same encounter | Add or confirm the relevant side relation and update target/intent state. |
-| Actors are in different encounters | Merge the connected encounters, then add or confirm hostility. |
+| One actor is in combat | Admit the other actor to a compatible existing side, subject to policy and limits. |
+| Both actors are in the same encounter | Confirm their hostile relation and update target/intent state. |
+| Actors are in different encounters | Merge only if the combined fight has a legal two-sided assignment and fits the limits. |
 
 The operation must be safe under duplicate delivery and concurrent engagement.
 It should return the canonical encounter and whether topology changed.
@@ -539,6 +642,31 @@ Actors can merge only when their runtime-world, room, instance, pacing, and
 match authorities are compatible. An action that would bridge unrelated PVP
 matches or an isolated match and ordinary room combat is rejected unless an
 explicit match policy defines that transition.
+
+### Admission Limits And Rejection
+
+Before any join or merge commits, the engagement service validates the complete
+proposed result under the encounter/actor locks. This includes active
+participants, sides, effects, retained reward state, and the work needed for
+one atomic round. Two individually valid encounters are not necessarily safe
+to merge. The effective limit is the operator ceiling or any stricter applicable
+world/match policy.
+
+If the proposed result exceeds a limit or requires unsupported topology, reject
+the engagement before changing membership, targets, intents, resources, damage,
+or schedules. Explicit commands receive a clear capacity or unsupported-topology
+failure. Automatic aggression/assistance leaves the candidate out of the fight
+and records the reason; it does not repeatedly reschedule an unchanged rejection.
+A relevant capacity or policy change can make the candidate eligible on a later
+reconciliation. An excluded actor cannot deal damage into that encounter through
+a separate pairwise fight.
+
+Merges admit all affected active participants or none. Do not evict existing
+combatants, truncate an area target set, or raise the cap to force an admission.
+An area action that engages outsiders must validate all required admissions
+before spending resources or applying any of its impacts. Later effect creation
+also obeys explicit effect/reaction limits; admission alone cannot bound effects
+that are added during subsequent rounds.
 
 ### Room Combat Reconciliation
 
@@ -561,34 +689,37 @@ request through the normal event/outbox path. Reconciliation observes committed
 state after that transaction; it must not nest a second topology mutation
 inside an unrelated Trigger or movement transaction.
 
-The action should be incremental around a capped set of changed actors:
+The initial implementation should process a capped set of changed actors
+against stable candidate pages:
 
 1. claim a durable room reconciliation lease and freeze its dirty generation
 2. load one bounded candidate page plus the faction/diplomacy snapshot in
    batches
-3. group candidates by useful keys such as party, match team, spawn cohort, and
-   faction signature
-4. compare changed actors with that page rather than rebuilding every possible
+3. compare changed actors with that page rather than rebuilding every possible
    room pair, evaluating each changed/resident pair in both possible initiation
    directions
-5. evaluate initiation and assistance deterministically in memory
-6. apply the admitted topology changes as one bounded batch through the
-   idempotent engagement service
-7. advance the page cursor or mark the frozen generation applied
-8. schedule each changed canonical encounter once
+4. evaluate initiation and assistance deterministically in memory without
+   per-candidate queries
+5. apply a bounded number of complete admissions through the idempotent
+   engagement service, revalidating each proposed result
+6. commit progress and schedule each changed canonical encounter once
 
 A participant cap does not bound nonparticipants in a crowded room. The
 reconciler therefore needs independent limits for changed actors, candidate
 page size, admitted topology changes, and work per task. If the changed-actor
-set overflows, it records a full-room-dirty marker and scans the room through
-stable pages rather than doing an unbounded pairwise pass.
+set overflows, preserve a full-room-dirty marker and resume a bounded traversal
+rather than dropping changed actors or doing an unbounded transaction. Page
+cursors and ordering must let a finite pass finish once room state settles;
+new dirty generations must not continually starve its later candidates.
 
-A full-room pass must not cross-product every page. It first reduces actors to
-precompiled relation signatures, evaluates compatible signature buckets, and
-expands only admitted actor joins up to the encounter/work cap. Actor-specific
-reputation or control exceptions are evaluated for the changed actor or the
-bounded admitted set, not by repeatedly comparing every resident with every
-other resident.
+The contract is bounded work, no lost updates, and eventual consideration of
+eligible candidates. Grouping by faction, spawn cohort, or match team is an
+optimization to select from crowded-room measurements, not a required generic
+relation-signature compiler. Grouping may prune only comparisons that policy
+proves equivalent or ineligible. Actor-specific reputation and condition DSL
+expressions can still require pair-specific evaluation, and a full pass can
+remain quadratic in the worst case. Measure total comparisons and queue lag as
+well as per-task time; paging alone does not make excessive total work cheap.
 
 The durable coordination state should include at least dirty generation,
 applied generation, continuation cursor, and lease expiry. A mutation arriving
@@ -596,9 +727,9 @@ while a worker runs increments dirty generation. When the worker commits, it
 requeues if a page remains or the dirty generation advanced; it must not clear
 the newer signal. Expired leases are recoverable by the normal scheduler.
 
-Continuation is safe between reconciliation pages because no logical combat
-round is in progress. Each page applies a complete bounded topology mutation;
-it does not leave half an encounter round committed.
+Each admission commits a complete topology mutation under the same locks as the
+resolver. Rounds may run between pages; stale candidate data must be revalidated
+on admission. No continuation leaves half an encounter round committed.
 
 A world-wide diplomacy edit increments a versioned policy snapshot. It must not
 synchronously fan out one transaction or task for every actor in the world.
@@ -608,27 +739,30 @@ bounded reconciliation queue.
 ### Joining A Side
 
 An assisting actor joins an existing side only when it is mutually allied with
-every active member, shares the same encounter victory/reward identity, and has
-the same relation to every other existing side. Otherwise it receives a new
-side and explicit allied or hostile side relations are added as required.
-Non-hostile absence remains neutral rather than being guessed as alliance.
+every active member, shares the same encounter victory/reward identity, and can
+legally take on that side's hostility to the entire opposing side. An explicit
+temporary-alliance policy may supply this affinity; a shared attack target alone
+does not. Check all newly implied player hostility through PVP authorization,
+not just the two actors named in the initiating command.
 
-If admitting a new actor needs to distinguish participants that were previously
-on one side, the topology operation splits that side at a round boundary,
-copies its existing relations, and then specializes the affected relations.
-This keeps the side graph truthful for non-transitive relationships without
-falling back to mutable actor-pair encounters. A bounded encounter may use
-one-participant sides when that is the only exact representation.
+If the actor needs different relationships, reject the initial-release join.
+Do not infer alliance from neutrality, split an existing side, or quietly add a
+third side. The later multi-side extension may add a separate side and explicit
+relations once its admission, support, reward, and split behavior is implemented.
 
 ### Merging Encounters
 
-An action can connect two formerly independent fights. The merge protocol
-should:
+An action can connect two formerly independent fights. Initially a merge is
+supported only when the two source sides can be mapped onto two resulting
+sides while preserving existing relations, alliance/victory identity, and all
+new admission permissions. This is a bounded side-assignment check, not a
+general graph repartitioning operation. The merge protocol should:
 
 1. lock all affected encounter ids in ascending order
-2. select a canonical encounter, normally the lowest id
-3. move or coalesce sides, side relations, participants, pending intents,
-   effects, and deadlines
+2. revalidate scope, two-sided assignment, permissions, and combined capacity;
+   reject the whole engagement on failure
+3. select a canonical encounter, normally the lowest id, and move participants,
+   intents, effects, and retained contribution state to the mapped sides
 4. set the canonical logical round to the maximum source round
 5. preserve remaining logical distance for absolute timers: for example, a
    participant two rounds from eligibility in its source remains two rounds
@@ -641,30 +775,40 @@ should:
    that seed only for future action ordinals
 9. preserve the earliest valid next-resolution deadline
 10. mark donor encounters as merged/finished with a pointer to the canonical id
-11. increment the canonical state revision and emit one topology update
+11. invalidate source schedules, establish one canonical schedule generation,
+    increment the canonical state revision, and emit a merge event plus snapshot
 
-Old resolver tasks carry the donor id and schedule generation. They resolve the
-canonical pointer or no-op without advancing an extra round.
+Old resolver tasks carry the source id and schedule generation and no-op.
+Donor pointers support client/command lookup; following one does not authorize
+an old task to resolve the canonical encounter. Manual readiness is recomputed
+over the merged participants, and a merge itself grants no extra turn.
 
-### Splitting Disconnected Fights
+### Connectivity And Future Splitting
 
-Deaths, movement, fleeing, allegiance changes, or hostility removal can leave
-an encounter with disconnected conflict components. The resolver should detect
-this at a round boundary:
+The initial release does not split encounters. With two fixed sides and one
+hostile edge, ordinary participant exits leave one fight or no remaining
+hostility. Resolve the remaining fight or finish it; do not introduce child
+encounters as a cleanup requirement.
 
-- a component with no active hostility finishes
-- one connected hostile component may retain the original encounter
-- additional hostile components become new encounters
-- participants, effects, targets, pacing, and pending intents move with their
-  component
+Before enabling partial multi-side relations or allegiance changes, define
+connected components over active sides using both hostile and direct allied
+edges. A healer on a separate allied side stays connected to the fight even if
+that side has no hostile edge of its own. Connectivity does not make alliances
+transitive or grant new targeting permissions.
 
-A split child inherits the parent's current logical round and remaining
-timers. Its random seed is derived deterministically from the parent seed,
-split round, and sorted participant keys in that child, so retries create the
-same children and future rolls.
+Live effects or control mechanics that require shared resolution across sides
+also prevent separating those sides until the dependency ends or has an
+explicit transfer rule. Historical provenance alone is not a dependency;
+target-owned character effects can already outlive their source's participation.
+Dependencies preserve coherent resolution, but do not keep an encounter alive
+once no hostility can produce combat.
 
-Splitting at a round boundary avoids changing the topology halfway through a
-resolution snapshot.
+If splitting is later required, perform it only at round boundaries. Components
+with no combat finish; other components retain or receive an encounter with
+their participants, intents, effects, and remaining timers. Specify reward
+ownership, deterministic child identities/seeds, schedule invalidation, and
+client snapshot handoff in that implementation. These mechanisms are deferred
+together rather than partly implemented in the initial resolver.
 
 ## Faceoff And Target Selection
 
@@ -721,7 +865,8 @@ Inside an existing encounter:
 After a target becomes invalid, automatic retargeting should follow the same
 deterministic policy and emit a target-changed event. If no valid hostile target
 exists, the participant has no attack target; the encounter may finish or
-split.
+continue for other participants. A temporarily untargetable enemy does not by
+itself end the fight.
 
 ### Existing Target Priority
 
@@ -735,10 +880,12 @@ Initiative is rolled or derived once when a participant joins and remains
 stable unless an explicit mechanic changes it. Stable actor id or join sequence
 breaks ties deterministically.
 
-A participant joining after a round snapshot has begun receives
-`first_eligible_round = current_round + 1`. It may be visible and targetable as
-soon as topology commits, but it cannot gain an early action by racing the
-resolver.
+Joining and round resolution take the same encounter lock. A join committed
+before the next round freezes can participate in that round; a join racing an
+already resolving round waits for its commit and is first eligible in the next
+unresolved round. Store that eligibility explicitly as `current_round + 1`,
+where `current_round` is the last committed round at admission. Topology cannot
+become targetable halfway through an atomic round.
 
 Openers such as ambush or charge may assign a first-round priority without
 rerolling the persistent initiative order.
@@ -766,9 +913,10 @@ A round should execute in this order:
 10. resolve the action, deaths, exits, interrupts, target changes, and bounded
     reactive effects
 11. advance end-of-round effects, cooldowns, and durations once
-12. split or finish components that no longer contain active hostility
+12. finish the encounter if no remaining hostility can produce combat
 13. persist mutations and ordered outbox events in the same transaction
-14. schedule exactly one next resolution for each remaining active encounter
+14. establish one next due resolution if the encounter remains active and its
+    pacing/readiness/activity policy permits advancement
 
 Randomness should be reproducible from encounter seed, logical round,
 participant id, and action ordinal. Retrying the same logical round must produce
@@ -776,6 +924,8 @@ the same decisions and rolls.
 
 Reactive effects need a bounded depth or explicit work queue so reflection,
 counterattack, or on-hit chains cannot recurse indefinitely in one transaction.
+The later multi-side extension may add boundary splitting before persistence;
+the initial resolver has no split state machine.
 
 For the initial implementation, the hard participant/effect/reaction caps must
 guarantee that one complete round fits one transaction. Continuations may run
@@ -799,7 +949,8 @@ includes encounter id, due timestamp, logical round, and schedule generation;
 stale or duplicate tasks lock, recheck, and no-op.
 
 There must be one scheduled task per encounter, not one task per hostile actor
-pair or mob.
+pair or mob. This means one logical due resolution; recovery or broker retries
+may deliver redundant tasks, which the generation/round check rejects.
 
 ### Immediate Mode
 
@@ -855,16 +1006,20 @@ expires, an unresolved NPC-only encounter pauses, clears its due schedule, and
 consumes no recurring task. Re-entry or another relevant room event reactivates
 and reconciles it without replaying skipped wall-clock rounds.
 
-The scheduler should enforce per-world and global limits for concurrently due
-NPC-only encounters, prioritize player-observed and objective-critical fights,
-and expose backpressure metrics. Authored unattended simulation still obeys
-participant, event, and work caps; it is not permission for a world-wide combat
-heartbeat.
+Use the existing scheduler/queue facilities to bound NPC-only work and reserve
+capacity for player-observed and objective-critical fights. Start with the
+activity gate, bounded due batches, and measured queue lag; add more elaborate
+per-world scheduling only if these controls cannot meet the load target.
+Authored unattended simulation still obeys operator limits. A paused encounter
+retains actor membership, so detached effect scheduling must not independently
+advance its participants' combat clocks.
 
 ## Abilities, Effects, And Target Selectors
 
-Abilities and effects need relational encounter selectors, not only physical
-room/type selectors.
+Abilities and effects use the same actor-neutral validation and effects pipeline
+from the initial release. Add relational selectors as the abilities that use
+them ship; a complete area-ability and control vocabulary is not a prerequisite
+for ordinary group attacks.
 
 Recommended selector vocabulary includes:
 
@@ -899,6 +1054,11 @@ The engine should also preserve these rules:
   automatically end an otherwise valid encounter
 - mob AI submits the same typed intents players submit; it does not bypass
   ability validation or effect hooks
+
+New threat strategies, taunt, concealment mechanics, and allegiance changes are
+later work. Any such rules already implemented by an existing ability still
+need parity during resolver replacement; deferral does not remove current
+behavior.
 
 AI conditions must use the shared condition DSL over the round snapshot. The
 resolver must not evaluate arbitrary builder scripts or perform ad hoc queries
@@ -970,9 +1130,12 @@ The current single-player reward assumption must be replaced before allied mobs
 or multiple players can deal killing blows.
 
 The encounter should keep bounded contribution summaries rather than an
-unbounded damage log. At minimum it should distinguish damage, healing/support,
-control, tanking/forced attention, and active participation where those values
-affect policy.
+unbounded damage log. Start with the counters consumed by the chosen initial
+reward policy. Damage, healing/support, control, tanking/forced attention, and
+active participation are possible inputs; do not build a scoring engine for
+unused categories. Define attribution per defeated mob and across merges before
+enabling group rewards, so contribution to an unrelated earlier opponent does
+not accidentally earn every later kill.
 
 Recommended default PVE behavior:
 
@@ -1013,10 +1176,12 @@ through ordinary PVE mob-worth distribution.
 ## Events And Client State
 
 The current client-facing scalar target is not enough to render a group fight.
-The server should publish a visibility-aware, viewer-filtered, versioned
-encounter snapshot plus ordered deltas. It must not expose concealed
-participants, private intents, or internal threat/AI state to unauthorized
-viewers.
+The initial server should publish complete, viewer-filtered, versioned encounter
+snapshots after rounds, topology changes, and other public combat-state changes.
+Private intent acknowledgements can use the existing command/event path without
+rebroadcasting a roster. Do not expose concealed participants, private intents,
+or internal threat/AI state to unauthorized viewers, including through target
+references or effect-source metadata.
 
 Example snapshot:
 
@@ -1024,8 +1189,6 @@ Example snapshot:
 {
   "encounter_id": 123,
   "state_revision": 9,
-  "projection": "player.7",
-  "stream_sequence": 42,
   "round": 4,
   "self": "player.7",
   "participants": [
@@ -1046,53 +1209,64 @@ Example snapshot:
 `self` may be null for a permitted observer. `relation` is computed relative to
 the viewer and may be `self`, `ally`, `enemy`, or `neutral`.
 
-Recommended delta events include:
+Within one encounter and viewing context, the client replaces its roster with
+the newest complete snapshot and ignores older or duplicate revisions. Revision
+jumps are valid: a private intent may advance canonical state without producing
+a public snapshot, and a complete snapshot needs no preceding deltas. Reconnect,
+re-entry, or a changed viewing context requests a fresh authorized snapshot and
+resets the local view. Visibility-changing actor state must invalidate the view
+even if it changed outside the combat resolver.
 
-- participant joined, left, defeated, or updated
-- side or allied/hostile relation changed
-- current/effective target changed
-- intent queued, replaced, rejected, or consumed
-- effect applied, advanced, or removed
-- round started and resolved
-- encounter merged, split, or finished
-
-Every event should carry encounter id, global state revision, and a sequence
-for the viewer's projected stream. Action-result events should also carry an
-idempotent canonical action/event identity. The client cursor is
-`(encounter_id, projection, stream_sequence)`, so several ordered deltas emitted
-by one state transition are not mistaken for duplicates. Clients discard cursor
-duplicates and request a fresh snapshot after a gap in their own projection.
-
-State revision is a snapshot-freshness marker, not a client gap cursor. A
-private intent or concealed-actor delta may advance global state without being
-visible to another viewer; that omission must not create a gap in the other
-viewer's stream. A reconnect or changed visibility projection establishes a new
-cursor from a fresh snapshot.
+Action-result and narration events retain idempotent canonical event identities
+and committed ordering. Do not deduplicate them by snapshot revision: several
+different events may share one revision. Private intent acknowledgements carry
+the accepted intent identity/revision so an older response cannot replace a
+newer queued choice.
 
 The transactional outbox stores one canonical ordered event batch with audience
-metadata. The publisher batches recipients, filters/renders that canonical
-batch, and assigns projected stream sequences without writing one gameplay
-outbox row per viewer.
+metadata and the committed snapshot data needed for publication. The publisher
+batches recipients and filters/renders that state without writing one gameplay
+outbox row per viewer. A snapshot's revision must describe the state actually
+serialized; do not read later mutable rows and label them with an older event's
+revision. Coalesce superseded snapshots where safe while preserving canonical
+action-result ordering.
 
 A merge event on a donor encounter includes the canonical encounter id and a
-snapshot handoff for the viewer's new projection. A split event lists the
-retained encounter and visible child encounter ids. The client then requests
-snapshots for the new topology instead of trying to infer reparenting from
-actor messages.
+fresh authorized snapshot or an instruction to fetch it. The client retires the
+donor roster and ignores delayed donor snapshots. A finish event clears the
+active roster. Future splits use the same explicit snapshot handoff rather than
+requiring clients to infer reparenting from actor messages.
 
 Combat narration needs actor, target, ally, enemy, and observer variants so the
 same action remains readable to everyone in the room. Publication should batch
 room recipients and render recipient-specific text without rerunning combat
 logic.
 
-The initial UI can retain one prominent current-target card while adding compact
-ally and enemy rosters. It should show who each visible combatant is targeting,
-their key statuses, and enough encounter/round identity to group narration
-correctly.
+The initial UI should retain one prominent current-target card while adding
+compact ally and enemy rosters. It should show who each visible combatant is
+targeting, their key statuses, and enough encounter/round identity to group
+narration correctly. Ship this with the first enabled group encounters,
+including player and builder documentation and frontend tests.
 
 Legacy one-target payloads may be translated during a short client transition,
 but the server should have one canonical multi-participant event model rather
 than long-lived dual combat state.
+
+### Optional Delta Protocol
+
+Measure snapshot bytes, serialization time, publication lag, and recipient
+fan-out at the supported encounter cap. Full snapshots simplify initial client
+recovery but their cost grows with participants times viewers; they are not an
+assumption of unlimited bandwidth. If measured budgets require deltas, introduce
+them as a separate delivery change while preserving full snapshot recovery.
+
+A filtered delta stream needs its own cursor, such as
+`(encounter_id, projection, stream_sequence)`. Global state revision cannot
+detect gaps because private or concealed changes are legitimately omitted for
+some viewers. Assign ordered sequences per projection, deduplicate by cursor,
+and fetch a snapshot after a real gap or projection change. Specify publisher
+retry behavior and cursor lifetime when implementing this protocol. It is not
+part of the initial runtime schema or a prerequisite for multi-participant turns.
 
 ## Transactions, Locking, And Idempotency
 
@@ -1110,6 +1284,21 @@ Target lock order:
 6. mob actor rows in ascending id order
 7. effects, inventories, wallets, reward records, and other dependent rows in a
    stable documented order
+
+The coordinator defines ordering, not a requirement to lock every row category
+for every command. Exclusive instance/match locks belong to operations that
+mutate shared lifecycle, membership, or result authority, or otherwise require
+serialization with those transitions. Merely reading a participant's instance
+identity is not sufficient reason to take an exclusive run lock every round.
+
+Before enabling concurrent encounters in one instance, document how ordinary
+rounds validate authority against teardown/completion without serializing all
+fights on the run row. A compatible shared lifecycle guard is one option; any
+chosen protocol must be used by both rounds and lifecycle writers and tested
+under races. Where exclusive authority locking is necessary, measure its lock
+wait and critical-section duration. Plan authority locks before lower-order
+locks, including for deaths/results a round may produce; never acquire a run
+lock late from a nested death handler.
 
 Routine intent submission should update only the acting participant and the
 minimum encounter readiness/state-revision data where possible. Replacing an
@@ -1151,19 +1340,23 @@ errors, but it is not the final concurrency guard.
 ## Performance And Scalability
 
 The hot-path target is proportional to the materialized encounter graph and
-work in one encounter:
+the actual targeting and resolution work in one encounter:
 
 ```text
-O(participants + side_relations + effects + actions)
+O(participants + side_relations + effects + candidate_checks + target_applications)
 ```
 
-Avoid behavior proportional to every possible player/mob pair or every actor in
-the world.
+Count each area hit and reactive effect application as work, not merely one
+queued ability. Query-free target selection can still be quadratic in CPU work;
+reuse legal target rosters where rules allow and measure remaining candidate
+checks. Ordinary single-target fights should approach linear work. Avoid
+rebuilding every possible actor pair or scanning actors outside the affected
+encounter/room.
 
 Ordinary group fights should have few sides: a 16-versus-16 fight with two
-sides has one materialized relation, not 256 actor-pair records. A dense
-free-for-all can require `O(side_count²)` relations, so free-for-all side count
-needs its own lower cap or a future compressed complete-hostility policy.
+sides has one materialized relation, not 256 actor-pair records. Future dense
+free-for-all combat can require `O(side_count²)` relations and needs separate
+measurements and a side cap before admission is enabled.
 
 Required implementation practices:
 
@@ -1174,7 +1367,8 @@ Required implementation practices:
 - indexed encounter due-state recovery
 - a per-world/version cached diplomacy matrix or equivalent precompiled policy
 - no manifest parsing or faction relationship queries inside each turn
-- deterministic candidate grouping before relationship evaluation
+- deterministic, bounded candidate traversal; grouping where measurements and
+  policy equivalence justify it
 - hard participant, effect, reaction-depth, event-volume, and work-per-task
   limits; initial combat continuation occurs only between atomic rounds
 - batched room event publication rather than one independent publish operation
@@ -1189,14 +1383,18 @@ Representative performance tests should measure both query count and elapsed
 work for at least:
 
 - a 2-versus-3 encounter
-- a 16-versus-16 encounter near the initial supported cap
+- a 16-versus-16 encounter as a capacity probe, plus the measured release cap
 - many independent small encounters resolving concurrently
+- independent encounters sharing one instance, including lifecycle contention
 - concurrent attempts to join or merge the same encounter
+- crowded-room reconciliation with actor-specific conditions and repeated dirties
+- snapshot publication with participants and observers at supported limits
 
-Exact caps should be selected from measurements, not guessed. Larger authored
-battles are not admitted merely through configuration. They require the future
-frozen-round continuation state machine and publication barrier to be
-implemented and proven first.
+Exact caps should be selected from measurements before admission is enabled,
+not guessed or postponed until advanced PVP. Larger authored battles are not
+admitted merely through configuration. Battles exceeding the measured atomic
+round budget require the future frozen-round continuation state machine and
+publication barrier to be implemented and proven first.
 
 ## Observability
 
@@ -1208,8 +1406,9 @@ Combat metrics should include:
 - scheduler queue lag and overdue deadline count
 - lock wait, deadlock retry, and serialization retry counts
 - stale/duplicate resolver no-op count
-- encounter creation, join, merge, split, and finish counts
-- events and recipients published per round
+- encounter creation, join, merge, finish, and admission-rejection counts
+- events, snapshot bytes, serialization time, and recipients published per round
+- reconciliation comparisons, continuation backlog, and dirty-generation age
 - reward idempotency conflicts
 - participant/effect/reaction cap hits
 
@@ -1219,71 +1418,67 @@ actor snapshots or private player state by default.
 
 ## Implementation Sequence
 
-### Phase 1: Contract And Truth Tables
+These are delivery milestones, not a requirement to hold one large change open
+until every future combat feature exists. Within each milestone, use reviewable
+changes and keep incomplete behavior disabled. Each enabled mechanic ships with
+its tests and relevant builder/player guides.
 
-- settle actor eligibility, relationship, aggression, retaliation, assistance,
-  PVP authorization, target validity, and victory truth tables
-- define the canonical snapshot and delta event schema
-- define reward eligibility and initial participant caps
-- document the shared lock coordinator
+### Milestone 1: Participant Resolver With Existing Behavior
 
-### Phase 2: Additive Runtime Schema
+- settle initial two-sided admission, PVP permission, target validity, readiness,
+  reward eligibility, and capacity-failure truth tables
+- add sides, relations, participant targets/intents/initiative, actor snapshots,
+  state revision, schedule generation, and necessary constraints/indexes
+- define the shared lock coordinator and instance lifecycle coordination before
+  switching all relevant writers coherently
+- route current one-player/one-mob PVE and two-player duels through the unified
+  participant resolver, with deterministic behavior and existing ability parity
+- use one durable encounter schedule and transactional event path across modes
+- remove old authoritative pair ownership/resolver paths once parity and their
+  callers are converted; temporary schema or payload compatibility exists only
+  for that transition
 
-- add sides, side relations, expanded participants, current targets, initiative,
-  eligibility round, snapshots, and required constraints/indexes
-- add canonical state revision, projected stream sequencing, schedule
-  generation, and task idempotency data
-- enforce cross-row same-encounter integrity at the database boundary
-- keep current one-on-one behavior running while the new schema is not yet
-  authoritative
+This milestone must work without general graph splitting, party models, or
+projected delta streams.
 
-### Phase 3: Unified Resolver Parity
+### Milestone 2: First Playable Group Combat And The Freed Greek
 
-- resolve current one-player/one-mob PVE and two-player duels through the
-  participant pipeline
-- move all encounter writers to the unified lock coordinator atomically
-- unify deadline recovery and transactional outbox behavior across modes
-- prove deterministic parity before enabling larger topology
+- admit multiple players/mobs on two sides and merge compatible fights within
+  measured participant, effect, event, and atomic-round budgets
+- ship per-participant targeting, late join, flee/death/disengage behavior, and
+  explicit capacity/unsupported-topology failures
+- implement minimum per-mob contribution, rewards, quest credit, and loot before
+  allied mobs or multiple players can deal killing blows
+- enable actor-neutral aggression, explicit assistance, faction policy, and
+  condition-driven room reconciliation
+- support NPC-only formation and continuation under the activity lease, with
+  pause/reactivation and bounded scheduler work
+- ship filtered snapshots, private intent acknowledgements, readable narration,
+  and basic current-target/ally/enemy UI together
+- update builder/player guides and the optional WR1 authored-content conversion
+  notes when the assistance manifest contract is implemented
+- pass the freed-Greek scenario with and without a player present, plus the
+  concurrency, query-count, reconciliation, and publication budgets below
 
-### Phase 4: Multiple Hostile Mobs And Target Switching
+This is the first group-combat release. Its exit criterion is an authored,
+playable scenario with reliable behavior under concurrent load.
 
-- allow several mobs and players in one PVE encounter
-- implement per-participant faceoff, retargeting, late join, and participant
-  exit behavior
-- implement partial multi-side relations, merge, and round-boundary split
-- implement the minimum bounded contribution, reward, quest-credit, and loot
-  policy before more than one actor can receive or steal a kill
-- replace pairwise scheduling with one job per encounter
+### Later Extensions
 
-### Phase 5: Actor-Neutral Aggression And Assistance
+Choose these independently when gameplay or measurements justify them:
 
-- implement mob-versus-mob admission and turns
-- add explicit combat assistance and faction-relationship overrides
-- trigger bounded room reconciliation from relevant state changes
-- add NPC-only activity leases, pause/reactivation, and scheduler backpressure
-- make the freed Greek scenario pass with and without a player present
-
-### Phase 6: Parties, Advanced Group Rewards, Abilities, And UI
-
-- introduce real party membership and party assistance policy
-- extend the minimum reward contract with party sharing and richer contribution
-  policy
-- add ally/enemy and area selectors for players and mobs
-- ship multi-participant snapshots, deltas, narration, and rosters
-
-### Phase 7: Team PVP And Advanced Control
-
-- map multi-player PVP teams onto encounter sides
-- add threat strategy, taunt, concealment, and allegiance-changing mechanics
-- exercise already-supported multi-side relations under team and free-for-all
-  match policy
-- measure and tune maximum supported encounter sizes
-
-### Phase 8: Remove Compatibility State
-
-- remove direct one-player/one-mob encounter ownership and old resolver paths
-- remove legacy payload translation after supported clients migrate
-- update builder and player guides with the final configuration and mechanics
+- **Parties and richer rewards:** real party membership, assistance, sharing,
+  and only the additional contribution categories consumed by policy.
+- **Abilities and team PVP:** new relational/area selectors, threat or control
+  mechanics, and multi-player match teams on the same participant resolver.
+- **Multi-side topology:** partial hostility, direct alliances between separate
+  sides, allegiance changes, and side/encounter splitting with effect/reward
+  ownership and snapshot handoff tested together.
+- **Delivery optimization:** a projected delta protocol if measured snapshot
+  costs exceed budgets; preserve complete snapshot recovery.
+- **Larger battles or crowded rooms:** stronger scheduling/reconciliation
+  optimizations from profiles. Battles too large for atomic rounds require a
+  separately designed continuation and publication contract.
 
 WR2 launches with a clean database. This sequence is not a WR1 runtime data
 migration, dual-write cutover, or active-combat backfill. Active WR2 encounters
@@ -1294,17 +1489,25 @@ when the new authored combat contract is implemented.
 
 ## Test Matrix
 
-All new backend tests belong under `backend/tests/`.
+All new backend tests belong under `backend/tests/`. The following initial
+tests gate Milestones 1 and 2; later extensions have a separate matrix.
 
 ### Formation And Topology
 
 - one player versus one mob retains existing behavior
-- two players engage one mob concurrently and produce one encounter
+- two compatible allied players engage one mob concurrently and produce one
+  encounter
 - one player engages three mobs and each eligible participant acts once
-- two existing encounters merge under concurrent cross-attack without
-  duplicate active participants
-- three sides may have partial hostility without attacking neutral sides
-- disconnected hostile components split only at a round boundary
+- two compatible existing encounters merge under concurrent cross-attack
+  without duplicate active participants
+- joins/merges that require a third side or side split reject without changing
+  existing fights, resources, intents, damage, or schedules
+- two encounters individually below the cap cannot merge above the cap
+- concurrent admissions cannot exceed capacity after locked revalidation
+- every newly implied player hostility is authorized, including other members
+  of the two sides
+- an automatic capacity rejection does not create an unchanged retry loop;
+  a later capacity change permits reconsideration
 - stale donor tasks cannot advance a merged encounter
 
 ### Freed Greek Acceptance Tests
@@ -1329,9 +1532,9 @@ All new backend tests belong under `backend/tests/`.
 ### Turns And Targeting
 
 - late join does not reroll existing initiative or act in the frozen round
-- explicit target, current target, forced target, and fallback precedence are
-  deterministic
-- target death, flee, movement, concealment, and side change revalidate before
+- explicit target, current target, existing control effects, and fallback
+  precedence are deterministic
+- target death, flee, movement, and existing visibility rules revalidate before
   impact
 - changing target does not create a new encounter or grant an extra turn
 - every participant advances effects and cooldowns exactly once per round
@@ -1348,12 +1551,17 @@ All new backend tests belong under `backend/tests/`.
 
 ### Abilities And Rewards
 
-- ally selectors include allied players and mobs and exclude every enemy side
-- enemy area selectors work across more than one hostile side
+- existing ability selectors and effects retain parity over player/mob actors
+- any enabled area action validates outsider admission before any impacts and
+  cannot bypass capacity or PVP policy
 - mob AI abilities use the same validation and effect hooks as player abilities
 - an allied mob's killing blow still grants eligible player quest credit
 - total experience/currency remain bounded and reward records are idempotent
 - loot is generated once under retry or duplicate task delivery
+- contribution attribution remains correct per defeated mob across joins,
+  exits, and merges
+- actor deletion retains immutable identity and unfinished reward attribution
+  without violating participant constraints
 
 ### Concurrency And Reliability
 
@@ -1364,21 +1572,50 @@ All new backend tests belong under `backend/tests/`.
 - immediate mode yields after bounded batches
 - outbox events match committed state under worker loss
 - a dirty reconciliation generation arriving under an active lease is not lost
+- a full-room-dirty pass eventually covers later candidates once state settles
+- pair-specific conditions remain correct with any candidate grouping
 - NPC-only scheduler limits apply backpressure without delaying observed fights
-- a private or concealment-filtered delta does not create a gap in another
-  viewer's projected stream
+- independent fights in one instance do not take an exclusive run lock merely
+  to validate identity, and teardown/completion races preserve authority
+
+### Client State And Publication
+
+- complete snapshots replace state correctly after skipped revisions; private
+  intent changes do not cause false gap detection
+- hidden actors, target references, and private state remain filtered
+- reconnect and visibility changes establish a fresh authorized view
+- delayed donor snapshots cannot resurrect a merged encounter's roster
+- duplicate action events are ignored by event identity, while different
+  events sharing one revision remain visible
+- snapshots describe the committed state matching their attached revision
+- intent acknowledgements cannot replace a newer choice with an older response
 
 ### Performance
 
-- enforce representative query-count budgets for 2-versus-3 and 16-versus-16
-  encounters
+- enforce query-count and elapsed-work budgets for 2-versus-3 and the measured
+  release cap, using 16-versus-16 as a capacity probe
 - verify one scheduled task per encounter rather than per hostile pair
 - exercise many independent encounters without global room/world scans
 - measure merge contention and ensure retry work is bounded
+- measure independent same-instance fights, crowded-room total comparisons,
+  reconciliation backlog, and snapshot bytes/serialization/recipient fan-out
 
-When frontend work begins, add or update unit tests for snapshot/delta reduction,
-target selection, ally/enemy rosters, merge/split handling, and stale-cursor
-recovery. Include the required UI screenshots with that implementation.
+Frontend unit tests for snapshot replacement, target selection, ally/enemy
+rosters, merge/finish handling, and reconnect recovery ship with Milestone 2.
+Include the required UI screenshots with that implementation.
+
+### Later Extension Tests
+
+- partial hostility never authorizes attacks on neutral sides
+- direct alliance does not imply transitive alliance or PVP permission
+- an allied healer without its own hostile edge remains connected to the fight
+- splitting waits for a round boundary and preserves shared effect/control
+  dependencies, remaining timers, reward attribution, and client handoff
+- allegiance changes preserve legal targets, turn eligibility, and effect clocks
+- party contribution and team match results follow their explicit policies
+- area selectors work across multiple hostile sides without unbounded work
+- projected deltas recover from real gaps, preserve sequence identity under
+  publisher retries, and do not mistake another viewer's private event for a gap
 
 ## Decisions Made By This Proposal
 
@@ -1386,8 +1623,8 @@ This proposal settles the following architectural direction:
 
 - one connected fight is one encounter
 - all combatants are participants, regardless of actor kind
-- encounter-local sides and explicit allied/hostile relations represent combat
-  relation, with absent relations remaining neutral
+- encounter-local sides and relation rows represent combat relationships; the
+  initial release admits two opposing sides, with richer topology deferred
 - faceoff/current target is per participant
 - PVE and PVP share one resolver
 - aggression, retaliation, assistance, relationship, and PVP permission remain
@@ -1398,17 +1635,22 @@ This proposal settles the following architectural direction:
 - conditions use the existing WR2 condition DSL
 - group rewards use explicit contribution/party policy rather than final-hit
   accident
+- initial client state uses filtered complete snapshots; projected deltas are a
+  measured delivery optimization
+- first group-combat delivery includes the freed Greek, basic UI, and guides
 
-The following balancing and product choices remain deliberately deferred until
-their implementation phase:
+Before the first group release, measurements and product truth tables must
+settle exact participant/effect/reaction limits, the minimum reward formula,
+and manual-readiness defaults. These are release gates, not open-ended promises.
+The following choices can wait for later extensions:
 
 - exact threat weights and mob target strategies
-- exact participant and reaction caps
 - exact party reward split formula
-- whether directional authored faction relationships need a builder UI in the
-  first release
-- final group manual-readiness UX
-- final roster layout and narration density
+- advanced side/encounter splitting mechanics and multi-side match rules
+- whether diplomacy editing needs a dedicated builder UI beyond manifests
+- richer readiness controls, roster layout, and narration density
+- whether measurements justify projected deltas or specialized reconciliation
+  and scheduling optimizations
 
 Those choices can change without returning to pairwise encounter storage or a
 separate mob-versus-mob engine.

@@ -1214,6 +1214,7 @@ def build_who_list(world: World, actor: Player) -> List[WhoListEntry]:
 # ---- Aggregates ----
 
 def build_state_sync(player: Player) -> StateSyncData:
+    from spawns.combat_publication import snapshot_for_player
     world = player.world
     room = player.room
     if room is None:
@@ -1250,4 +1251,5 @@ def build_state_sync(player: Player) -> StateSyncData:
         world=world_payload,
         who_list=who_list,
         prepared_abilities=active_prepared_ability_slugs(player),
+        combat_snapshot=snapshot_for_player(player),
     )
