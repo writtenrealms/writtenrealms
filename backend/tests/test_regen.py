@@ -4,8 +4,11 @@ from copy import deepcopy
 from datetime import timedelta
 from unittest.mock import patch
 
+from builders.models import AbilityDefinition
 from config import constants as api_consts
 from core.computations import compute_stats
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from spawns.actions.combat import resolve_due_character_effects
 from spawns.models import ActiveEffect, CombatEncounter, Mob
@@ -36,6 +39,188 @@ class TestGameHeartbeat(WorldTestCase):
             self.spawn_room = spawn_zone.rooms.first()
         else:
             self.spawn_room = self.room
+
+    def _cast_crest(self, cast_at, *, periodic=False):
+        component = {
+            "type": "effect",
+            "effect": "crest",
+            "category": "buff",
+            "scope": "character",
+            "target": "self",
+            "duration": {"rounds": 3},
+            "primitives": [{"type": "damage_absorb", "amount": 30}],
+        }
+        if periodic:
+            component["tick"] = {
+                "every_rounds": 1,
+                "primitives": [{
+                    "type": "resource_change",
+                    "resource": "health",
+                    "amount": 1,
+                    "target": "effect.target",
+                }],
+            }
+        AbilityDefinition.objects.update_or_create(
+            world=self.world,
+            slug="crest",
+            defaults={
+                "name": "Crest",
+                "command_verbs": ["crest"],
+                "target": {"type": "self", "default": "self", "allow_out_of_combat": True},
+                "cooldown": {"rounds": 3},
+                "consumes_primary_action_on_resolve": False,
+                "components": [component],
+            },
+        )
+        self.player.in_game = True
+        self.player.known_abilities = ["crest"]
+        self.player.ability_cooldowns = {}
+        self.player.save(update_fields=["in_game", "known_abilities", "ability_cooldowns"])
+        with patch("django.utils.timezone.now", return_value=cast_at):
+            dispatch_text_command(self.player.id, "crest")
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.ability_cooldowns, {"crest": 3})
+        self.assertEqual(self.player.active_effects[0]["remaining_rounds"], 3)
+
+    def test_equal_cooldown_and_effect_tick_together_on_every_heartbeat(self):
+        start_at = timezone.now()
+        for index, (interval, periodic) in enumerate(((2, False), (5, False), (-1, True))):
+            cast_at = start_at + timedelta(seconds=20 * index)
+            with self.subTest(combat_interval=interval, periodic=periodic):
+                self.world.config.combat_resolution_interval = interval
+                self.world.config.save(update_fields=["combat_resolution_interval"])
+                self._cast_crest(cast_at, periodic=periodic)
+                # Cast just before a heartbeat, then introduce both polling
+                # jitter and a delayed heartbeat. Each pulse remains one round.
+                for offset, remaining in ((0.1, 2), (2.05, 1), (10, 0)):
+                    pulse_at = cast_at + timedelta(seconds=offset)
+
+                    def process_effects(**kwargs):
+                        clock_mock.return_value = pulse_at + timedelta(milliseconds=50)
+                        return resolve_due_character_effects(due_at=pulse_at, **kwargs)
+
+                    with (
+                        patch("django.utils.timezone.now", return_value=pulse_at) as clock_mock,
+                        patch("spawns.actions.combat.resolve_due_character_effects", side_effect=process_effects),
+                        patch("spawns.tasks.publish_events") as publish_mock,
+                    ):
+                        result = run_game_heartbeat()
+
+                    self.player.refresh_from_db()
+                    self.assertEqual(self.player.ability_cooldowns.get("crest", 0), remaining)
+                    effects = self.player.active_effects
+                    self.assertEqual(effects[0]["remaining_rounds"] if effects else 0, remaining)
+                    self.assertEqual(result["ability_cooldowns"], 1)
+                    self.assertEqual(result["active_effects"], 1)
+                    updates = [
+                        event.data["actor"]
+                        for call in publish_mock.call_args_list
+                        for event in call.args[0]
+                        if event.type == "player.abilities.update"
+                    ]
+                    # No intermediate cooldown-only snapshot with a stale buff.
+                    self.assertEqual(len(updates), 1)
+                    self.assertEqual(updates[0]["ability_cooldowns"].get("crest", 0), remaining)
+                    self.assertEqual(
+                        updates[0]["active_effects"][0]["remaining_rounds"] if remaining else 0,
+                        remaining,
+                    )
+
+    def test_replaying_effect_pulse_does_not_tick_effect_or_cooldown_twice(self):
+        cast_at = timezone.now()
+        self._cast_crest(cast_at)
+        pulse_at = cast_at + timedelta(seconds=1)
+        kwargs = {"due_at": pulse_at, "cooldown_player_ids": {self.player.id}}
+        resolve_due_character_effects(**kwargs)
+        self.assertEqual(resolve_due_character_effects(**kwargs), [])
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.ability_cooldowns, {"crest": 2})
+        self.assertEqual(self.player.active_effects[0]["remaining_rounds"], 2)
+
+    def test_effect_batch_limit_defers_cooldown_with_effect_and_serves_oldest_next(self):
+        cast_at = timezone.now()
+        self._cast_crest(cast_at)
+        other = self.create_player("Other")
+        other.in_game = True
+        other.ability_cooldowns = {"crest": 3}
+        other.save(update_fields=["in_game", "ability_cooldowns"])
+        with patch("django.utils.timezone.now", return_value=cast_at + timedelta(milliseconds=1)):
+            create_active_effect(target=other, source=other, payload={
+                "effect": "crest", "remaining_rounds": 3,
+            })
+
+        def one_target(**kwargs):
+            return resolve_due_character_effects(limit=1, **kwargs)
+
+        for offset, expected in ((1, (2, 3)), (3, (2, 2))):
+            with (
+                patch("django.utils.timezone.now", return_value=cast_at + timedelta(seconds=offset)),
+                patch("spawns.actions.combat.resolve_due_character_effects", side_effect=one_target),
+            ):
+                run_game_heartbeat()
+            for player, remaining in zip((self.player, other), expected):
+                player.refresh_from_db()
+                self.assertEqual(player.ability_cooldowns, {"crest": remaining})
+                self.assertEqual(player.active_effects[0]["remaining_rounds"], remaining)
+
+    def test_combined_cooldown_adds_only_one_write_per_effect_target(self):
+        cast_at = timezone.now()
+        self._cast_crest(cast_at)
+        for index in range(5):
+            create_active_effect(target=self.player, source=self.player, payload={
+                "effect": f"buff-{index}", "remaining_rounds": 3,
+            })
+        pulse_at = cast_at + timedelta(seconds=2)
+        with CaptureQueriesContext(connection) as effect_queries:
+            resolve_due_character_effects(due_at=pulse_at)
+        with CaptureQueriesContext(connection) as combined_queries:
+            events = resolve_due_character_effects(
+                due_at=pulse_at + timedelta(seconds=2),
+                cooldown_player_ids={self.player.id},
+            )
+        # Player.save writes the cooldown and its existing post-save hook reads
+        # player configuration once. Neither cost grows with the six effects.
+        self.assertLessEqual(len(combined_queries), len(effect_queries) + 2)
+        cooldown_writes = [
+            query for query in combined_queries
+            if query["sql"].startswith('UPDATE "spawns_player"')
+            and '"ability_cooldowns"' in query["sql"]
+        ]
+        self.assertEqual(len(cooldown_writes), 1)
+        self.assertEqual(len([event for event in events if event.type == "player.abilities.update"]), 1)
+
+    def test_combined_cooldown_rolls_back_with_failed_effect_outbox_insert(self):
+        cast_at = timezone.now()
+        self._cast_crest(cast_at)
+        with (
+            patch("spawns.actions.combat.enqueue_game_events", side_effect=RuntimeError("insert failed")),
+            self.assertRaises(RuntimeError),
+        ):
+            resolve_due_character_effects(
+                due_at=cast_at + timedelta(seconds=1),
+                cooldown_player_ids={self.player.id},
+                persist_events=True,
+            )
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.ability_cooldowns, {"crest": 3})
+        self.assertEqual(self.player.active_effects[0]["remaining_rounds"], 3)
+
+    def test_active_combat_effects_do_not_use_detached_effect_batch_capacity(self):
+        cast_at = timezone.now()
+        self._cast_crest(cast_at)
+        mob = self.create_mob("Opponent", health=100, health_max=100)
+        create_combat_encounter(
+            world=self.spawn_world, room=self.room, player=self.player, mob=mob,
+        )
+        other = self.create_player("Outside combat")
+        other.in_game = True
+        other.save(update_fields=["in_game"])
+        create_active_effect(target=other, source=other, payload={
+            "effect": "crest", "remaining_rounds": 3,
+        })
+        resolve_due_character_effects(due_at=cast_at + timedelta(seconds=2), limit=1)
+        self.assertEqual(other.active_effects[0]["remaining_rounds"], 2)
+        self.assertEqual(self.player.active_effects[0]["remaining_rounds"], 3)
 
     def test_player_regen_restores_health_energy_and_stamina(self):
         stats = compute_stats(self.player.level, self.player.archetype, char=self.player)

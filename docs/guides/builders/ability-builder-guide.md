@@ -864,6 +864,13 @@ Use `character` for poison, bleeding, curses, regeneration, and other effects
 that should survive fleeing. Use `encounter` for effects whose meaning depends
 on the current opponents or fight state.
 
+Outside an active encounter, character effects and player cooldowns advance on
+the shared game heartbeat, normally every two seconds. New effects participate
+in the next heartbeat. Equal effect and cooldown round counts started together
+therefore count down together. This applies to periodic effects as well as buffs
+and barriers; `tick.every_rounds` counts these shared rounds. A world's
+`combat_resolution_interval` controls encounter pacing, not out-of-combat rounds.
+
 ## Damage-Over-Time
 
 Use `dot` for periodic damage:

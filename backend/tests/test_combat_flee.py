@@ -364,8 +364,9 @@ class TestCombatFlee(WorldTestCase):
         self.assertEqual(self.player.room_id, self.escape_room.id)
         self.assertEqual(encounter.status, CombatEncounter.STATUS_FINISHED)
         self.assertEqual(effect.remaining_rounds, 1)
-        self.assertGreater(effect.next_tick_ts, timezone.now())
-        self.assertEqual(resolve_due_character_effects(), [])
+        # The next shared heartbeat owns the remaining tick after fleeing.
+        self.assertLessEqual(effect.next_tick_ts, timezone.now())
+        self.assertEqual(resolve_due_character_effects(due_at=effect.next_tick_ts - timedelta(microseconds=1)), [])
         self.assertTrue(Mob.objects.filter(pk=mob.id).exists())
         effect.next_tick_ts = timezone.now() - timedelta(seconds=1)
         effect.save(update_fields=["next_tick_ts"])

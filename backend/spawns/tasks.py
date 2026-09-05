@@ -21,6 +21,7 @@ from django.utils import timezone
 from spawns.actions.doors import lock_door_state_for_movement
 from spawns.services import WorldGate
 from spawns.models import (
+    ActiveEffect,
     CombatEncounter,
     CombatParticipant,
     CraftingActionReceipt,
@@ -1214,6 +1215,21 @@ def run_game_heartbeat() -> dict[str, int]:
     active_combat_player_ids.update(tagged_player_ids)
     active_combat_mob_ids.update(tagged_mob_ids)
 
+    # Cooldowns on effect-bearing players advance in the same locked, bounded
+    # actor pulse as their effects. This also keeps both counters together when
+    # the effect batch is full, and publishes one consistent ability snapshot.
+    effect_player_ids = set(
+        ActiveEffect.objects.filter(
+            scope=ActiveEffect.SCOPE_CHARACTER,
+            remaining_rounds__gt=0,
+            world_id__in=active_world_ids,
+            world_id=F("target_player__world_id"),
+            target_player__in_game=True,
+        ).order_by().values_list("target_player_id", flat=True).distinct()
+    )
+    effect_player_cooldowns = {}
+    cooldown_player_ids = set()
+
     for player in active_players.iterator(chunk_size=200):
         actor_update = _regen_player(
             player,
@@ -1231,6 +1247,10 @@ def run_game_heartbeat() -> dict[str, int]:
                 },
             )
         if player.id not in active_combat_player_ids:
+            if player.id in effect_player_ids:
+                cooldown_player_ids.add(player.id)
+                effect_player_cooldowns[player.key] = player.ability_cooldowns
+                continue
             cooldowns_changed = decrement_ability_cooldowns(player)
             update_fields = []
             if cooldowns_changed:
@@ -1247,8 +1267,17 @@ def run_game_heartbeat() -> dict[str, int]:
     effect_events = resolve_due_character_effects(
         world_ids=active_world_ids,
         persist_events=True,
+        cooldown_player_ids=cooldown_player_ids,
     )
     if effect_events:
+        player_cooldowns_updated += len({
+            event.data["actor"]["key"]
+            for event in effect_events
+            if event.type == "player.abilities.update"
+            and event.data["actor"]["key"] in effect_player_cooldowns
+            and event.data["actor"]["ability_cooldowns"]
+            != effect_player_cooldowns[event.data["actor"]["key"]]
+        })
         player_effects_updated = len(
             {
                 recipient

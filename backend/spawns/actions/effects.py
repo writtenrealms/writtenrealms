@@ -10,8 +10,6 @@ from django.db.models import F, Q, QuerySet
 from django.utils import timezone
 
 from config import constants as adv_consts
-from config import game_settings as adv_config
-from core.world_config import inherited_system_config
 from spawns.models import ActiveEffect, CombatEncounter, Mob, Player
 
 
@@ -556,21 +554,6 @@ def _effect_actor_fields(actor: Player | Mob, *, prefix: str) -> dict[str, Any]:
     return {f"{prefix}_player": None, f"{prefix}_mob": actor}
 
 
-def _detached_interval_seconds(world) -> float:
-    config = inherited_system_config(world)
-    try:
-        combat_interval = float(getattr(config, "combat_resolution_interval", 0) or 0)
-    except (TypeError, ValueError):
-        combat_interval = 0
-    if combat_interval > 0:
-        return combat_interval
-    try:
-        heartbeat_interval = float(getattr(adv_config, "GAME_HEARTBEAT_INTERVAL_SECONDS", 2) or 2)
-    except (TypeError, ValueError):
-        heartbeat_interval = 2
-    return max(1.0, heartbeat_interval)
-
-
 def refresh_or_add_character_effect(
     target: Player | Mob,
     effect: dict[str, Any],
@@ -616,9 +599,7 @@ def refresh_or_add_character_effect(
         "tick": deepcopy(effect.get("tick") or {}),
         "source_snapshot": deepcopy(effect.get("source_snapshot") or _source_snapshot(source)),
         "is_hostile": _effect_is_hostile(effect),
-        "next_tick_ts": timezone.now() + timedelta(
-            seconds=_detached_interval_seconds(target.world)
-        ),
+        "next_tick_ts": next_character_effect_tick_ts(),
         "last_tick_ts": None,
         "last_tick_token": "",
     }
@@ -634,8 +615,17 @@ def refresh_or_add_character_effect(
     return action
 
 
-def next_character_effect_tick_ts(world):
-    return timezone.now() + timedelta(seconds=_detached_interval_seconds(world))
+def next_character_effect_tick_ts(*, after=None):
+    """Make an effect eligible for the next shared heartbeat round.
+
+    This is an eligibility watermark, not a per-effect round timer. A new
+    effect joins the next pulse; an advanced effect must wait for a strictly
+    later pulse cutoff. Scheduling from processing time plus an interval can
+    miss the following heartbeat and stretch each round under worker load.
+    """
+    if after is None:
+        return timezone.now()
+    return after + timedelta(microseconds=1)
 
 
 def advance_character_effect_durations(
@@ -645,6 +635,7 @@ def advance_character_effect_durations(
     encounter: CombatEncounter | None = None,
     due_at=None,
 ) -> bool:
+    pulse_at = due_at or timezone.now()
     queryset = _actor_effect_queryset(actor).filter(
         world=actor.world,
         scope=ActiveEffect.SCOPE_CHARACTER,
@@ -652,7 +643,7 @@ def advance_character_effect_durations(
         tick={},
     )
     if encounter is None:
-        queryset = queryset.filter(next_tick_ts__lte=due_at or timezone.now())
+        queryset = queryset.filter(next_tick_ts__lte=pulse_at)
     effects = list(queryset)
     changed = False
     for effect in effects:
@@ -676,7 +667,7 @@ def advance_character_effect_durations(
             effect.rounds_elapsed += 1
             effect.last_tick_token = current_round_id or effect.last_tick_token
             effect.last_tick_ts = timezone.now()
-            effect.next_tick_ts = next_character_effect_tick_ts(effect.world)
+            effect.next_tick_ts = next_character_effect_tick_ts(after=pulse_at)
             effect.save(
                 update_fields=[
                     "remaining_rounds",

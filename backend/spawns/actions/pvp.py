@@ -1501,7 +1501,7 @@ def _complete_ready_flee(
         context,
         preserve_flee_cost_for_player_id=player.id,
     )
-    next_effect_tick = next_character_effect_tick_ts(player.world)
+    next_effect_tick = next_character_effect_tick_ts()
     ActiveEffect.objects.filter(
         world=player.world,
         scope=ActiveEffect.SCOPE_CHARACTER,

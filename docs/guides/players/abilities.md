@@ -3,6 +3,16 @@
 Abilities remain known until you unlearn them. Worlds may grant starting
 abilities and may also provide training through a room or an NPC.
 
+## Cooldowns and Effect Duration
+
+Outside combat, cooldowns and active effects count down together on shared
+rounds, normally every two seconds. The first round is the next shared tick
+after you use an ability. A three-round buff with a three-round cooldown shows
+3, then 2, then 1 for both, and expires when the ability becomes ready again.
+An effect can still end sooner if it is removed or its barrier is used up.
+
+During combat, your encounter advances these rounds.
+
 ## Learning
 
 Use bare `learn` to see a numbered list of the abilities currently available

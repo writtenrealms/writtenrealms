@@ -8,6 +8,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from core.attack_routines import resolve_attack_routine
+from spawns.actions.effects import next_character_effect_tick_ts
 from spawns.ability_intents import prioritize_ready_interrupts
 from spawns.combat_encounters import (
     MAX_EVENTS, MAX_EFFECTS, actor_key, current_context, eligible, transact,
@@ -81,7 +82,7 @@ def leave_participant(context, participant, *, reason, refund=True):
     ActiveEffect.objects.filter(target_filter, scope=ActiveEffect.SCOPE_ENCOUNTER,
                                 encounter_id=participant.encounter_id).delete()
     ActiveEffect.objects.filter(target_filter, scope=ActiveEffect.SCOPE_CHARACTER).update(
-        next_tick_ts=timezone.now() + timedelta(seconds=1),
+        next_tick_ts=next_character_effect_tick_ts(),
     )
     for other in context.participants:
         if other.current_target_id == participant.pk:

@@ -154,6 +154,21 @@ target has no active encounter, an indexed, bounded actor-effect pulse advances
 due effects. This gives each target one clock and prevents re-engagement or
 multiple origin encounters from double-ticking the same effect.
 
+Outside encounters, a round is one shared game heartbeat. `next_tick_ts` is the
+earliest eligible pulse cutoff, not a private timer based on the world's combat
+interval. Application makes an effect eligible for the next pulse. Advancement
+sets the watermark just after the processed cutoff, so replaying that cutoff
+does no work and processing delays do not skip the next heartbeat. Delayed
+heartbeats advance one round, without a burst of catch-up periodic damage.
+
+For players with character effects, the same actor transaction advances eligible
+cooldowns and emits one combined ability-state snapshot through the outbox.
+The bounded, oldest-first effect batch defers both counters together when full.
+A batched lookup identifies these players; it avoids separate per-player timers
+and duplicate cooldown/effect snapshots. Players without effects retain ordinary
+heartbeat cooldown advancement. Active encounters and hostile-effect combat
+tags retain their existing cooldown ownership rules.
+
 ## Effect Primitives
 
 An active effect is made of one or more validated primitives. Each primitive has

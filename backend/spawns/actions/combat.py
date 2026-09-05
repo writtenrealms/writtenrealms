@@ -12,7 +12,7 @@ import uuid
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
 
 from config import constants as adv_consts
@@ -4309,6 +4309,7 @@ def _advance_character_periodic_effects(
     advance_player_character_effects: bool = True,
     locked_source_player_ids: set[int] | None = None,
 ) -> EffectAdvanceOutcome:
+    pulse_at = due_at or timezone.now()
     target_filter = Q()
     if target_player is not None:
         target_filter |= Q(target_player=target_player)
@@ -4340,7 +4341,7 @@ def _advance_character_periodic_effects(
     if encounter is not None:
         effect_queryset = effect_queryset.filter(world=encounter.world)
     if encounter is None:
-        effect_queryset = effect_queryset.filter(next_tick_ts__lte=due_at or timezone.now())
+        effect_queryset = effect_queryset.filter(next_tick_ts__lte=pulse_at)
     effects = list(effect_queryset)
     events: list[GameEvent] = []
     effects_changed = False
@@ -4480,7 +4481,7 @@ def _advance_character_periodic_effects(
             effect_row.rounds_elapsed = elapsed
             effect_row.last_tick_ts = timezone.now()
             effect_row.last_tick_token = tick_token
-            effect_row.next_tick_ts = next_character_effect_tick_ts(effect_row.world)
+            effect_row.next_tick_ts = next_character_effect_tick_ts(after=pulse_at)
             effect_row.save(
                 update_fields=[
                     "remaining_rounds",
@@ -4511,6 +4512,7 @@ def _resolve_detached_actor_effects(
     target_type: str,
     target_id: int,
     due_at,
+    advance_cooldowns: bool = False,
 ) -> list[GameEvent]:
     target_model = Player if target_type == "player" else Mob
     target_world_id = (
@@ -4625,7 +4627,18 @@ def _resolve_detached_actor_effects(
     }).exists():
         return []
 
-    pulse_id = f"effect-pulse:{target_type}:{target_id}:{int(due_at.timestamp())}"
+    # Another pulse may have consumed these rows while we acquired the actor
+    # locks. Do not advance its cooldown a second time on a replayed cutoff.
+    if not candidate_effects.exists():
+        return []
+
+    cooldowns_changed = False
+    if advance_cooldowns and isinstance(target, Player):
+        cooldowns_changed = decrement_ability_cooldowns(target)
+        if cooldowns_changed:
+            target.save(update_fields=["ability_cooldowns"])
+
+    pulse_id = f"effect-pulse:{target_type}:{target_id}:{due_at.isoformat()}"
     viewer = target_player or next(iter(locked_players.values()), None)
     outcome = _advance_character_periodic_effects(
         target_player=target_player,
@@ -4706,7 +4719,7 @@ def _resolve_detached_actor_effects(
         events.extend(death_events)
         clear_actor_effect_cache(updated_player)
         return events
-    if isinstance(target, Player) and (outcome.effects_changed or durations_changed):
+    if isinstance(target, Player) and (outcome.effects_changed or durations_changed or cooldowns_changed):
         events.append(_character_effect_state_event(target))
     return events
 
@@ -4717,8 +4730,10 @@ def resolve_due_character_effects(
     limit: int = 200,
     world_ids: Iterable[int] | None = None,
     persist_events: bool = False,
+    cooldown_player_ids: set[int] | None = None,
 ) -> list[GameEvent]:
     due_at = due_at or timezone.now()
+    cooldown_player_ids = cooldown_player_ids or set()
     due_effects = ActiveEffect.objects.filter(
         scope=ActiveEffect.SCOPE_CHARACTER,
         remaining_rounds__gt=0,
@@ -4749,6 +4764,16 @@ def resolve_due_character_effects(
         if not world_ids:
             return []
         due_effects = due_effects.filter(world_id__in=world_ids)
+    # Encounter-owned targets must not fill the bounded detached batch. Their
+    # active memberships are indexed; recheck after locking for combat entry.
+    due_effects = due_effects.filter(
+        ~Exists(CombatParticipant.objects.filter(
+            is_active=True, player_id=OuterRef("target_player_id"),
+        )),
+        ~Exists(CombatParticipant.objects.filter(
+            is_active=True, mob_id=OuterRef("target_mob_id"),
+        )),
+    )
     target_refs: list[tuple[str, int]] = []
     seen: set[tuple[str, int]] = set()
     ordered_targets = due_effects.order_by("next_tick_ts", "id").values_list(
@@ -4771,6 +4796,7 @@ def resolve_due_character_effects(
                 target_type=target_type,
                 target_id=target_id,
                 due_at=due_at,
+                advance_cooldowns=target_type == "player" and target_id in cooldown_player_ids,
             )
             if persist_events:
                 enqueue_game_events(target_events)
