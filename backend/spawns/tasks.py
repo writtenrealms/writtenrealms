@@ -20,6 +20,7 @@ from django.db.models import F, Q, Subquery
 from django.utils import timezone
 from spawns.actions.doors import lock_door_state_for_movement
 from spawns.services import WorldGate
+from spawns.instance_clock import serialized_world
 from spawns.models import (
     ActiveEffect,
     CombatEncounter,
@@ -107,6 +108,7 @@ def _defer_failed_follow_task(
     reject_on_worker_lost=True,
     max_retries=None,
 )
+@serialized_world(lambda self, event_data, **kwargs: event_data.get('runtime_world_id'))
 def propagate_follow_movement(
     self,
     event_data: dict,
@@ -127,6 +129,14 @@ def propagate_follow_movement(
         propagate_follow_movement_batch,
     )
 
+    from spawns.instance_clock import in_simulation, defer_work
+    runtime_id = event_data.get('runtime_world_id')
+    if not in_simulation(runtime_id) and defer_work(runtime_id, 'follow', {
+        'event_data': event_data, 'outbox_event_id': outbox_event_id,
+        'claim_token': claim_token, 'after_id': after_id,
+        'sweep_needs_retry': sweep_needs_retry, 'attempt': attempt,
+    }, key=f'follow:{outbox_event_id}:{after_id}:{attempt}' if outbox_event_id else None):
+        return 0
     if not extend_follow_outbox_lease(outbox_event_id, claim_token):
         # A newer heartbeat claim owns this row. This delayed task is fenced
         # out before it can move or acknowledge any followers.
@@ -960,12 +970,13 @@ def _try_roam_cohort(
 
 
 def run_mob_roaming(*, active_combat_mob_ids: set[int] | None = None) -> int:
+    from spawns.instance_clock import live_worlds
     active_combat_mob_ids = active_combat_mob_ids or set()
     running_worlds = list(
-        World.objects.filter(
+        live_worlds(World.objects.filter(
             context__isnull=False,
             lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
-        ).select_related(
+        ), world_field='id').select_related(
             "config",
             "context",
             "context__config",
@@ -1049,6 +1060,7 @@ def _apply_regen(
     health_add: int,
     energy_add: int,
     stamina_add: int,
+    persist: bool = True,
 ) -> bool:
     update_fields: list[str] = []
 
@@ -1070,7 +1082,8 @@ def _apply_regen(
     if not update_fields:
         return False
 
-    actor.save(update_fields=update_fields)
+    if persist:
+        actor.save(update_fields=update_fields)
     return True
 
 
@@ -1136,7 +1149,7 @@ def _regen_player(player: Player, *, in_combat: bool = False) -> dict[str, int |
     }
 
 
-def _regen_mob(mob: Mob, *, in_combat: bool = False) -> bool:
+def _regen_mob(mob: Mob, *, in_combat: bool = False, persist: bool = True) -> bool:
     health_max = _as_non_negative_int(getattr(mob, "health_max", mob.health), default=mob.health)
     energy_max = _as_non_negative_int(getattr(mob, "energy_max", mob.energy), default=mob.energy)
     stamina_max = _as_non_negative_int(getattr(mob, "stamina_max", mob.stamina), default=mob.stamina)
@@ -1162,10 +1175,76 @@ def _regen_mob(mob: Mob, *, in_combat: bool = False) -> bool:
         health_add=health_add,
         energy_add=energy_add,
         stamina_add=stamina_add,
+        persist=persist,
     )
 
 
-def run_game_heartbeat() -> dict[str, int]:
+def _publish_heartbeat_message(actor_key, message):
+    from spawns.instance_clock import capture_message
+    if not capture_message(actor_key, message):
+        publish_to_player(actor_key, message)
+
+
+def run_game_heartbeat(*, enqueue_instances=False) -> dict[str, int]:
+    from spawns.instance_clock import (
+        clock_guard, exclude_time_capable_worlds, in_simulation, scoped_world_id, world_scope,
+    )
+    from worlds.models import InstanceRun
+    if in_simulation() or scoped_world_id() is not None:
+        return _run_game_heartbeat()
+    worlds = InstanceRun.objects.filter(
+        time_control=True, time_paused=False,
+        spawned_world__lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
+    ).values_list('spawned_world_id', 'time_generation')
+    with exclude_time_capable_worlds():
+        result = _run_game_heartbeat()
+    for world_id, generation in worlds.iterator(chunk_size=200):
+        if enqueue_instances:
+            key = f'instance-heartbeat:{world_id}'
+            claim = uuid.uuid4().hex
+            if not cache.add(key, claim, timeout=_heartbeat_lock_timeout_seconds()):
+                continue
+            try:
+                pulse_instance_heartbeat.apply_async(
+                    kwargs={'world_id': world_id, 'expected_generation': generation, 'claim': claim},
+                    expires=_heartbeat_interval_seconds(),
+                )
+            except Exception:
+                if cache.get(key) == claim:
+                    cache.delete(key)
+                raise
+            continue
+        with clock_guard(world_id) as run:
+            if run is None or run.time_paused:
+                continue
+            with world_scope(world_id):
+                pulse = _run_game_heartbeat()
+            for key, value in pulse.items():
+                result[key] += value
+    return result
+
+
+@shared_task(ignore_result=True)
+def pulse_instance_heartbeat(world_id, expected_generation, claim):
+    """One ordinary pulse; queued delays never become a catch-up backlog."""
+    from spawns.instance_clock import clock_guard, world_scope
+    key = f'instance-heartbeat:{world_id}'
+    if cache.get(key) != claim:
+        return {'skipped': True}
+    try:
+        with clock_guard(world_id) as run:
+            if (run is None or run.time_paused or run.time_generation != expected_generation
+                or cache.get(key) != claim):
+                return {'skipped': True}
+            with world_scope(world_id):
+                return _run_game_heartbeat()
+    finally:
+        if cache.get(key) == claim:
+            cache.delete(key)
+
+
+def _run_game_heartbeat() -> dict[str, int]:
+    from spawns.instance_clock import live_worlds, in_simulation, gameplay_now, current_simulation, scoped_world_id
     from spawns.actions.abilities import ability_state_event, decrement_ability_cooldowns
     from spawns.actions.combat import resolve_due_character_effects
     from spawns.actions.effects import (
@@ -1181,16 +1260,17 @@ def run_game_heartbeat() -> dict[str, int]:
 
     # Recover any effects whose state committed before a previous worker died
     # while publishing their events.
-    flush_game_event_outbox(publisher=publish_events)
+    if not in_simulation() and scoped_world_id() is None:
+        flush_game_event_outbox(publisher=publish_events)
 
-    stale_pvp_events = reconcile_stale_pvp_encounters()
+    stale_pvp_events = [] if in_simulation() or scoped_world_id() is not None else reconcile_stale_pvp_encounters()
     if stale_pvp_events:
         publish_events(stale_pvp_events)
 
-    active_players = Player.objects.filter(
+    active_players = live_worlds(Player.objects.filter(
         in_game=True,
         world__lifecycle=api_consts.WORLD_LIFECYCLE_RUNNING,
-    ).only(
+    )).only(
         "id",
         "world_id",
         "level",
@@ -1211,9 +1291,15 @@ def run_game_heartbeat() -> dict[str, int]:
                                     .values_list('player_id', flat=True))
     active_combat_mob_ids = set(memberships.filter(mob_id__isnull=False)
                                .values_list('mob_id', flat=True))
-    tagged_player_ids, tagged_mob_ids = combat_tagged_actor_ids()
+    tagged_player_ids, tagged_mob_ids = combat_tagged_actor_ids(
+        world_ids=active_world_ids if in_simulation() or scoped_world_id() is not None else None,
+    )
     active_combat_player_ids.update(tagged_player_ids)
     active_combat_mob_ids.update(tagged_mob_ids)
+    simulation = current_simulation()
+    if simulation is not None:
+        active_combat_player_ids.update(int(key.split('.')[1]) for key in simulation.round_actor_keys if key.startswith('player.'))
+        active_combat_mob_ids.update(int(key.split('.')[1]) for key in simulation.round_actor_keys if key.startswith('mob.'))
 
     # Cooldowns on effect-bearing players advance in the same locked, bounded
     # actor pulse as their effects. This also keeps both counters together when
@@ -1237,7 +1323,7 @@ def run_game_heartbeat() -> dict[str, int]:
         )
         if actor_update:
             players_regenerated += 1
-            publish_to_player(
+            _publish_heartbeat_message(
                 player.key,
                 {
                     "type": "notification.regen",
@@ -1268,6 +1354,7 @@ def run_game_heartbeat() -> dict[str, int]:
         world_ids=active_world_ids,
         persist_events=True,
         cooldown_player_ids=cooldown_player_ids,
+        **({'due_at': gameplay_now()} if in_simulation() else {}),
     )
     if effect_events:
         player_cooldowns_updated += len({
@@ -1286,7 +1373,8 @@ def run_game_heartbeat() -> dict[str, int]:
                 for recipient in event.recipients
             }
         )
-        flush_game_event_outbox(publisher=publish_events)
+        if not in_simulation():
+            flush_game_event_outbox(publisher=publish_events)
 
     if active_world_ids:
         mobs_qs = (
@@ -1317,9 +1405,18 @@ def run_game_heartbeat() -> dict[str, int]:
     else:
         mobs_qs = Mob.objects.none()
 
+    bulk_regen = simulation is not None or scoped_world_id() is not None
+    regenerated_mobs = []
     for mob in mobs_qs.iterator(chunk_size=200):
-        if _regen_mob(mob, in_combat=mob.id in active_combat_mob_ids):
+        if _regen_mob(mob, in_combat=mob.id in active_combat_mob_ids, persist=not bulk_regen):
             mobs_regenerated += 1
+            if bulk_regen:
+                regenerated_mobs.append(mob)
+    if regenerated_mobs:
+        # The instance lock serializes gameplay, so resource-only recovery can
+        # be written in bounded batches without per-NPC saves. These fields do
+        # not affect admission or stat-cache signals.
+        Mob.objects.bulk_update(regenerated_mobs, ['health', 'energy', 'stamina'], batch_size=200)
 
     mobs_roamed = run_mob_roaming(active_combat_mob_ids=active_combat_mob_ids)
 
@@ -1341,7 +1438,7 @@ def _run_game_heartbeat_task() -> dict[str, int] | dict[str, bool]:
     if not cache.add(GAME_HEARTBEAT_LOCK_KEY, 1, timeout=lock_timeout):
         return {"skipped": True}
     try:
-        return run_game_heartbeat()
+        return run_game_heartbeat(enqueue_instances=True)
     finally:
         cache.delete(GAME_HEARTBEAT_LOCK_KEY)
 
@@ -1550,6 +1647,7 @@ def _publish_game_error(
 
 
 @shared_task
+@serialized_world('expected_world_id')
 def execute_trigger_script_segments(
     actor_type: str,
     actor_id: int,
@@ -1569,6 +1667,16 @@ def execute_trigger_script_segments(
     The optional defaults preserve compatibility with tasks queued before the
     runtime-context fields were introduced.
     """
+    from spawns.instance_clock import in_simulation, defer_work
+    if expected_world_id and not in_simulation(expected_world_id) and defer_work(
+        expected_world_id, 'script_segments', {
+            'actor_type': actor_type, 'actor_id': actor_id, 'segments': segments,
+            'issuer_scope': issuer_scope, 'connection_id': connection_id,
+            'expected_world_id': expected_world_id, 'expected_room_id': expected_room_id,
+            'script_command_depth': script_command_depth,
+        },
+    ):
+        return
     if expected_world_id is not None or expected_room_id is not None:
         actor_model = {
             "player": Player,
@@ -1744,8 +1852,52 @@ def reconcile_combat_room(state_id: int):
 
 
 @shared_task
+@serialized_world(lambda payload: payload.get('world_id'))
 def resolve_combat_tracker_chase(payload):
+    from spawns.instance_clock import defer_work, in_simulation
+    if not in_simulation(payload.get('world_id')) and defer_work(
+        payload.get('world_id'), 'tracker', payload,
+        key=f'tracker:{payload.get("chase_key")}' if payload.get('chase_key') else None,
+    ):
+        return
     from spawns.actions.mob_movement import ResolveTrackerChaseAction
     from spawns.events import publish_events
     result = ResolveTrackerChaseAction().execute(**payload)
     publish_events(result.events)
+
+
+@shared_task(ignore_result=True, acks_late=True)
+def continue_instance_work(run_id, expected_generation=None):
+    from spawns.instance_time import process_deferred_work
+    result = process_deferred_work(run_id=run_id, expected_generation=expected_generation)
+    flush_game_event_outbox(publisher=publish_events)
+    return result
+
+
+@shared_task(ignore_result=True)
+def resume_instance_schedulers(run_id, expected_generation):
+    from spawns.instance_clock import clock_guard
+    from spawns.instance_time import schedule_deferred_work
+    from spawns.models import PreparedGameAction
+    from worlds.models import InstanceRun
+    location = InstanceRun.objects.filter(pk=run_id, time_control=True).values_list('spawned_world_id', flat=True).first()
+    if location is None:
+        return
+    with clock_guard(location) as run:
+        if run.time_paused or run.time_generation != expected_generation:
+            return
+        from spawns.combat_commands import schedule
+        for encounter in CombatEncounter.objects.filter(world_id=location, status='active'):
+            schedule(encounter)
+        from spawns.actions.doors import _schedule_prepared_action
+        for action_id, deadline in PreparedGameAction.objects.filter(
+            runtime_world_id=location, status='pending',
+        ).values_list('pk', 'run_at'):
+            _schedule_prepared_action(action_id, deadline, world_id=location)
+        schedule_deferred_work(run)
+
+
+@shared_task(ignore_result=True)
+def recover_instance_time():
+    from spawns.instance_time import recover_due_instances
+    return recover_due_instances()

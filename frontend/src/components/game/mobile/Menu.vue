@@ -28,7 +28,7 @@
 import { computed } from "vue";
 import { useStore } from "vuex";
 import QuestLog from "@/components/game/QuestLog.vue";
-import { FormElement } from "@/core/forms.ts";
+import Settings from "@/components/game/Settings.vue";
 import { onOutsideClick } from "@/composables/onOutsideClick";
 import WorldMap from "@/components/game/WorldMap.vue";
 
@@ -46,42 +46,8 @@ const onClickQuestLog = () => {
 };
 
 const onClickSettings = () => {
-  const schema: FormElement[] = [
-    {
-      attr: "room_brief",
-      label: "Room Brief Mode",
-      widget: "checkbox",
-      help: `In room brief mode, room descriptions are only shown when using the 'look' command. For other actions, such as moving or fleeing, they will not.`,
-    },
-    {
-      attr: "combat_brief",
-      label: "Combat Brief Mode",
-      widget: "checkbox",
-      help: `In combat brief mode, the combat text is abbreviated and indented so that it can be scanned more quickly.`,
-    },
-  ];
-
-  if (world.value.is_multiplayer) {
-    schema.push({
-      attr: "idle_logout",
-      label: "Idle Auto-Logout",
-      widget: "checkbox",
-      help: `Whether to automatically log out after 10 minutes of inactivity.`,
-    });
-  }
-
-  schema.push({
-    attr: "mobile_map_width",
-    label: "Map Width",
-  })
-
-  store.commit('ui/modal/open_form', {
-    title: `Edit Preferences`,
-    data: store.state.game.player_config,
-    schema: schema,
-    action: "game/save_player_config",
-  });
   emit("closeMenu");
+  store.commit("ui/modal/open_view", { component: Settings });
 };
 
 const onClickMap = () => {

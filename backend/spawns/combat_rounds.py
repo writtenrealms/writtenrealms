@@ -215,13 +215,20 @@ def resolve_locked(context, encounter, *, auto_advance, expected_round=None,
     from spawns.combat_publication import snapshot_event
     combat = _combat()
     empty = lambda active=False: combat.CombatStepResult(None, [], active)
+    from spawns.instance_clock import current_simulation, gameplay_now, in_simulation
+    run = next((r for r in context.runs.values() if r.spawned_world_id == encounter.world_id), None)
+    if run and run.time_control:
+        from spawns.instance_clock_transitions import synchronize_combat_pause
+        synchronize_combat_pause(run)
+    if run and run.time_paused and not in_simulation(encounter.world_id):
+        return empty(encounter.status == CombatEncounter.STATUS_ACTIVE)
     if encounter.status != CombatEncounter.STATUS_ACTIVE:
         return empty()
     if (expected_round is not None and expected_round != encounter.round_number) or (
         expected_generation is not None and expected_generation != encounter.schedule_generation
     ):
         return empty(True)
-    now = timezone.now()
+    now = gameplay_now(encounter.world)
     from config import constants
     if encounter.duel_match_id:
         match = context.matches.get(encounter.duel_match_id)
@@ -266,6 +273,9 @@ def resolve_locked(context, encounter, *, auto_advance, expected_round=None,
     ):
         return empty(True)
     encounter.round_number += 1
+    simulation = current_simulation()
+    if simulation is not None:
+        simulation.round_actor_keys.update(p.actor_key for p in members)
     encounter.last_resolution_ts = now
     round_id = f'encounter:{encounter.pk}:{encounter.round_number}'
     context.rng = random.Random(f'{encounter.random_seed}:{encounter.round_number}')

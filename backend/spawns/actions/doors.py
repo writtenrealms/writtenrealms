@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from spawns.instance_clock import serialized_world
+
 from dataclasses import dataclass
 from datetime import timedelta
 import uuid
@@ -12,6 +14,7 @@ from config import game_settings as adv_config
 from spawns.ability_prepare_state import active_prepared_ability_slugs
 from spawns.actions.base import ActionError, ActionResult
 from spawns.events import GameEvent, enqueue_game_events, flush_game_event_outbox
+from spawns.instance_clock import gameplay_now, is_time_controlled, live_worlds
 from spawns.models import DoorState, Item, Player, PreparedGameAction
 from spawns.request_segments import normalize_request_segment
 from spawns.state_payloads import room_payload_key_for
@@ -748,7 +751,9 @@ def _started_result(
     return ActionResult(events=events, data={"action_id": action.id})
 
 
-def _schedule_prepared_action(action_id: int, run_at) -> None:
+def _schedule_prepared_action(action_id: int, run_at, *, world_id: int) -> None:
+    if is_time_controlled(world_id):
+        return
     def enqueue() -> None:
         from spawns.tasks import resolve_prepared_game_action
 
@@ -935,7 +940,7 @@ def execute_player_door_command(
                 if command == "close"
                 else PreparedGameAction.ACTION_LOCK_DOOR
             )
-            run_at = timezone.now() + timedelta(seconds=DOOR_ACTION_DELAY_SECONDS)
+            run_at = gameplay_now(player.world_id) + timedelta(seconds=DOOR_ACTION_DELAY_SECONDS)
             try:
                 with transaction.atomic():
                     action = PreparedGameAction.objects.create(
@@ -981,7 +986,9 @@ def execute_player_door_command(
                     "_event_text": result.events[0].text,
                 }
                 action.save(update_fields=["result", "modified_ts"])
-                _schedule_prepared_action(action.id, action.run_at)
+                _schedule_prepared_action(
+                    action.id, action.run_at, world_id=action.runtime_world_id,
+                )
             return result
 
         new_state = {
@@ -1263,15 +1270,19 @@ def _completion_cancel_reason(
     return None
 
 
+@serialized_world(lambda action_id, **kwargs: PreparedGameAction.objects.filter(pk=action_id).values_list('runtime_world_id', flat=True).first())
 def resolve_prepared_door_action(
     action_id: int,
     *,
     now=None,
 ) -> str | None:
     """Resolve one durable wind-up. Safe to call repeatedly or concurrently."""
-    due_at = now or timezone.now()
+    due_at = now or gameplay_now()
     candidate = (
-        PreparedGameAction.objects.filter(pk=action_id)
+        live_worlds(
+            PreparedGameAction.objects.filter(pk=action_id),
+            world_field="runtime_world_id",
+        )
         .values("player_id")
         .first()
     )
@@ -1349,7 +1360,9 @@ def resolve_prepared_door_action(
         events = _correlate_action_actor_event(events, action)
         actor_event = events[0]
         action.status = PreparedGameAction.STATUS_COMPLETED
-        action.completed_ts = due_at
+        # Completion receipts are retained using real time, independently of
+        # the gameplay deadline that made this action due.
+        action.completed_ts = timezone.now()
         action.result = {
             **actor_event.data,
             "_event_type": actor_event.type,
@@ -1372,14 +1385,21 @@ def process_due_prepared_door_actions(
     *,
     limit: int = 100,
     now=None,
+    world_id: int | None = None,
 ) -> dict[str, int]:
     row_limit = max(1, min(int(limit or 1), MAX_DUE_DOOR_ACTIONS))
-    due_at = now or timezone.now()
-    candidate_ids = list(
+    due_at = now or gameplay_now(world_id)
+    candidates = live_worlds(
         PreparedGameAction.objects.filter(
             status=PreparedGameAction.STATUS_PENDING,
             run_at__lte=due_at,
-        )
+        ),
+        world_field="runtime_world_id",
+    )
+    if world_id is not None:
+        candidates = candidates.filter(runtime_world_id=world_id)
+    candidate_ids = list(
+        candidates
         .order_by("run_at", "id")
         .values_list("id", flat=True)[:row_limit]
     )

@@ -28,6 +28,8 @@ INSTANCE_INHERITED_CONFIG_FIELDS = {
 }
 
 INSTANCE_LOCAL_CONFIG_FIELDS = {
+    "instance_single_player",
+    "instance_time_control",
     "built_by",
     "death_currency",
     "death_currency_penalty",
@@ -61,6 +63,8 @@ INSTANCE_INHERITED_MANIFEST_FIELDS = {
 }
 
 INSTANCE_LOCAL_MANIFEST_FIELDS = {
+    "instance_single_player",
+    "instance_time_control",
     "built_by",
     "death_currency",
     "death_currency_penalty",
@@ -80,6 +84,27 @@ INSTANCE_LOCAL_MANIFEST_FIELDS = {
     "small_background",
     "starting_room",
 }
+
+
+def validate_instance_control_config(*, world, config, updates):
+    """Validate partial authoring updates against the effective local policy."""
+    single_player = updates.get(
+        "instance_single_player", getattr(config, "instance_single_player", False)
+    )
+    time_control = updates.get(
+        "instance_time_control", getattr(config, "instance_time_control", False)
+    )
+    if (single_player or time_control) and (
+        not getattr(world, "instance_of_id", None)
+        or getattr(world, "context_id", None)
+    ):
+        raise ValueError(
+            "Single-player and time control are only configurable for instance templates."
+        )
+    if time_control and not single_player:
+        raise ValueError("Instance time control requires a single-player instance.")
+    if single_player and updates.get('pvp_mode', getattr(config, 'pvp_mode', None)) == 'match':
+        raise ValueError('Single-player instances cannot use PvP match mode.')
 
 
 def inherited_system_world(world: Any | None) -> Any | None:

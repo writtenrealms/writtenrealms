@@ -1,7 +1,10 @@
 from datetime import timedelta
+from spawns.instance_clock import serialized_world
+
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
+from spawns.instance_clock import gameplay_now, in_simulation, is_time_controlled, time_control_run
 
 from worlds.models import (
     Door,
@@ -64,7 +67,7 @@ def _initialize_door_reset_schedules(*, world, zones):
             }
             # Start this chunk's interval only after its rows are locked. A
             # queued world start must not commit an already-due short policy.
-            initialized_at = timezone.now()
+            initialized_at = gameplay_now(world)
             missing_schedules = []
             changed_schedules = []
             for zone in fixed_zones:
@@ -142,7 +145,7 @@ def _process_door_reset_schedule_batch(
             schedule.zone_id: schedule
             for schedule in schedules
         }
-        batch_now = timezone.now()
+        batch_now = gameplay_now(world)
         missing_schedules = []
         changed_schedules = []
         due_zone_ids = []
@@ -234,6 +237,7 @@ def _process_door_reset_schedule_batch(
         return door_rows
 
 
+@serialized_world(lambda *, world, **kwargs: world)
 def run_spawn_plans_for_world(world, zone_id=None, initial=False, repopulate=False):
     """
     Process WR2 spawn plans for a spawn world and reset doors when a zone is due.
@@ -246,6 +250,8 @@ def run_spawn_plans_for_world(world, zone_id=None, initial=False, repopulate=Fal
         'doors': [],
         'spawn_plans': [],
     }
+    if not initial and is_time_controlled(world) and not in_simulation(world):
+        return output
     from spawns.spawn_plans import SpawnReconcileContext, run_spawn_plans
 
     reconcile_context = SpawnReconcileContext(
@@ -290,7 +296,7 @@ def run_spawn_plans_for_world(world, zone_id=None, initial=False, repopulate=Fal
                 "policy_version",
             )
         }
-    schedule_check_ts = timezone.now()
+    schedule_check_ts = gameplay_now(world)
     reset_doorway_ids = set()
     candidate_zone_ids = sorted(
         zone.id
@@ -347,8 +353,13 @@ def run_spawn_plans_for_world(world, zone_id=None, initial=False, repopulate=Fal
             )
         )
 
-    world.last_spawn_plan_run_ts = timezone.now()
+    world.last_spawn_plan_run_ts = gameplay_now(world)
     world.save(update_fields=['last_spawn_plan_run_ts'])
+
+    if initial and time_control_run(world):
+        from spawns.merchants import initialize_controlled_room_merchants
+
+        initialize_controlled_room_merchants(world)
 
     return output
 
@@ -369,6 +380,12 @@ def repopulate_spawn_plans_for_zone(
 
     if not world.context:
         raise TypeError("Can only repopulate spawn plans on spawn worlds.")
+
+    if is_time_controlled(world) and not in_simulation(world):
+        return {
+            'doors': {'requested': bool(reset_doors), 'doorways_checked': 0, 'door_states_reset': 0},
+            'spawn_plans': [],
+        }
 
     zone = Zone.objects.filter(
         pk=zone_id,
@@ -414,6 +431,6 @@ def repopulate_spawn_plans_for_zone(
             ),
         ),
     }
-    world.last_spawn_plan_run_ts = timezone.now()
+    world.last_spawn_plan_run_ts = gameplay_now(world)
     world.save(update_fields=['last_spawn_plan_run_ts'])
     return output

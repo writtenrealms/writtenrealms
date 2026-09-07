@@ -121,6 +121,31 @@ quest_arc_template_detail = QuestArcTemplateDetailView.as_view()
 class QuestRuntimeView(APIView):
     permission_classes = (IsAuthenticated, IsPlayerInGame)
 
+    def prepare_turn(self, request, args):
+        from spawns.actions.base import ActionError
+        from spawns.handlers.base import CommandContext
+        from spawns.instance_clock import is_time_controlled
+        from spawns.instance_time import prepare_command, snapshot_for_player
+
+        player = request.player
+        if not is_time_controlled(player.world):
+            return None
+        ctx = CommandContext(
+            actor=player, actor_type='player', actor_id=player.pk,
+            actor_key=player.key, player=player, world=player.world,
+            room=player.room,
+            payload={'args': args, 'raw_text': 'quest ' + ' '.join(args)},
+        )
+        try:
+            prepare_command(ctx, 'quest')
+        except ActionError as exc:
+            raise QuestRuntimeError(exc.message, code=exc.code) from exc
+        return Response({
+            'prepared': True,
+            'time_control': snapshot_for_player(player),
+            'text': 'Prepared: quest ' + ' '.join(args) + '.',
+        }, status=status.HTTP_202_ACCEPTED)
+
     def handle_exception(self, exc):
         if isinstance(exc, QuestRuntimeError):
             return Response(
@@ -135,6 +160,9 @@ class QuestRuntimeView(APIView):
 
 class QuestOpportunityAcceptView(QuestRuntimeView):
     def post(self, request, slug, format=None):
+        prepared = self.prepare_turn(request, ['accept', slug])
+        if prepared is not None:
+            return prepared
         opportunities = {op["slug"]: op for op in list_opportunities(request.player, refresh=True)}
         if slug not in opportunities:
             raise QuestRuntimeError("Quest opportunity was not found.", code="opportunity_not_found")
@@ -174,6 +202,9 @@ class QuestInstanceInfoView(QuestRuntimeView):
 
 class QuestInstanceAbandonView(QuestRuntimeView):
     def post(self, request, instance_id, format=None):
+        prepared = self.prepare_turn(request, ['abandon', str(instance_id)])
+        if prepared is not None:
+            return prepared
         result = abandon_instance(request.player, str(instance_id))
         publish_events(result.events, actor_key=request.player.key)
         payload, info_text = info_for_player(request.player, str(result.quest_instance.id))
@@ -184,6 +215,11 @@ class QuestInstanceChooseView(QuestRuntimeView):
     def post(self, request, instance_id, format=None):
         serializer = quest_serializers.QuestInstanceChoiceSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        prepared = self.prepare_turn(request, [
+            'choose', str(instance_id), serializer.validated_data['choice_id'],
+        ])
+        if prepared is not None:
+            return prepared
         result = choose_for_instance(
             request.player,
             str(instance_id),

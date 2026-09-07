@@ -8,11 +8,13 @@
       </div>
       <div id="console-bottom"></div>
     </div>
+    <TimeControl />
     <Input />
   </div>
 </template>
 
 <script setup lang="ts">
+import TimeControl from "@/components/game/TimeControl.vue";
 import { watch, nextTick, computed } from 'vue';
 import { useStore } from 'vuex';
 import Input from './Input.vue';

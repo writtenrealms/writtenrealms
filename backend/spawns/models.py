@@ -975,6 +975,22 @@ class DuelParticipant(BaseModel):
         ]
 
 
+class InstanceClockWork(models.Model):
+    """Durable reactions deferred until the owning instance advances."""
+    id = models.BigAutoField(primary_key=True)
+    world = models.ForeignKey('worlds.World', on_delete=models.CASCADE)
+    kind = models.CharField(max_length=32)
+    payload = models.JSONField(default=dict)
+    dedupe_key = models.CharField(max_length=160, unique=True)
+    due_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    class Meta:
+        indexes = [models.Index(
+            fields=['world', 'due_at', 'id'], name='spawns_clock_work_due_idx',
+            condition=~models.Q(kind__in=['advance_receipt', 'trigger_gate']),
+        )]
+
+
 class CombatEncounter(BaseModel):
     STATUS_ACTIVE = "active"
     STATUS_PAUSED = "paused"
@@ -1487,6 +1503,10 @@ class ScheduledTriggerRun(AdventBaseModel):
                 name='spawn_trigger_run_due_idx',
             ),
             models.Index(
+                fields=['runtime_world', 'status', 'next_run_ts'],
+                name='spawn_trigger_world_due_idx',
+            ),
+            models.Index(
                 fields=['status', 'modified_ts', 'id'],
                 name='spawn_trigger_run_prune_idx',
             ),
@@ -1827,6 +1847,7 @@ class MerchantRuntime(AdventBaseModel):
         indexes = [
             models.Index(fields=['is_active']),
             models.Index(fields=['next_restock_ts']),
+            models.Index(fields=['world', 'next_restock_ts'], name='spawns_shop_world_restock_idx'),
         ]
         constraints = [
             models.CheckConstraint(
@@ -2151,6 +2172,10 @@ class PreparedGameAction(AdventBaseModel):
             models.Index(
                 fields=['status', 'run_at', 'id'],
                 name='spawn_prepared_due_idx',
+            ),
+            models.Index(
+                fields=['runtime_world', 'status', 'run_at'],
+                name='spawn_prepared_world_due_idx',
             ),
             models.Index(
                 fields=['status', 'modified_ts', 'id'],

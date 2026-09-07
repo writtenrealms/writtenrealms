@@ -11,6 +11,7 @@ from quests.models import (
     QuestInstance,
     QuestJournalEntry,
     QuestObjectiveState,
+    QuestOfferState,
 )
 from quests.services.engine import get_step, serialize_instance
 
@@ -87,7 +88,11 @@ def _completed_instances(player, *, repeatable: bool):
     else:
         qs = qs.filter(template__repeatability_mode="never")
         limit = QUEST_LOG_RESOLVED_LIMIT
-    qs = qs.order_by("-resolved_at", "-modified_ts", "-created_ts", "-pk")
+    qs = qs.annotate(_cooldown_anchor=Subquery(
+        QuestOfferState.objects.filter(
+            player=player, template_id=OuterRef('template_id'),
+        ).values('last_resolved_at')[:1]
+    )).order_by("-resolved_at", "-modified_ts", "-created_ts", "-pk")
     instances = list(_with_serialization_data(qs)[:limit + 1])
     return instances[:limit], len(instances) > limit
 
@@ -119,7 +124,7 @@ def _repeatability_payload(instance: QuestInstance, *, now) -> dict:
     if mode != "cooldown" or not instance.resolved_at:
         return payload
 
-    ready_at = instance.resolved_at + timedelta(seconds=cooldown_seconds)
+    ready_at = (getattr(instance, '_cooldown_anchor', None) or instance.resolved_at) + timedelta(seconds=cooldown_seconds)
     remaining_seconds = max(0, ceil((ready_at - now).total_seconds()))
     payload.update(
         state="waiting" if remaining_seconds else "ready",
@@ -183,7 +188,9 @@ def build_quest_log(player, *, now=None) -> dict:
     current template policy determines the bucket and readiness, so builder
     changes take effect without rewriting historical quest instances.
     """
-    now = now or timezone.now()
+    from spawns.instance_clock import gameplay_now
+
+    now = now or gameplay_now(player.world)
     active, active_truncated = _active_instances(player)
     repeatable, repeatable_truncated = _completed_instances(player, repeatable=True)
     resolved, resolved_truncated = _completed_instances(player, repeatable=False)

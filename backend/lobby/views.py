@@ -515,6 +515,10 @@ class WorldCharacters(WorldLobbyBase,
         )
 
     def perform_create(self, serializer):
+        if self.world.instance_of_id:
+            raise ValidationError(
+                'Create your character in the base world, then enter the instance.'
+            )
         # Create a new spawn world, or get one if it's a multiplayer world
         # that's already been spawned.
         if self.world.is_multiplayer:

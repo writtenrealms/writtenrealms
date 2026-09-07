@@ -307,6 +307,30 @@ class TextCommandHandler(CommandHandler):
             )
         return True
 
+    def _resolve_hotkey(self, ctx: CommandContext):
+        if ctx.actor_type != "player" or ctx.player is None:
+            return None
+        from spawns.actions.abilities import resolve_ability_for_hotkey
+
+        ability = resolve_ability_for_hotkey(ctx.player, ctx.payload["command"])
+        if ability is None or ctx.script_source:
+            return ability
+        verb = next((str(value).strip() for value in ability.command_verbs or []
+                     if str(value or "").strip()), ability.slug)
+        resolved = " ".join([verb, *ctx.payload["args"]])
+        # Preparation and later execution share this payload. Echo once when
+        # preparing, and only update it if the binding changed before execution.
+        if ctx.payload.get("_hotkey_resolution") != resolved:
+            original = ctx.payload["raw_text"]
+            ctx.publish({
+                "type": "cmd.ability.hotkey.resolve",
+                "text": f"{original} -> {resolved}",
+                "echo": True,
+                "data": {"command": original, "resolved": resolved, **_request_correlation(ctx)},
+            })
+            ctx.payload["_hotkey_resolution"] = resolved
+        return ability
+
     def handle(self, ctx: CommandContext) -> None:
         cmd_text = ctx.payload.get("text", "")
         command, args, raw_text = _parse_text_command(cmd_text)
@@ -353,10 +377,14 @@ class TextCommandHandler(CommandHandler):
                     }
                 )
             else:
+                hotkey_ability = self._resolve_hotkey(ctx)
+                from spawns.instance_time import prepare_command
+                if prepare_command(ctx, 'text'):
+                    return
                 if ctx.actor_type in ("player", "mob"):
                     from spawns.handlers.abilities import handle_dynamic_ability_command
 
-                    if handle_dynamic_ability_command(ctx):
+                    if handle_dynamic_ability_command(ctx, hotkey_ability=hotkey_ability):
                         return
 
                     if not ctx.payload.get("skip_triggers"):
@@ -444,4 +472,5 @@ class TextCommandHandler(CommandHandler):
         elif handler.command_type == "help" and args:
             ctx.payload["target"] = args[0]
 
-        handler.handle(ctx)
+        from spawns.handlers.registry import execute_handler
+        execute_handler(handler, ctx)

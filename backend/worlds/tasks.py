@@ -11,6 +11,7 @@ from config import game_settings as adv_config
 from fastapi_app.forge_ws import complete_job, exit_world as notify_exit_world
 from spawns.models import Player
 from spawns.loading import run_spawn_plans_for_world
+from spawns.instance_clock import is_time_controlled, live_worlds
 from spawns.services import WorldGate
 from users.models import User
 from worlds.models import InstanceRun, World
@@ -59,6 +60,10 @@ def _disconnect_idle_player(player, spawn_world):
 
 
 def _disconnect_idle_players(spawn_world) -> int:
+    # Choosing when to advance may deliberately take arbitrarily long. An
+    # online owner in a controlled run is not an abandoned instance.
+    if is_time_controlled(spawn_world):
+        return 0
     now = timezone.now()
     disconnected_players = 0
     players_in_world = Player.objects.filter(
@@ -216,6 +221,12 @@ def monitor_worlds():
         lifecycle=constants.WORLD_LIFECYCLE_RUNNING,
         lifecycle_change_ts__isnull=False,)
 
+    from django.db.models import Exists, OuterRef
+    from worlds.models import InstanceRun
+    running_worlds = running_worlds.exclude(Exists(InstanceRun.objects.filter(
+        spawned_world_id=OuterRef('pk'), time_control=True, time_paused=True,
+        owner__in_game=True, owner__world_id=OuterRef('pk'),
+    )))
     for spawn_world in running_worlds:
         logger.info("#### Examining world %s" % spawn_world.key)
 
@@ -296,10 +307,10 @@ def run_world_spawn_plans():
         return {'skipped': True}
 
     try:
-        spawn_worlds = World.objects.filter(
+        spawn_worlds = live_worlds(World.objects.filter(
             context__isnull=False,
             lifecycle=constants.WORLD_LIFECYCLE_RUNNING,
-        ).select_related('config')
+        ).select_related('config'), world_field='id')
 
         processed = 0
         for spawn_world in spawn_worlds.iterator(chunk_size=100):

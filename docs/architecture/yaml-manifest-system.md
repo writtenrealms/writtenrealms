@@ -322,6 +322,12 @@ Current required mappings:
   deterministic lowercase `instance_slug` that is unique within that base
   family, and use `instance.<instance_slug>` as its bundle scope. Do not use a
   WR1 world database id as a bundle ref.
+- WR2 instance world documents can opt into `spec.instance_single_player`
+  and `spec.instance_time_control`. Time control requires single-player;
+  both default to false. These are authored instance-template permissions,
+  not player preferences or live run state. The optional WR1 converter must
+  not infer ownership, paused clocks, or player settings from runtime data;
+  emit these permissions only when explicitly selected by the builder.
 - Put `metadata.world_ref` on every converted content document so a local ref
   such as `room@1` is resolved in the correct converted world. The same
   relative room id may legitimately occur in the base world and an instance

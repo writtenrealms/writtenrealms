@@ -1,5 +1,6 @@
 from tests.combat_fixtures import create_combat_encounter, combat_member, save_combat_fixture, refresh_combat_fixture, dispatch_and_drain_combat
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.utils import timezone
 from django.urls import reverse
@@ -1100,7 +1101,8 @@ class TestQuestRepeatabilityRuntime(QuestRuntimeTestCase):
         with capture_game_messages():
             dispatch_and_drain_combat(self.player.id, "quest accept cooldown_trial")
 
-        with capture_game_messages():
+        completed_at = timezone.now()
+        with capture_game_messages(), patch('django.utils.timezone.now', return_value=completed_at):
             dispatch_and_drain_combat(self.player.id, "quest choose cooldown_trial finish")
 
         self.assertNotIn(
@@ -1113,13 +1115,21 @@ class TestQuestRepeatabilityRuntime(QuestRuntimeTestCase):
             template__slug="cooldown_trial",
             status="resolved",
         )
-        quest_instance.resolved_at = timezone.now() - timedelta(seconds=61)
-        quest_instance.save(update_fields=["resolved_at", "modified_ts"])
-
-        self.assertIn(
-            "cooldown_trial",
-            [opportunity["slug"] for opportunity in list_opportunities(self.player, refresh=True)],
-        )
+        # Advance the clock rather than rewriting audit history. The cooldown
+        # anchor follows gameplay time and may have been rebased on entering
+        # or leaving a controlled instance while resolved_at remains unchanged.
+        with patch('django.utils.timezone.now', return_value=completed_at + timedelta(seconds=59)):
+            self.assertNotIn(
+                "cooldown_trial",
+                [opportunity["slug"] for opportunity in list_opportunities(self.player, refresh=True)],
+            )
+        with patch('django.utils.timezone.now', return_value=completed_at + timedelta(seconds=60)):
+            self.assertIn(
+                "cooldown_trial",
+                [opportunity["slug"] for opportunity in list_opportunities(self.player, refresh=True)],
+            )
+        quest_instance.refresh_from_db()
+        self.assertEqual(quest_instance.resolved_at, completed_at)
 
 
 class TestQuestRuntimeEndpoints(QuestRuntimeTestCase):

@@ -4,6 +4,8 @@ import hashlib
 import json
 import copy
 import random
+from spawns.instance_clock import serialized_world
+
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -25,6 +27,7 @@ from builders.models import (
 from builders.loot_tables import merge_loot_tables
 from config import constants as adv_consts
 from core.condition_dsl import ConditionContext, evaluate_condition
+from spawns.instance_clock import gameplay_now, in_simulation, is_time_controlled
 from core.mob_traits import (
     apply_numeric_modifiers,
     normalize_trait_table,
@@ -1666,9 +1669,10 @@ def _plan_is_due(*, run: SpawnPlanRun, initial: bool, repopulate: bool) -> bool:
         deadline = run.last_reconciled_at + timedelta(seconds=seconds)
     except (OverflowError, TypeError):
         return False
-    return timezone.now() >= deadline
+    return gameplay_now(run.spawn_world_id) >= deadline
 
 
+@serialized_world(lambda *, spawn_world, **kwargs: spawn_world)
 def reconcile_spawn_plan(
     *,
     spawn_world: World,
@@ -1679,6 +1683,8 @@ def reconcile_spawn_plan(
 ) -> dict[str, Any]:
     if not spawn_world.context:
         raise TypeError("Can only run spawn plans on spawn worlds.")
+    if not initial and is_time_controlled(spawn_world) and not in_simulation(spawn_world):
+        return {"plan": plan.slug, "placements": 0, "spawned": 0, "skipped": True}
     with transaction.atomic():
         plan = SpawnPlan.objects.select_for_update().select_related("zone", "world").get(pk=plan.pk)
         if not plan.is_active:
@@ -1777,7 +1783,7 @@ def reconcile_spawn_plan(
                 reconcile_context=reconcile_context,
             ))
         if is_due:
-            run.last_reconciled_at = timezone.now()
+            run.last_reconciled_at = gameplay_now(spawn_world)
             run.save(update_fields=["last_reconciled_at", "modified_ts"])
         return {
             "plan": plan.slug,

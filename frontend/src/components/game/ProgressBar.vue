@@ -1,14 +1,15 @@
 <template>
   <div class="progress-bar">
-    <div class="progress-fill" ref="progress" :style="{width: initialWidth}"></div>
+    <div class="progress-fill" ref="progress" :style="{width: controlledWidth ?? initialWidth}"></div>
     <div class="progress-label">{{ label }}</div>
   </div>
 </template>
 
 <script lang='ts' setup>
-import { ref, onMounted } from "vue";
+import { computed, ref, onMounted, onUnmounted, watch } from "vue";
 import { useStore } from "vuex";
 import { gsap } from "gsap";
+import { simulationTimeMs } from "@/core/instanceTimeControl";
 
 const store = useStore();
 
@@ -22,63 +23,39 @@ const props = defineProps<{
 
 const initialWidth = ref('0');
 const progress = ref<HTMLElement | null>(null);
-
-
-if (props.method === 'channel') {
-  initialWidth.value = '100%';
-}
-
-onMounted(() => {
-  const progressElement = progress.value as HTMLElement;
-
-  let duration = props.duration * 1000;
-  let perc = 0;
-  if (props.start) {
-    const current = new Date().getTime();
-    const elapsed = current - props.start;
-    duration = duration - elapsed;
-    perc = Math.round((100 * elapsed) / duration);
-  }
-
-  if (duration < 0) return;
-
-  // Since we don't want to re-animate this every time it's mounted
-  // we mark it as started and then don't re-start it if it's
-  // already complete.
-  // Would be more robust for tabbing away and back on mobile if
-  // we resumed, which can be done as a future improvement.
-  if (!props.start) {
-    if (props.expires && store.state.game.started_casts[props.expires]) {
-      if (props.method === "channel") {
-        progressElement.setAttribute("style", "width: 0");
-      } else {
-        progressElement.setAttribute("style", `width: 100%`);
-      }
-      return;
-    } else if (props.expires) {
-      store.commit("game/started_casts_add", {
-        expires: props.expires
-      });
-    }
-  }
-
-  if (props.method === "channel") {
-    perc = 100 - perc;
-    progressElement.setAttribute("style", `width: ${perc}%`);
-    gsap.to(progressElement, {
-      duration: duration / 1000,
-      width: "0%",
-      ease: "none"
-    });
-  } else {
-    progressElement.setAttribute("style", `width: ${perc}%`);
-    gsap.to(progressElement, {
-      duration: duration / 1000,
-      width: "100%",
-      ease: "none"
-    });
-  }
+const controlledWidth = computed(() => {
+  const now = simulationTimeMs(store.state.game.instance_time_control);
+  if (now === null) return null;
+  const durationMs = Math.max(1, props.duration * 1000);
+  const start = props.start ?? ((props.expires ?? now + durationMs) - durationMs);
+  const complete = Math.max(0, Math.min(100, (now - start) / durationMs * 100));
+  return `${props.method === "channel" ? 100 - complete : complete}%`;
 });
+const mountedAt = Date.now();
+const updateProgress = () => {
+  if (!progress.value) return;
+  gsap.killTweensOf(progress.value);
+  const pausedNow = simulationTimeMs(store.state.game.instance_time_control);
+  const now = pausedNow ?? Date.now();
+  const durationMs = Math.max(1, props.duration * 1000);
+  const start = props.start ?? (props.expires ? props.expires - durationMs : mountedAt);
+  const complete = Math.max(0, Math.min(1, (now - start) / durationMs));
+  const width = (props.method === "channel" ? 1 - complete : complete) * 100;
+  initialWidth.value = `${width}%`;
+  gsap.set(progress.value, { width: initialWidth.value });
+  if (pausedNow !== null || complete >= 1) return;
+  gsap.to(progress.value, {
+    duration: durationMs * (1 - complete) / 1000,
+    width: props.method === "channel" ? "0%" : "100%", ease: "none",
+  });
+};
+watch([
+  () => store.state.game.instance_time_control?.paused,
+  () => store.state.game.instance_time_control?.simulation_time,
+  () => props.start, () => props.duration, () => props.expires,
+], updateProgress);
+onMounted(updateProgress);
+onUnmounted(() => { if (progress.value) gsap.killTweensOf(progress.value); });
 </script>
 
 <style lang="scss" scoped>

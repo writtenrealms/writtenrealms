@@ -25,6 +25,7 @@ import {
 import { builderRoomIndexRoute } from "@/core/builderRoutes";
 import { playerRoundEffectSnapshot } from "@/core/roundEffects";
 import { applyCombatSnapshot, currentCombatTarget, initialCombatState } from "@/core/combatState";
+import { applyInstanceTimeControl, pendingTurnCommandState, simulationTimeMs } from "@/core/instanceTimeControl";
 import _ from "lodash";
 import router from "@/router";
 
@@ -248,6 +249,9 @@ const set_initial_state = () => {
     player_archetype: "",
 
     player_config: {},
+    instance_time_control: null,
+    time_control_request: null,
+    time_control_error: "",
 
     // assassins
     player_stance: "",
@@ -312,6 +316,10 @@ const receiveMessage = async ({
 }) => {
   /* Main process for receiving messages */
   const message_data = JSON.parse(event.data);
+  if (message_data.type === "instance.time_control") {
+    commit("instance_time_control_set", message_data.data);
+    return;
+  }
   if (message_data.type === "notification.combat.snapshot") {
     commit("combat_snapshot_set", message_data.data);
     return;
@@ -324,6 +332,16 @@ const receiveMessage = async ({
     commit("event_id_seen", eventId);
   }
   const requestId = commandRequestId(message_data);
+  if (requestId && requestId === state.time_control_request?.request_id && (
+    message_data.type.endsWith(".error") ||
+    message_data.type.endsWith(".success") ||
+    message_data.type === COMMAND_REQUEST_COMPLETED_MESSAGE
+  )) {
+    if (message_data.type.endsWith(".error")) {
+      commit("time_control_error_set", message_data.text || "The time-control request could not be applied.");
+    }
+    commit("time_control_request_clear");
+  }
   const resolution = commandResolution(message_data);
   const requestSegments = commandRequestSegments(message_data);
 
@@ -565,6 +583,7 @@ const receiveMessage = async ({
     };
     commit("world_set", world_data);
     commit("player_set", message_data.data.actor);
+    commit("instance_time_control_set", message_data.data.instance_time_control || null);
     if (message_data.data.combat_snapshot) {
       commit("combat_snapshot_set", message_data.data.combat_snapshot);
     } else {
@@ -958,9 +977,7 @@ const receiveMessage = async ({
   // Track effects for all chars
   if (message_data.type === "effect.start") {
     commit("effects_add", message_data.data);
-    setTimeout(() => {
-      commit("effects_remove", message_data.data);
-    }, message_data.data.duration * 1000);
+    scheduleEffectExpiry(state, message_data.data);
 
     if (message_data.data.target === state.player.key) {
       commit("player_effects_add", message_data.data);
@@ -969,9 +986,9 @@ const receiveMessage = async ({
 
   // Effects expiration
   if (message_data.type === "effect.end") {
+    commit("effects_remove", message_data.data);
     if (message_data.data.target === state.player.key) {
       commit("player_effects_remove", message_data.data);
-      commit("effects_remove", message_data.data);
     }
   }
 
@@ -1447,6 +1464,25 @@ const actions = {
     if (state.hint) {
       commit("hint_clear");
     }
+    return sent;
+  },
+
+  time_control_command: async ({ dispatch, commit, state }, payload) => {
+    if (state.time_control_request || !state.is_connected) return false;
+    if (payload.type === "cmd.advance" && pendingTurnCommandState(state.messages)) return false;
+    const requestId = createCommandRequestId();
+    commit("time_control_request_set", { request_id: requestId, label: payload.text });
+    const wirePayload = { ...payload, echo: true, request_id: requestId };
+    commit("message_add", { ...wirePayload, command_receipt: initialCommandReceipt() });
+    scheduleCommandReceiptTransition(commit, requestId, "unconfirmed", 30_000, { phase: "unconfirmed" });
+    const sent = await dispatch("sendWSMessage", wirePayload);
+    if (!sent) {
+      clearCommandReceiptTimers(requestId);
+      commit("time_control_error_set", "Could not send the request. Check your connection and try again.");
+      commit("time_control_request_clear");
+      commit("command_receipt_update", { request_id: requestId, phase: "unconfirmed" });
+    }
+    return sent;
   },
 
   play: async ({ commit, dispatch }) => {
@@ -1501,7 +1537,49 @@ const combatRoundGroup = (message) => {
   return roundId;
 };
 
+const effectExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const scheduleEffectExpiry = (state, effect) => {
+  const key = `${state.world?.id}:${effect.key || `${effect.target}:${effect.actor}:${effect.code}`}`;
+  const previous = effectExpiryTimers.get(key);
+  if (previous) clearTimeout(previous);
+  effectExpiryTimers.delete(key);
+  if (state.instance_time_control?.paused) return;
+  const worldId = state.world?.id;
+  const remaining = Math.max(0, Number(effect.start) + Number(effect.duration) * 1000 - Date.now());
+  if (!Number.isFinite(remaining)) return;
+  effectExpiryTimers.set(key, setTimeout(() => {
+    effectExpiryTimers.delete(key);
+    if (state.world?.id !== worldId || state.instance_time_control?.paused) return;
+    mutations.effects_remove(state, effect);
+  }, remaining));
+};
+
+const updateInstanceTimeControl = (state, snapshot) => {
+    const previous = state.instance_time_control;
+    const next = applyInstanceTimeControl(previous, snapshot, state.world?.id);
+    if (next && previous?.run_id === next.run_id && next !== previous) {
+      const shift = ((next.clock_offset_seconds || 0) - (previous.clock_offset_seconds || 0)) * 1000;
+      if (shift) {
+        const effects = new Set<any>([...(state.player_effects || []), ...Object.values(state.effects || {}).flat()]);
+        for (const effect of effects) if (typeof effect.start === "number") effect.start += shift;
+      }
+    }
+    state.instance_time_control = next;
+    if (next !== previous) {
+      for (const effect of Object.values(state.effects || {}).flat()) scheduleEffectExpiry(state, effect);
+    }
+};
+
 const mutations = {
+  instance_time_control_set: (state, snapshot) => {
+    updateInstanceTimeControl(state, snapshot);
+  },
+  time_control_request_set: (state, request) => {
+    state.time_control_request = request;
+    state.time_control_error = "";
+  },
+  time_control_request_clear: (state) => { state.time_control_request = null; },
+  time_control_error_set: (state, error) => { state.time_control_error = error; },
   combat_reset: (state) => { state.combat = initialCombatState(); },
   combat_snapshot_set: (state, snapshot) => {
     if (snapshot.room_id && state.room?.id && snapshot.room_id !== state.room.id) return;
@@ -1549,6 +1627,10 @@ const mutations = {
   command_receipt_update: (state, payload) => {
     const requestId = payload?.request_id;
     if (!requestId) return;
+    if (requestId === state.time_control_request?.request_id && payload.phase === "unconfirmed") {
+      state.time_control_request = null;
+      state.time_control_error = "The request has not been confirmed. Check your connection before trying again.";
+    }
     for (let index = state.messages.length - 1; index >= 0; index -= 1) {
       const message = state.messages[index];
       if (
@@ -1672,6 +1754,9 @@ const mutations = {
   },
 
   player_set: (state, player) => {
+    if (Object.prototype.hasOwnProperty.call(player, "instance_time_control")) {
+      updateInstanceTimeControl(state, player.instance_time_control);
+    }
     const nextPlayer = playerWithCurrentEconomyWhenNewer(state.player, player);
     state.player = {
       ...state.player,
@@ -1878,7 +1963,7 @@ const mutations = {
   },
 
   player_effects_add: (state, effect) => {
-    effect.start = new Date().getTime();
+    effect.start = simulationTimeMs(state.instance_time_control) ?? Date.now();
     if (!state.player_effects.length) {
       state.player_effects = [effect];
       return;
@@ -1915,7 +2000,7 @@ const mutations = {
   },
 
   effects_add: (state, effect) => {
-    effect.start = new Date().getTime();
+    effect.start = simulationTimeMs(state.instance_time_control) ?? Date.now();
     const char_effects = state.effects[effect.target] || [];
 
     if (!char_effects.length) {
@@ -2019,6 +2104,11 @@ const mutations = {
     //state.world_id = world_id;
   },
   world_set: (state, world) => {
+    if (state.world?.id !== world.id) {
+      state.instance_time_control = null;
+      state.time_control_request = null;
+      state.time_control_error = "";
+    }
     state.world = world;
     state.factions = world.factions;
   },
@@ -2090,6 +2180,7 @@ const mutations = {
   },
 
   connected_clear: (state) => {
+    state.time_control_request = null;
     state.is_connected = false;
   },
 

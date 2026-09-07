@@ -482,6 +482,10 @@ test("uncorrelated output and control or resolution frames are not terminal", ()
       data: { request_id: "request", request_segment: "r" },
     },
     {
+      type: "cmd.ability.hotkey.resolve",
+      data: { request_id: "request", request_segment: "r" },
+    },
+    {
       type: "cmd.history.replay",
       data: { request_id: "request", request_segment: "r" },
     },
@@ -791,6 +795,20 @@ test("alias resolution prefers exact request identity", () => {
   });
 
   assert.equal(receipt.commandResolutionEchoIndex(messages, resolution), 1);
+});
+
+test("hotkey resolution replaces its own echo even when repeated hotkeys resolve out of order", () => {
+  const messages = [
+    { echo: true, text: '1 rat', request_id: 'first' },
+    { echo: true, text: '1 rat', request_id: 'second' },
+  ];
+  const resolution = receipt.commandResolution({
+    type: 'cmd.ability.hotkey.resolve', text: '1 rat -> strike rat',
+    data: { command: '1 rat', resolved: 'strike rat', request_id: 'first', request_segment: 'r' },
+  });
+  assert.deepEqual(resolution, { kind: 'hotkey', originalText: '1 rat', requestId: 'first' });
+  assert.equal(receipt.commandResolutionEchoIndex(messages, resolution), 0);
+  assert.equal(receipt.commandResolutionEchoIndex(messages, { ...resolution, requestId: 'missing' }), -1);
 });
 
 test("legacy uncorrelated resolution consumes pending echoes in order", () => {

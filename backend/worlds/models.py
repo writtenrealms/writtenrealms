@@ -1091,6 +1091,23 @@ class InstanceRun(BaseModel):
         related_name='led_instance_runs',
         on_delete=models.SET_NULL,
         **optional)
+    # Admission and simulation policy are snapshots, so editing a template
+    # cannot open an existing private run or change its clock mid-action.
+    single_player = models.BooleanField(default=False)
+    owner = models.ForeignKey(
+        'spawns.Player',
+        related_name='owned_instance_runs',
+        on_delete=models.SET_NULL,
+        **optional)
+    time_control = models.BooleanField(default=False)
+    pause_in_combat = models.BooleanField(default=False)
+    time_paused = models.BooleanField(default=False)
+    clock_offset_seconds = models.FloatField(default=0)
+    simulation_time = models.DateTimeField(**optional)
+    simulation_tick = models.PositiveBigIntegerField(default=0)
+    time_generation = models.PositiveBigIntegerField(default=0)
+    pending_command = models.JSONField(default=dict, blank=True)
+    pending_revision = models.PositiveBigIntegerField(default=0)
     status = models.TextField(
         choices=list_to_choice(STATUS_CHOICES),
         default=STATUS_ACTIVE,
@@ -1114,6 +1131,17 @@ class InstanceRun(BaseModel):
             models.Index(fields=['ref']),
             models.Index(fields=['base_world', 'status']),
             models.Index(fields=['template_world', 'status']),
+            models.Index(
+                fields=['time_control', 'time_paused', 'status'],
+                name='worlds_run_clock_pause_idx'),
+            models.Index(
+                fields=['template_world', 'owner', 'status'],
+                name='worlds_run_owner_status_idx'),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(time_control=False) | Q(single_player=True),
+                name='worlds_run_time_control_solo'),
         ]
 
     def __str__(self):
@@ -1308,6 +1336,8 @@ class WorldConfig(BaseModel):
                                  **optional)
 
     # Booleans
+    instance_single_player = models.BooleanField(default=False)
+    instance_time_control = models.BooleanField(default=False)
     can_select_faction = models.BooleanField(default=True)
     auto_equip = models.BooleanField(default=True)
     allow_combat = models.BooleanField(default=True)
@@ -1387,6 +1417,12 @@ class WorldConfig(BaseModel):
 
     class Meta(BaseModel.Meta):
         constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(instance_time_control=False)
+                    | Q(instance_single_player=True)
+                ),
+                name='worlds_config_time_control_solo'),
             models.CheckConstraint(
                 condition=models.Q(
                     death_currency_penalty__gte=0,

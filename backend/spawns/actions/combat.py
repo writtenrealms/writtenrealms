@@ -4507,7 +4507,20 @@ def _advance_character_periodic_effects(
     return EffectAdvanceOutcome(events=events, effects_changed=effects_changed)
 
 
-def _resolve_detached_actor_effects(
+def _resolve_detached_actor_effects(*, target_type, target_id, due_at, advance_cooldowns=False):
+    from spawns.instance_clock import clock_guard, in_simulation
+    model = Player if target_type == 'player' else Mob
+    location = model.objects.filter(pk=target_id).values_list('world_id', flat=True).first()
+    with clock_guard(location) as run:
+        if run and run.time_paused and not in_simulation(location):
+            return []
+        return _resolve_detached_actor_effects_locked(
+            target_type=target_type, target_id=target_id, due_at=due_at,
+            advance_cooldowns=advance_cooldowns,
+        )
+
+
+def _resolve_detached_actor_effects_locked(
     *,
     target_type: str,
     target_id: int,
@@ -4732,7 +4745,8 @@ def resolve_due_character_effects(
     persist_events: bool = False,
     cooldown_player_ids: set[int] | None = None,
 ) -> list[GameEvent]:
-    due_at = due_at or timezone.now()
+    from spawns.instance_clock import gameplay_now, live_worlds, current_simulation
+    due_at = due_at or gameplay_now()
     cooldown_player_ids = cooldown_player_ids or set()
     due_effects = ActiveEffect.objects.filter(
         scope=ActiveEffect.SCOPE_CHARACTER,
@@ -4759,6 +4773,14 @@ def resolve_due_character_effects(
             target_mob__room_id__isnull=False,
         )
     )
+    due_effects = live_worlds(due_effects)
+    simulation = current_simulation()
+    if simulation is not None:
+        due_effects = due_effects.exclude(target_player_id__in=[
+            int(key.split('.')[1]) for key in simulation.round_actor_keys if key.startswith('player.')
+        ]).exclude(target_mob_id__in=[
+            int(key.split('.')[1]) for key in simulation.round_actor_keys if key.startswith('mob.')
+        ])
     if world_ids is not None:
         world_ids = list(world_ids)
         if not world_ids:
@@ -5433,12 +5455,13 @@ def process_due_combat_encounters(
     except (TypeError, ValueError):
         grace = 4.0
     overdue_at = due_at - timedelta(seconds=grace)
+    from spawns.instance_clock import live_worlds
     candidate_ids = list(
-        CombatEncounter.objects.filter(
+        live_worlds(CombatEncounter.objects.filter(
             status=CombatEncounter.STATUS_ACTIVE,
             resolution_interval__gte=0,
             world__lifecycle=adv_consts.WORLD_LIFECYCLE_RUNNING,
-        )
+        ))
         .filter(
             Q(next_resolution_ts__isnull=True)
             | Q(next_resolution_ts__lte=overdue_at)

@@ -1,5 +1,53 @@
 # Combat
 
+## Turn-Based Instances
+
+Some builders offer single-player instances with **Time Control**. Each run
+belongs to the character who first enters it; other players cannot join that
+copy, even when its owner is away.
+
+Open **Settings > Time Control** and check **Pause before every combat
+round**. You can also use the **Pause combat** checkbox beside the command
+area. The setting belongs to this run and starts unchecked in a new adventure.
+
+Unchecked, the instance uses its ordinary timing and commands. Checked, you
+still explore normally until combat starts. The whole instance then waits
+before the first round and between every subsequent round: combat, recovery,
+roaming, respawning, timed doors, merchant restocking, and scripted delays.
+Reading or spending longer thinking does not advance those systems. Gameplay
+reactions to reading or speech also wait for your next turn.
+
+Choose an ability or issue another gameplay command to prepare your next
+action. A new preparation replaces the previous one. Review it in the **Time
+Control** bar, then click **Advance Turn** or type `advance`. One round passes,
+the results appear, and the instance waits again. An invalid action returns an
+error without consuming the turn. Use `cancelturn` to clear your preparation.
+With no prepared action, combat uses your normal basic attack or continues an
+existing cast. Inspection, help, and communication remain immediately available.
+
+Each advance progresses two seconds of gameplay time and one round of active
+combat. An action with a longer delay needs additional advances to finish.
+Combat initiative remains unchanged. When your combat ends, exploration and
+ordinary timing resume automatically; the checkbox stays checked for the next
+fight.
+
+Uncheck the box at any time to resume ordinary timing, including during a
+fight. Remaining timer durations are preserved; the instance does not catch up
+on time spent thinking. Any prepared action is submitted through the ordinary
+command rules when you resume.
+
+Quick commands:
+
+- `pause` enables pausing before every combat round, immediately if fighting.
+- `resume` disables combat pausing and restores ordinary timing.
+- `time toggle` switches the checkbox on or off.
+- `time` shows the current setting; `time pause` and `time resume` also work.
+
+While combat is paused, disconnecting does not advance it, and thinking does
+not trigger idle logout. Normal cleanup rules still apply to abandoned or
+offline instances. With combat pausing off, ordinary connection and idle rules
+apply.
+
 Combat abilities can be granted at character creation or learned during play.
 See [Abilities and Training](abilities.md) for `learn`, `unlearn`, requirements,
 and training rooms or NPCs.

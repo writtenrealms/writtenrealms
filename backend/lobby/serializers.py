@@ -217,18 +217,23 @@ class WorldTransferSerializer(serializers.Serializer):
 
         return player
 
-    def validate(self, validated_data):
-        player = validated_data['player']
-
+    @staticmethod
+    def _validate_world_transition(player):
         # Origin world should be SPW
         if player.world.is_multiplayer:
             raise serializers.ValidationError(
                 "Player is not in a single player world.")
 
         # Player in transfer room
-        if not player.room.transfer_to:
+        if not player.room_id or not player.room.transfer_to:
             raise serializers.ValidationError(
                 "Player is not in a transfer room.")
+
+        destination = player.room.transfer_to
+        if destination.world.instance_of_id or destination.world.context_id:
+            raise serializers.ValidationError(
+                'Instance destinations require the instance admission service.'
+            )
 
         # Dest world MPW
         if not player.room.transfer_to.world.is_multiplayer:
@@ -239,6 +244,12 @@ class WorldTransferSerializer(serializers.Serializer):
         if player.world.lifecycle != api_consts.WORLD_STATE_COMPLETE:
             raise serializers.ValidationError(
                 "Player is not in a completed world.")
+
+        return destination
+
+    def validate(self, validated_data):
+        player = validated_data['player']
+        self._validate_world_transition(player)
 
         name = validated_data['name']
 
@@ -274,7 +285,7 @@ class WorldTransferSerializer(serializers.Serializer):
                 )
                 .get(pk=validated_data['player'].pk)
             )
-            dest_room = player.room.transfer_to
+            dest_room = self._validate_world_transition(player)
 
             # Make sure that we really are transfering to another world.
             dest_spawn_world = dest_room.world.spawned_worlds.first()

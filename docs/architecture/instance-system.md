@@ -1,5 +1,10 @@
 # WR2 Instance System
 
+For implemented single-player ownership and whole-run gameplay clocks, see
+[Instance Simulation Time Control](instance-time-control.md). Time-controlled
+runs use the existing instance lifecycle with a separate persisted simulation
+clock and owner-only admission.
+
 This document describes the target architecture for instances in WR2.
 
 Instances are a core game structure: private or semi-private copies of authored

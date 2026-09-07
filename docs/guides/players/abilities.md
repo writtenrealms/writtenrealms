@@ -106,6 +106,11 @@ open. Reassign a known ability with `hotkey`:
 hotkey 3 power strike
 ```
 
+Enter a hotkey number to use its ability, with an optional target. The command
+echo shows the resolved command just like an alias: for example, `3 rat ->
+strike rat` when slot 3 is bound to an ability whose command is `strike`.
+This also appears immediately when preparing an action in paused combat.
+
 Use `help <ability>` for an ability you already know or can learn right now.
 The help lookup accepts its slug, authored command, exact name, or an
 unambiguous name prefix.

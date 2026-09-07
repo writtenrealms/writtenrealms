@@ -67,6 +67,7 @@ from core.stat_system import (
 from core.world_config import (
     INSTANCE_INHERITED_CONFIG_FIELDS,
     INSTANCE_LOCAL_CONFIG_FIELDS,
+    validate_instance_control_config,
 )
 from builders.models import (
     BuilderAssignment,
@@ -491,6 +492,8 @@ class WorldConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = WorldConfig
         fields = [
+            'instance_single_player',
+            'instance_time_control',
             'starting_equipment',
             'starting_level',
             'leveling_curve',
@@ -570,6 +573,10 @@ class WorldConfigSerializer(serializers.ModelSerializer):
         world = self.context.get("world") if isinstance(self.context, dict) else None
         if world is None and config is not None:
             world = config.configured_worlds.filter(instance_of__isnull=False).first()
+        try:
+            validate_instance_control_config(world=world, config=config, updates=attrs)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
         if getattr(world, "instance_of_id", None):
             requested_fields = set(attrs.keys())
             inherited_fields = sorted(requested_fields & INSTANCE_INHERITED_CONFIG_FIELDS)
@@ -733,6 +740,12 @@ class WorldConfigSerializer(serializers.ModelSerializer):
                 shared=False,
             )
             instance = WorldConfig.objects.select_for_update().get(pk=instance.pk)
+            try:
+                validate_instance_control_config(
+                    world=world, config=instance, updates=validated_data,
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError(str(exc)) from exc
             old_death_room_id = instance.death_room_id
             old_source = instance.death_routing_source
 
@@ -944,6 +957,13 @@ class WorldAdminInstanceRunSerializer(serializers.ModelSerializer):
             'template_world',
             'spawned_world',
             'leader',
+            'owner',
+            'single_player',
+            'time_control',
+            'pause_in_combat',
+            'time_paused',
+            'simulation_tick',
+            'simulation_time',
             'participant_count',
             'active_participant_count',
         ]
@@ -1096,6 +1116,13 @@ class WorldAdminInstanceSerializer(serializers.ModelSerializer):
             'participant_count': run.participants.count(),
             'active_participant_count': active_participants.count(),
             'initial_member_ids': run.initial_member_ids,
+            'owner_id': run.owner_id,
+            'single_player': run.single_player,
+            'time_control': run.time_control,
+            'pause_in_combat': run.pause_in_combat,
+            'time_paused': run.time_paused,
+            'simulation_tick': run.simulation_tick,
+            'simulation_time': run.simulation_time,
         }
 
     def get_world_state(self, spawn_world):

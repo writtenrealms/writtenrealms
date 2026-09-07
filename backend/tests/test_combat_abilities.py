@@ -1912,12 +1912,44 @@ class TestCombatAbilities(WorldTestCase):
         with capture_game_messages() as messages:
             dispatch_and_drain_combat(self.player.id, "1 rat")
 
+        resolution = self._messages_by_type(messages, "cmd.ability.hotkey.resolve")
+        self.assertEqual(len(resolution), 1)
+        self.assertEqual(resolution[0]["text"], "1 rat -> strike rat")
+        self.assertTrue(resolution[0]["echo"])
         mob.refresh_from_db()
         self.player.refresh_from_db()
         self.assertEqual(mob.health, self.stats["attack_power"] * 9)
         self.assertEqual(self.player.ability_cooldowns, {"power-strike": 2})
         updates = self._messages_by_type(messages, "player.abilities.update")
         self.assertEqual(updates[-1]["data"]["actor"]["ability_cooldowns"], {"power-strike": 2})
+
+    def test_hotkey_echo_preserves_request_identity_and_uses_slug_without_verbs(self):
+        from spawns.handlers import dispatch_command
+        self._ability(slug="power-strike", name="Power Strike", verbs=[], components=[])
+        self.player.known_abilities = ["power-strike"]
+        self.player.ability_hotkeys = {"1": "power-strike"}
+        self.player.save(update_fields=["known_abilities", "ability_hotkeys"])
+        with capture_game_messages() as messages:
+            dispatch_command('text', player_id=self.player.pk, payload={
+                'text': '1 missing target', '_request_id': 'hotkey-request', '_request_segment': 'r.2',
+            })
+        resolution = self._messages_by_type(messages, 'cmd.ability.hotkey.resolve')[0]
+        self.assertEqual(resolution['text'], '1 missing target -> power-strike missing target')
+        self.assertEqual(resolution['data'], {
+            'command': '1 missing target', 'resolved': 'power-strike missing target',
+            'request_id': 'hotkey-request', 'request_segment': 'r.2',
+        })
+        self.assertTrue(self._messages_by_type(messages, 'cmd.ability.error'))
+
+    def test_unassigned_hotkey_and_direct_ability_commands_do_not_emit_hotkey_resolution(self):
+        self._ability(slug="power-strike", name="Power Strike", verbs=['strike'], components=[])
+        self.player.known_abilities = ["power-strike"]
+        self.player.save(update_fields=["known_abilities"])
+        from tests.utils import dispatch_text_command
+        with capture_game_messages() as messages:
+            dispatch_text_command(self.player.pk, '1')
+            dispatch_text_command(self.player.pk, 'strike')
+        self.assertEqual(self._messages_by_type(messages, 'cmd.ability.hotkey.resolve'), [])
 
     def test_on_hit_cooldown_does_not_start_when_ability_is_dodged(self):
         self._ability(

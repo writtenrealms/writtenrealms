@@ -68,6 +68,7 @@ from spawns.handlers import currencies
 from spawns.handlers import quests
 from spawns.handlers import instances
 from spawns.handlers import duels
+from spawns.handlers import time_control
 
 __all__ = [
     # Base classes

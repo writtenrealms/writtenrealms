@@ -135,13 +135,20 @@ def locked_combat(*, keys=(), encounter_ids=()):
                 world_ids.update(model.objects.filter(pk__in=ids).values_list('world_id', flat=True))
         shared_run_ids = list(InstanceRun.objects.filter(spawned_world_id__in=world_ids)
                               .exclude(pk__in=run_ids).values_list('pk', flat=True))
+        exclusive_ids = set(run_ids) | set(InstanceRun.objects.filter(
+            pk__in=shared_run_ids, time_control=True,
+        ).values_list('pk', flat=True))
         # Ordinary fights share a lifecycle lock. Closing/resetting the run
         # takes FOR UPDATE, while different rooms can resolve concurrently.
         with connection.cursor() as cursor:
             for run_id in sorted(set(run_ids) | set(shared_run_ids)):
-                mode = 'UPDATE' if run_id in run_ids else 'SHARE'
+                mode = 'UPDATE' if run_id in exclusive_ids else 'SHARE'
                 cursor.execute(f'SELECT id FROM worlds_instancerun WHERE id = %s FOR {mode}', [run_id])
         runs = {r.pk: r for r in InstanceRun.objects.filter(pk__in=[*run_ids, *shared_run_ids])}
+        from spawns.instance_clock import time_control_run
+        for pk, run in list(runs.items()):
+            if run.time_control:
+                runs[pk] = time_control_run(run.spawned_world_id) or run
         matches = {m.pk: m for m in DuelMatch.objects.select_for_update().filter(
             pk__in=match_ids,
         ).order_by('pk')}
@@ -203,6 +210,10 @@ def locked_combat(*, keys=(), encounter_ids=()):
                 for resource in ('health', 'energy', 'stamina'):
                     setattr(actor, resource + '_max', max(1, int(stats.get(resource + '_max') or 1)))
             yield context
+            from spawns.instance_clock_transitions import synchronize_combat_pause
+            for run in context.runs.values():
+                if run.time_control:
+                    synchronize_combat_pause(run)
         finally:
             _current.reset(token)
 
@@ -376,10 +387,15 @@ def engage_locked(context, attacker, target, *, reason='attack', match=None, all
             encounter.status = CombatEncounter.STATUS_ACTIVE
             encounter.schedule_generation += 1
             encounter.state_revision += 1
-            encounter.npc_active_until = timezone.now() + timedelta(seconds=NPC_ACTIVITY_SECONDS)
-            encounter.next_resolution_ts = timezone.now() if encounter.resolution_interval >= 0 else None
+            from spawns.instance_clock import gameplay_now
+            encounter.npc_active_until = gameplay_now(attacker.world) + timedelta(seconds=NPC_ACTIVITY_SECONDS)
+            encounter.next_resolution_ts = gameplay_now(attacker.world) if encounter.resolution_interval >= 0 else None
             encounter.save(update_fields=['status', 'schedule_generation', 'state_revision',
                                          'npc_active_until', 'next_resolution_ts'])
+        from spawns.instance_clock_transitions import synchronize_combat_pause
+        for run in context.runs.values():
+            if run.spawned_world_id == encounter.world_id:
+                synchronize_combat_pause(run)
         return encounter, a, b, changed
 
     encounter_ids = {p.encounter_id for p in (a, b) if p}
@@ -492,10 +508,11 @@ def engage_locked(context, attacker, target, *, reason='attack', match=None, all
     ):
         encounter.schedule_generation += 1
     encounter.status = CombatEncounter.STATUS_ACTIVE
-    encounter.npc_active_until = timezone.now() + timedelta(seconds=NPC_ACTIVITY_SECONDS)
+    from spawns.instance_clock import gameplay_now
+    encounter.npc_active_until = gameplay_now(attacker.world) + timedelta(seconds=NPC_ACTIVITY_SECONDS)
     deadlines = [e.next_resolution_ts for e in sources if e.next_resolution_ts]
     if encounter.resolution_interval >= 0:
-        encounter.next_resolution_ts = min(deadlines) if deadlines else timezone.now() + timedelta(
+        encounter.next_resolution_ts = min(deadlines) if deadlines else gameplay_now(attacker.world) + timedelta(
             seconds=encounter.resolution_interval,
         )
     encounter.save(update_fields=['round_number', 'state_revision', 'schedule_generation',
@@ -503,6 +520,10 @@ def engage_locked(context, attacker, target, *, reason='attack', match=None, all
     from spawns.combat_reconciliation import request_reconciliation
     request_reconciliation(encounter.world_id, encounter.room_id, [attacker.key, target.key],
                            observed=any(isinstance(actor, Player) and actor.in_game for actor in (attacker, target)))
+    from spawns.instance_clock_transitions import synchronize_combat_pause
+    for run in context.runs.values():
+        if run.spawned_world_id == encounter.world_id:
+            synchronize_combat_pause(run)
     return encounter, a, b, True
 
 

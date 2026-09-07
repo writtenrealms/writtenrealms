@@ -12,12 +12,12 @@ from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
 
 
-def handle_dynamic_ability_command(ctx: CommandContext) -> bool:
+def handle_dynamic_ability_command(ctx: CommandContext, *, hotkey_ability=None) -> bool:
     if ctx.actor_type != "player" or not ctx.player:
         return False
 
     command = ctx.payload.get("command")
-    ability = resolve_ability_for_hotkey(ctx.player, command)
+    ability = hotkey_ability or resolve_ability_for_hotkey(ctx.player, command)
     if not ability:
         ability = resolve_ability_for_command(ctx.player.world, command)
     if not ability:

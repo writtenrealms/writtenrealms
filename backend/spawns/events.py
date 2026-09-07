@@ -638,6 +638,10 @@ def publish_events(
         capture_sink.extend(event_list)
         return
 
+    from spawns.instance_clock import capture_events
+    if capture_events(event_list):
+        return
+
     follow_movement_data: list[dict] = []
     for event in event_list:
         event_type = str(event.type or "").strip().lower()
@@ -651,6 +655,9 @@ def publish_events(
             })
             continue
         message = event.to_message()
+        if '_instance_reactions_done' in message['data']:
+            message = {**message, 'data': {k: v for k, v in message['data'].items()
+                                         if k != '_instance_reactions_done'}}
         if (
             SCRIPT_COMMAND_DEPTH_KEY in event.data
             or FINAL_TRANSFER_ENTER_KEY in event.data
@@ -666,6 +673,7 @@ def publish_events(
             # Script depth and provenance are durable server metadata used for
             # routing and auditing, not player-facing command payload.
             public_data = deepcopy(event.data)
+            public_data.pop('_instance_reactions_done', None)
             public_data.pop(SCRIPT_COMMAND_DEPTH_KEY, None)
             public_data.pop(SCRIPT_COMMAND_PROVENANCE_KEY, None)
             public_data.pop(FINAL_TRANSFER_ENTER_KEY, None)
@@ -811,6 +819,11 @@ def _enqueue_game_event_batch(
     """
     from spawns.models import GameEventOutbox
 
+    from spawns.instance_clock import capture_events
+    events = list(events)
+    if capture_events(events):
+        return len(events), None
+
     with transaction.atomic():
         event_list = _prepare_follow_events(list(events))
         followed_controls = [
@@ -836,6 +849,8 @@ def _enqueue_game_event_batch(
             event_id = uuid.uuid4()
             data = deepcopy(event.data)
             data["_event_id"] = str(event_id)
+            from spawns.instance_clock import persist_event_reactions
+            persist_event_reactions(event, data)
             rows.append(
                 GameEventOutbox(
                     event_id=event_id,

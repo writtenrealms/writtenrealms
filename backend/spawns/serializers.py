@@ -214,6 +214,11 @@ class PlayerSerializer(serializers.ModelSerializer):
     def validate(self, validated_data):
         world = self.context['view'].world
 
+        if self.instance is None and world.instance_of_id:
+            raise serializers.ValidationError(
+                'Create your character in the base world, then enter the instance.'
+            )
+
         if not self.context['view'].world.config.can_create_chars:
             raise serializers.ValidationError(
                 "Character creation is disabled for this world.")
@@ -271,6 +276,12 @@ class PlayerSerializer(serializers.ModelSerializer):
         return validated_data
 
     def create(self, validated_data):
+        runtime = validated_data['world']
+        template = runtime.context or runtime
+        if template.instance_of_id:
+            raise serializers.ValidationError(
+                'Characters must enter instances through the instance admission service.'
+            )
 
         if 'room' not in validated_data:
             try:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from spawns.instance_clock import serialized_world, event_world_id
+
 from contextlib import contextmanager
 from typing import Callable
 import uuid
@@ -599,6 +601,7 @@ _EVENT_SUBSCRIPTIONS: dict[str, TriggerSubscriptionHandler] = {
 }
 
 
+@serialized_world(lambda *, event_data, actor_key=None, **kwargs: event_world_id(event_data, actor_key))
 def dispatch_trigger_subscriptions_for_event(
     *,
     event_type: str,
@@ -611,6 +614,9 @@ def dispatch_trigger_subscriptions_for_event(
         return
 
     data = event_data if isinstance(event_data, dict) else {}
+    from spawns.instance_clock import defer_subscription
+    if defer_subscription('trigger', event_type, data, actor_key, connection_id):
+        return
     try:
         event_id = uuid.UUID(str(data.get("_event_id") or ""))
     except (TypeError, ValueError, AttributeError):

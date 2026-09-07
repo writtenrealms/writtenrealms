@@ -6,12 +6,14 @@
       :selectedTab="selectedTab"
       @taplook="onTap('look')"
     ></component>
+    <TimeControl />
     <Menu v-if="is_menu_open" @closeMenu="closeMenu" />
     <Footer @tap="onTap" :selectedTab="selectedTab" ref="footer" />
   </div>
 </template>
 
 <script lang='ts' setup>
+import TimeControl from "@/components/game/TimeControl.vue";
 import { computed, ref, nextTick, watch } from "vue";
 import { useStore } from "vuex";
 import eventbus from "@/core/eventbus";

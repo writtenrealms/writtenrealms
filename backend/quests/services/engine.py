@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from spawns.instance_clock import serialized_world
+
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -464,6 +466,16 @@ def resolve_template_for_player(player, slug: str) -> QuestTemplate:
     return template
 
 
+def _assert_gameplay_advancing(player):
+    from spawns.instance_clock import in_simulation, is_time_controlled
+
+    if not in_simulation(player.world_id) and is_time_controlled(player.world):
+        raise QuestRuntimeError(
+            'Prepare this quest action and advance the instance turn.',
+            code='instance_turn_required',
+        )
+
+
 def can_start_template(player, template: QuestTemplate) -> bool:
     if active_instances_qs(player).filter(template=template).exists():
         return False
@@ -474,10 +486,17 @@ def can_start_template(player, template: QuestTemplate) -> bool:
     if template.repeatability_mode == "cooldown":
         latest = resolved_qs.first()
         if latest and latest.resolved_at:
-            cooldown_until = latest.resolved_at + timedelta(
+            from spawns.instance_clock import gameplay_now
+
+            # The offer anchor follows the character's gameplay clock. The
+            # quest instance retains wall-clock history for sorting/auditing.
+            anchor = QuestOfferState.objects.filter(
+                player=player, template=template,
+            ).values_list('last_resolved_at', flat=True).first()
+            cooldown_until = (anchor or latest.resolved_at) + timedelta(
                 seconds=int(template.repeatability_cooldown_seconds or 0)
             )
-            if cooldown_until > timezone.now():
+            if cooldown_until > gameplay_now(player.world):
                 return False
     return True
 
@@ -545,6 +564,7 @@ def enter_step(
     event_data: dict[str, Any] | None = None,
 ) -> QuestTransitionResult:
     player = type(player).objects.select_for_update().get(pk=player.pk)
+    _assert_gameplay_advancing(player)
     step = get_step(quest_instance.template, step_id)
     if not step:
         raise QuestRuntimeError("Quest step was not found.", code="step_not_found")
@@ -592,7 +612,9 @@ def enter_step(
                 template=quest_instance.template,
             )
             offer_state.is_visible = False
-            offer_state.last_resolved_at = quest_instance.resolved_at
+            from spawns.instance_clock import gameplay_now
+
+            offer_state.last_resolved_at = gameplay_now(player.world)
             offer_state.save(
                 update_fields=["is_visible", "last_resolved_at", "modified_ts"]
             )
@@ -650,6 +672,7 @@ def enter_step(
     )
 
 
+@serialized_world(lambda player, *args, **kwargs: player.world_id)
 @transaction.atomic
 def start_quest_instance(
     player,
@@ -662,6 +685,7 @@ def start_quest_instance(
     # authoritative eligibility check so a cooldown/non-repeatable quest
     # cannot be accepted twice from the same stale opportunity state.
     player = type(player).objects.select_for_update().get(pk=player.pk)
+    _assert_gameplay_advancing(player)
     discovery = template.discovery_policy or {}
     if not evaluate_condition(
         discovery.get("accept_if"),
@@ -706,9 +730,11 @@ def accept_template(player, template: QuestTemplate) -> QuestTransitionResult:
     return start_quest_instance(player, template, reason="started")
 
 
+@serialized_world(lambda player, *args, **kwargs: player.world_id)
 @transaction.atomic
 def choose_for_instance(player, identity: str, choice_id: str) -> QuestTransitionResult:
     player = type(player).objects.select_for_update().get(pk=player.pk)
+    _assert_gameplay_advancing(player)
     resolved_instance = resolve_instance_identity(player, identity, status="active")
     quest_instance = (
         QuestInstance.objects.select_for_update(of=("self",))
@@ -757,7 +783,11 @@ def choose_for_instance(player, identity: str, choice_id: str) -> QuestTransitio
     )
 
 
+@serialized_world(lambda player, *args, **kwargs: player.world_id)
+@transaction.atomic
 def abandon_instance(player, identity: str) -> QuestTransitionResult:
+    player = type(player).objects.select_for_update().get(pk=player.pk)
+    _assert_gameplay_advancing(player)
     resolved_instance = resolve_instance_identity(player, identity, status="active")
     template = resolved_instance.template
     removed_item_count = 0
@@ -788,8 +818,9 @@ def abandon_instance(player, identity: str) -> QuestTransitionResult:
             template=template,
         )
         offer_state.is_visible = False
-        offer_state.last_resolved_at = quest_instance.resolved_at
-        offer_state.save(update_fields=["is_visible", "last_resolved_at", "modified_ts"])
+        # Abandonment is excluded from repeatability history and must not
+        # replace the gameplay anchor of the most recent completed attempt.
+        offer_state.save(update_fields=["is_visible", "modified_ts"])
 
     quest_instance = QuestInstance.objects.select_related("template", "template__arc", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
     payload, info_text = _info_for_instance(quest_instance, player=player)

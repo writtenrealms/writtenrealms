@@ -508,11 +508,27 @@ def dispatch_command(
             if not can_execute_builder_command(ctx, handler):
                 ctx.publish(builder_permission_error(command_type))
             else:
-                handler.handle(ctx)
+                execute_handler(handler, ctx)
         else:
-            handler.handle(ctx)
+            execute_handler(handler, ctx)
 
         if request_scope.needs_completion_event:
             ctx.publish(
                 command_request_completed_message(request_scope.scope)
             )
+
+
+def execute_handler(handler, ctx):
+    from spawns.instance_time import prepare_command, synchronize_combat_pause
+    from spawns.instance_clock import clock_guard, in_simulation
+    from spawns.actions.base import ActionError
+    try:
+        with clock_guard(ctx.world) as run:
+            if not prepare_command(ctx, handler.command_type):
+                handler.handle(ctx)
+            if run and not in_simulation(run.spawned_world_id):
+                run.refresh_from_db()
+                synchronize_combat_pause(run)
+    except ActionError as exc:
+        ctx.publish({'type': f'cmd.{handler.command_type}.error', 'text': exc.message,
+                     'data': {'code': exc.code, 'error': exc.message, **exc.data}})

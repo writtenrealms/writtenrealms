@@ -1215,6 +1215,7 @@ def build_who_list(world: World, actor: Player) -> List[WhoListEntry]:
 
 def build_state_sync(player: Player) -> StateSyncData:
     from spawns.combat_publication import snapshot_for_player
+    from spawns.instance_time import snapshot_for_player as instance_time_for_player
     world = player.world
     room = player.room
     if room is None:
@@ -1252,4 +1253,5 @@ def build_state_sync(player: Player) -> StateSyncData:
         who_list=who_list,
         prepared_abilities=active_prepared_ability_slugs(player),
         combat_snapshot=snapshot_for_player(player),
+        instance_time_control=instance_time_for_player(player),
     )

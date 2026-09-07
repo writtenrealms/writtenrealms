@@ -96,7 +96,12 @@ def _source_matches_player(
     return False
 
 
-def _offer_state(player, template: QuestTemplate) -> QuestOfferState:
+def _offer_state(player, template: QuestTemplate, *, persist=True) -> QuestOfferState:
+    if not persist:
+        return (
+            QuestOfferState.objects.filter(player=player, template=template).first()
+            or QuestOfferState(player=player, template=template)
+        )
     offer_state, _ = QuestOfferState.objects.get_or_create(
         player=player,
         template=template,
@@ -112,10 +117,13 @@ def _template_available(player, template: QuestTemplate) -> bool:
     if not can_start_template(player, template):
         return False
 
-    offer_state = _offer_state(player, template)
-    if offer_state.snoozed_until and offer_state.snoozed_until > timezone.now():
+    from spawns.instance_clock import gameplay_now
+
+    offer_state = _offer_state(player, template, persist=False)
+    now = gameplay_now(player.world)
+    if offer_state.snoozed_until and offer_state.snoozed_until > now:
         return False
-    if offer_state.cooldown_until and offer_state.cooldown_until > timezone.now():
+    if offer_state.cooldown_until and offer_state.cooldown_until > now:
         return False
 
     discovery = template.discovery_policy or {}
@@ -286,6 +294,12 @@ def available_npc_dialogue_opportunities_for_mob_definition(
 
 
 def refresh_player_quests(player, *, allow_auto_start: bool = True) -> DiscoveryRefreshResult:
+    from spawns.instance_clock import in_simulation, is_time_controlled
+
+    if not in_simulation(player.world_id) and is_time_controlled(player.world):
+        # Inspection can project the last committed opportunity state but may
+        # not start quests or alter discovery while the instance is waiting.
+        return DiscoveryRefreshResult(opportunities=list_opportunities(player, refresh=False))
     now = timezone.now()
     result = DiscoveryRefreshResult()
     previously_visible_ids = set(

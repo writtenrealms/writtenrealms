@@ -17,6 +17,9 @@ def _combat():
 
 
 def schedule(encounter):
+    from spawns.instance_clock import is_time_controlled
+    if is_time_controlled(encounter.world):
+        return
     if encounter.status != CombatEncounter.STATUS_ACTIVE or encounter.next_resolution_ts is None:
         return
     from spawns.combat_encounters import current_context
@@ -40,7 +43,8 @@ def schedule(encounter):
 
 
 def _finish_command(context, encounter, events):
-    if encounter.resolution_interval == -1:
+    from spawns.instance_clock import is_time_controlled
+    if encounter.resolution_interval == -1 and not is_time_controlled(encounter.world):
         result = resolve_locked(context, encounter, auto_advance=False)
         events.extend(result.events)
         if not any(event.type == 'notification.combat.snapshot' for event in result.events):

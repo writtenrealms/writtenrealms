@@ -36,6 +36,11 @@ def _spawn_plan_interval_seconds() -> float:
 
 
 app.conf.beat_schedule = {
+    'recover-instance-time': {
+        'task': 'spawns.tasks.recover_instance_time',
+        'schedule': _heartbeat_interval_seconds(),
+        'options': {'expires': _heartbeat_interval_seconds()},
+    },
     'game-heartbeat': {
         'task': 'spawns.tasks.game_heartbeat',
         'schedule': _heartbeat_interval_seconds(),

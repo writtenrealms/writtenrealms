@@ -31,6 +31,9 @@ The foundation exists now:
 - participation records the exact base runtime used for return; exit never
   rediscovers or guesses a runtime shard
 - group members can join the same run by instance reference
+- single-player templates reserve each run for its original owner
+- eligible single-player templates allow the owner to control the entire
+  instance's gameplay clock, including a turn-based mode
 - leaving marks the participant exited instead of deleting the run
 - carried and equipped item ownership moves into and out of the spawned
   instance world with bounded, depth-batched traversal
@@ -66,7 +69,7 @@ Instances should use WR Core definitions from the base world:
 - leveling configuration
 - stat and equipment systems
 - combat formulas
-- combat availability and combat pacing
+- combat availability and default combat pacing
 - the world-level default roam chance
 - duel-result announcement policy
 - merchant profiles
@@ -94,6 +97,7 @@ An instance template owns its own playable space and run policy:
 - entry room
 - death room
 - exit behavior
+- single-player admission and permission for player time control
 - future goal, timer, leaderboard, and cleanup policy
 
 The death room for an instance must be inside the instance template. By
@@ -189,7 +193,7 @@ base-world catalog.
 Instance world config manifests only accept local fields: identity text,
 visibility, starting/death rooms, initial state, death mode, deterministic
 death routing and its source, death currency and penalty, PvP policy, builder
-credit, and background art.
+credit, background art, single-player admission, and player time control.
 Player-creation and global policy fields such as default currency, starting
 balances, title rules, naming rules, globals, class selection, starting
 equipment, leveling, stats, equipment, combat, and abilities belong to the
@@ -199,6 +203,61 @@ Learned player abilities also resolve through the base world while the player is
 inside a spawned instance. Ability definitions cannot be authored on instance
 templates; define them on the base world and use requirements or conditions when
 an ability should only matter in a particular instance.
+
+## Single-Player Instances And Time Control
+
+An instance template can reserve each run for the character who creates it:
+
+```yaml
+kind: world
+spec:
+  instance_single_player: true
+  instance_time_control: true
+```
+
+`instance_single_player` admits only that run's original owner. Other players
+cannot join through its reference or a group, even while the owner is absent.
+The owner can leave and return through the ordinary instance lifecycle. NPCs
+and companions remain part of the instance. This does not change the base
+world's multiplayer setting.
+
+Characters are created in the base world and enter an instance through its
+entry points. Creating characters directly inside an instance template or
+using a completed-world character transfer to target an instance is rejected.
+Single-player instances cannot use `pvp_mode: match`, which requires multiple
+contestants.
+
+`instance_time_control` requires `instance_single_player: true`. It grants the
+owner the **Pause before every combat round** checkbox in in-game Settings and
+a quick **Pause combat** toggle beside the command area. Both builder flags
+default to false and are only available on instance templates. The config
+editor and YAML editor expose the same policy.
+
+A new run starts with the player checkbox unchecked. It uses ordinary commands
+and the existing inherited combat, spawn, zone, entity, and scheduler timing.
+Checking the box preserves normal exploration, then pauses the entire instance
+before the owner's first combat round and between every round. Regeneration,
+roaming, cooldowns, timed effects, spawn plans, doors, merchant restocking, and
+delayed scripts all wait with combat. An advance commits the prepared action,
+progresses two gameplay seconds, and resolves one round of active combat.
+Longer thinking time provides no extra regeneration and does not expire hazards.
+
+When the owner's combat ends, ordinary timing resumes automatically, retaining
+the preference for the next fight. Unchecking the box (or typing `resume`)
+restores ordinary scheduling during combat too. `pause` enables the preference
+and `time toggle` switches it. Remaining timer durations are preserved on
+resume; the server does not replay missed wall-clock time.
+
+Admission and time-control permission are copied into a run when it is
+created. Editing these flags affects new runs; it cannot change ownership or
+permission for an adventure already in progress. Run cleanup, network delivery,
+and server housekeeping still use real time.
+
+Quest repeatability cooldowns and opportunity snoozes also stop while the
+instance is paused. Their remaining duration follows the character when
+entering or leaving a paused run. Quest history retains real-world completion
+timestamps; changing a template's repeatability duration still updates
+availability using gameplay time elapsed since completion.
 
 ## Stable Template Identity And Family Export
 

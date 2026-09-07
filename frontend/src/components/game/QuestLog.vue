@@ -126,6 +126,7 @@
 </template>
 
 <script lang="ts" setup>
+import { gameplayTimeMs } from "@/core/instanceTimeControl";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useStore } from "vuex";
 import axios from "axios";
@@ -205,6 +206,8 @@ const loading = ref(true);
 const loadError = ref(false);
 const selectedTab = ref<QuestLogTab>("active");
 const nowMs = ref(Date.now());
+const gameplayAtFetchMs = ref(Date.now());
+const offsetAtFetchMs = ref(0);
 const fetchedAtMs = ref(Date.now());
 const serverTimeAtFetchMs = ref<number | null>(null);
 let countdownTimer: number | null = null;
@@ -230,6 +233,8 @@ const getQuests = async () => {
       resolved: resp.data.limits?.resolved || { limit: 0, truncated: false },
     };
     fetchedAtMs.value = Date.now();
+    gameplayAtFetchMs.value = gameplayTimeMs(store.state.game.instance_time_control, fetchedAtMs.value);
+    offsetAtFetchMs.value = (store.state.game.instance_time_control?.clock_offset_seconds || 0) * 1000;
     nowMs.value = fetchedAtMs.value;
     const parsedServerTime = Date.parse(resp.data.server_time || "");
     serverTimeAtFetchMs.value = Number.isNaN(parsedServerTime) ? null : parsedServerTime;
@@ -290,7 +295,7 @@ const repeatabilityRemainingSeconds = (quest: QuestInstance) => {
   const repeatability = quest.repeatability;
   if (!repeatability || repeatability.state !== "waiting") return 0;
 
-  const elapsedMs = nowMs.value - fetchedAtMs.value;
+  const elapsedMs = Math.max(0, gameplayTimeMs(store.state.game.instance_time_control, nowMs.value) - gameplayAtFetchMs.value);
   const parsedReadyAt = Date.parse(repeatability.ready_at || "");
   if (serverTimeAtFetchMs.value !== null && !Number.isNaN(parsedReadyAt)) {
     const currentServerTime = serverTimeAtFetchMs.value + elapsedMs;
@@ -339,11 +344,13 @@ const repeatabilityStatusClass = (quest: QuestInstance) => {
 
 const repeatabilityReadyAtTitle = (quest: QuestInstance) => {
   if (quest.repeatability?.state !== "waiting") return "";
+  if (store.state.game.instance_time_control?.paused) return "This cooldown advances with instance time.";
 
   const readyAt = quest.repeatability.ready_at;
   if (!readyAt) return "";
 
-  const parsedReadyAt = new Date(readyAt);
+  const offsetChange = (store.state.game.instance_time_control?.clock_offset_seconds || 0) * 1000 - offsetAtFetchMs.value;
+  const parsedReadyAt = new Date(Date.parse(readyAt) + offsetChange);
   if (Number.isNaN(parsedReadyAt.getTime())) return "";
   return `Ready at ${parsedReadyAt.toLocaleString()}`;
 };
@@ -360,7 +367,7 @@ const closeQuestLog = () => {
 
 onMounted(async () => {
   countdownTimer = window.setInterval(() => {
-    nowMs.value = Date.now();
+    if (!store.state.game.instance_time_control?.paused) nowMs.value = Date.now();
   }, 1000);
   await getQuests();
 });

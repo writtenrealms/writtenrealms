@@ -69,6 +69,9 @@ class CommandContext:
             self.published_messages.append(message)
         if self.capture_only:
             return
+        from spawns.instance_clock import capture_message
+        if capture_message(self.actor_key, message, self.connection_id):
+            return
         publish_to_player(self.actor_key, message, connection_id=self.connection_id)
 
     def publish_success(self, command_type: str, data: dict, text: str | None = None) -> None:

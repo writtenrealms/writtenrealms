@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from spawns.instance_clock import serialized_world, event_world_id
+
 from dataclasses import replace
 from typing import Callable
 import uuid
@@ -275,6 +277,7 @@ _EVENT_SUBSCRIPTIONS: dict[str, QuestSubscriptionHandler] = {
 }
 
 
+@serialized_world(lambda *, event_data, actor_key=None, **kwargs: event_world_id(event_data, actor_key))
 def dispatch_quest_subscriptions_for_event(
     *,
     event_type: str,
@@ -287,4 +290,7 @@ def dispatch_quest_subscriptions_for_event(
         return
 
     data = event_data if isinstance(event_data, dict) else {}
+    from spawns.instance_clock import defer_subscription
+    if defer_subscription('quest', event_type, data, actor_key, connection_id):
+        return
     handler(data, actor_key, connection_id)

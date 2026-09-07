@@ -1,4 +1,6 @@
 """Event-driven, restartable room admission with bounded candidate pages."""
+from spawns.instance_clock import serialized_world
+
 from datetime import timedelta
 from dataclasses import replace
 
@@ -26,7 +28,8 @@ MAX_ADMISSIONS = 8
 def request_reconciliation(world_id, room_id, keys=(), *, observed=False):
     if not world_id or not room_id:
         return
-    now = timezone.now()
+    from spawns.instance_clock import gameplay_now, is_time_controlled
+    now = gameplay_now(world_id)
     with transaction.atomic():
         state, _ = CombatRoomState.objects.get_or_create(world_id=world_id, room_id=room_id)
         state = CombatRoomState.objects.select_for_update().get(pk=state.pk)
@@ -42,7 +45,7 @@ def request_reconciliation(world_id, room_id, keys=(), *, observed=False):
         def enqueue():
             from spawns.tasks import reconcile_combat_room
             reconcile_combat_room.delay(state_id)
-        if not already_pending:
+        if not already_pending and not is_time_controlled(world_id):
             transaction.on_commit(enqueue, robust=True)
 
 
@@ -50,7 +53,8 @@ def recover_due_reconciliations(*, limit=100):
     from spawns.tasks import reconcile_combat_room
 
     now = timezone.now()
-    ids = list(CombatRoomState.objects.filter(next_run_ts__lte=now)
+    from spawns.instance_clock import live_worlds
+    ids = list(live_worlds(CombatRoomState.objects.filter(next_run_ts__lte=now))
                .filter(Q(lease_until__isnull=True) | Q(lease_until__lte=now))
                .order_by('next_run_ts', 'pk').values_list('pk', flat=True)[:max(1, min(limit, 100))])
     for state_id in ids:
@@ -89,8 +93,13 @@ def _initiates(policy, actor, target):
             and relation == 'hostile')
 
 
+@serialized_world(lambda state_id: CombatRoomState.objects.filter(pk=state_id).values_list('world_id', flat=True).first())
 def reconcile(state_id):
-    now = timezone.now()
+    from spawns.instance_clock import gameplay_now, is_time_controlled, in_simulation
+    runtime_id = CombatRoomState.objects.filter(pk=state_id).values_list('world_id', flat=True).first()
+    if is_time_controlled(runtime_id) and not in_simulation(runtime_id):
+        return 0
+    now = gameplay_now(runtime_id)
     with transaction.atomic():
         state = CombatRoomState.objects.select_for_update().filter(pk=state_id).first()
         if state is None or (state.lease_until and state.lease_until > now):
@@ -161,7 +170,9 @@ def reconcile(state_id):
     pairs = [(a, b) for a in sources for b in targets if actor_key(a) != actor_key(b)]
     offset = int(cursor.get('pair_offset', 0))
     admitted = 0
-    while offset < len(pairs) and admitted < MAX_ADMISSIONS:
+    while offset < len(pairs) and admitted < MAX_ADMISSIONS and (
+        not is_time_controlled(state.world_id) or in_simulation(state.world_id)
+    ):
         left, right = pairs[offset]
         offset += 1
         left_member, right_member = members.get(actor_key(left)), members.get(actor_key(right))
@@ -242,7 +253,7 @@ def reconcile(state_id):
         fresh.active_until = active_until
         fresh.next_run_ts = now if not done or fresh.dirty_generation != frozen_generation else None
         fresh.save(update_fields=['cursor', 'applied_generation', 'lease_until', 'active_until', 'next_run_ts'])
-        if fresh.next_run_ts:
+        if fresh.next_run_ts and not is_time_controlled(fresh.world_id):
             from spawns.tasks import reconcile_combat_room
             transaction.on_commit(lambda: reconcile_combat_room.delay(state_id), robust=True)
     return admitted

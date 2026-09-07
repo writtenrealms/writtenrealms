@@ -29,6 +29,21 @@ class WorldGate:
         self.player = player
         self.world = world
 
+    def _check_instance_owner(self):
+        world = self.world
+        if not world.context_id or not world.context.instance_of_id:
+            return
+
+        from worlds.models import InstanceRun
+
+        # Reconnection must preserve the same immutable admission policy as
+        # transfers. Excluding this character also rejects a deleted owner.
+        if InstanceRun.objects.filter(
+            spawned_world_id=world.pk, single_player=True,
+        ).exclude(owner_id=self.player.pk).exists():
+            raise ServiceError(
+                "This single-player instance belongs to its original owner.")
+
     def enter(self, ip=None):
         player = self.player
         world = self.world
@@ -37,6 +52,7 @@ class WorldGate:
         if world.lifecycle in (
             constants.WORLD_LIFECYCLE_NEW,
             constants.WORLD_LIFECYCLE_STOPPED):
+            self._check_instance_owner()
             from worlds.services import WorldSmith
             WorldSmith(world=world).start()
 
@@ -80,6 +96,9 @@ class WorldGate:
         self.player.last_action_ts = player.last_action_ts
         self.player = player
 
+        from spawns.instance_time import resume_for_player
+        resume_for_player(player)
+
         return player
 
     def preflight(self):
@@ -98,6 +117,8 @@ class WorldGate:
         """
         player = self.player
         world = self.world
+
+        self._check_instance_owner()
 
         # Site control mechanism to prevent all players from entering worlds
         try:
@@ -293,7 +314,8 @@ class WorldGate:
                 flush_game_event_outbox,
             )
 
-            cancellation_events = cancel_pending_player_door_action(
+            from spawns.instance_clock import is_time_controlled
+            cancellation_events = [] if is_time_controlled(player.world) else cancel_pending_player_door_action(
                 player=player,
                 code="actor_logged_out",
                 message="You stop working with the door as you leave the world.",

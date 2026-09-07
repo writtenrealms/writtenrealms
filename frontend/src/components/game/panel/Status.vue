@@ -28,9 +28,10 @@
         <ProgressBar
           v-for="effect in player_effects"
           :key="effect.expires"
-          :duration="effect_duration(effect)"
+          :duration="effect.duration"
           :label="effect.code"
           :expires="effect.expires"
+          :start="effect.start"
           method="channel"
         />
       </div>
@@ -67,13 +68,6 @@ const active_effects = computed(() => {
     [...character_effects, ...combat_effects] as ActiveRoundEffect[],
   );
 });
-const effect_duration = (effect) => {
-  const current = new Date().getTime();
-  const elapsed = (current - effect.start) / 1000;
-  const effect_duration = effect.duration - elapsed;
-  return effect_duration;
-};
-
 const onClickState = () => {
   if (player.value.state === "standing") {
     store.dispatch("game/cmd", "rest");

@@ -9,7 +9,6 @@ from typing import Any
 import uuid
 
 from django.contrib.contenttypes.models import ContentType
-from django.core.cache import cache
 from django.db import (
     IntegrityError,
     InterfaceError,
@@ -63,6 +62,7 @@ from spawns.events import (
     publish_events,
 )
 from spawns.follow_lifecycle import lock_movement_follow_graph
+from spawns.instance_clock import gameplay_now, in_simulation, is_time_controlled, live_worlds
 from spawns.handlers.base import TRIGGER_STEP_MODE_TRANSACTIONAL
 from spawns.models import (
     Item,
@@ -78,6 +78,7 @@ from spawns.script_commands import (
     ScriptCommandRunner,
 )
 from spawns.wallet import WalletError, WalletMutation, mutate_balances
+from spawns.trigger_gates import claim_gate, release_gate
 from worlds.models import InstanceRun, Room, World
 from worlds.room_refs import parse_room_reference
 
@@ -201,6 +202,8 @@ def _schedule_trigger_step_continuation(
     *,
     due_at,
 ) -> None:
+    if is_time_controlled(run.runtime_world_id):
+        return
     continuation = _due_run_continuation(run, due_at=due_at)
     if continuation is None:
         return
@@ -394,21 +397,19 @@ def _claim_trigger_gate(
         return None
 
     gate_key = _trigger_gate_cache_key(trigger.id, scope_key)
-    token = uuid.uuid4().hex
-    timeout = None if gate_delay < 0 else gate_delay
     try:
-        claimed = cache.add(gate_key, token, timeout=timeout)
+        claim = claim_gate(gate_key, scope_key, gate_delay)
     except Exception as exc:
         raise TriggerStepExecutionError(
             "The trigger gate is temporarily unavailable.",
             code="gate_unavailable",
         ) from exc
-    if not claimed:
+    if claim is None:
         raise TriggerStepExecutionError(
             TRIGGER_GATED_TEXT,
             code="gated",
         )
-    return gate_key, token
+    return claim
 
 
 def _release_trigger_gate(claim: tuple[str, str] | None) -> None:
@@ -416,8 +417,7 @@ def _release_trigger_gate(claim: tuple[str, str] | None) -> None:
         return
     gate_key, token = claim
     try:
-        if cache.get(gate_key) == token:
-            cache.delete(gate_key)
+        release_gate(claim)
     except Exception:
         logger.exception("Failed to release trigger gate %s", gate_key)
 
@@ -2874,7 +2874,7 @@ def start_trigger_steps(
                         mob_rows_prelocked=True,
                     )
                     resources_prelocked = True
-                started_ts = timezone.now()
+                started_ts = gameplay_now(runtime_world_id)
                 run = ScheduledTriggerRun.objects.create(
                     trigger=current_trigger,
                     runtime_world_id=runtime_world_id,
@@ -2918,7 +2918,10 @@ def start_trigger_steps(
                     )
                     if accepted_event is not None:
                         events.append(accepted_event)
-                if first_step_delay_seconds == 0:
+                if first_step_delay_seconds == 0 and (
+                    in_simulation(runtime_world_id)
+                    or not is_time_controlled(runtime_world_id)
+                ):
                     events.extend(
                         _execute_current_step(
                             run,
@@ -2944,7 +2947,7 @@ def start_trigger_steps(
                     transaction.on_commit(_flush_queued_events, robust=True)
                 _schedule_trigger_step_continuation(
                     run,
-                    due_at=timezone.now(),
+                    due_at=gameplay_now(runtime_world_id),
                 )
             except Exception:
                 # Release while the room advisory lock is still held so a
@@ -2991,11 +2994,38 @@ def start_trigger_steps(
     return TriggerStepStartResult(started=True, run_id=run.id)
 
 
-def _advance_one_due_run(
+def _advance_one_due_run(*, due_at, run_id=None, expected_step_index=None, world_id=None):
+    from spawns.instance_clock import clock_guard
+    candidates = live_worlds(ScheduledTriggerRun.objects.filter(
+        status=ScheduledTriggerRun.STATUS_ACTIVE, next_run_ts__lte=due_at,
+    ), world_field='runtime_world_id')
+    if world_id is not None:
+        candidates = candidates.filter(runtime_world_id=world_id)
+    if run_id is not None:
+        candidates = candidates.filter(pk=run_id, next_step_index=expected_step_index)
+    candidate = candidates.order_by('next_run_ts', 'id').values('pk', 'runtime_world_id', 'next_step_index').first()
+    if candidate is None:
+        return None
+    with clock_guard(candidate['runtime_world_id']) as clock_run:
+        if clock_run is None:
+            # Preserve SKIP LOCKED selection across ordinary worlds. Two workers
+            # may observe the same candidate before either acquires its row lock.
+            return _advance_one_due_run_locked(
+                due_at=due_at, run_id=run_id, expected_step_index=expected_step_index,
+                world_id=world_id, ordinary_only=True,
+            )
+        return _advance_one_due_run_locked(
+            due_at=due_at, run_id=candidate['pk'], expected_step_index=candidate['next_step_index'], world_id=world_id,
+        )
+
+
+def _advance_one_due_run_locked(
     *,
     due_at,
     run_id: int | None = None,
     expected_step_index: int | None = None,
+    world_id: int | None = None,
+    ordinary_only: bool = False,
 ) -> TriggerStepAdvanceResult | None:
     with transaction.atomic():
         runs = (
@@ -3010,6 +3040,14 @@ def _advance_one_due_run(
                 next_run_ts__lte=due_at,
             )
         )
+        runs = live_worlds(runs, world_field="runtime_world_id")
+        if ordinary_only:
+            from worlds.models import InstanceRun
+            runs = runs.exclude(runtime_world_id__in=InstanceRun.objects.filter(
+                time_control=True,
+            ).values('spawned_world_id'))
+        if world_id is not None:
+            runs = runs.filter(runtime_world_id=world_id)
         if run_id is not None:
             runs = runs.filter(
                 pk=run_id,
@@ -3083,7 +3121,7 @@ def advance_due_trigger_run(
     stale duplicate becomes a no-op instead of executing the following step.
     """
     advance = _advance_one_due_run(
-        due_at=now or timezone.now(),
+        due_at=now or gameplay_now(),
         run_id=run_id,
         expected_step_index=expected_step_index,
     )
@@ -3091,7 +3129,7 @@ def advance_due_trigger_run(
         return None
 
     transaction.on_commit(_flush_queued_events, robust=True)
-    if advance.continuation is not None:
+    if advance.continuation is not None and not in_simulation():
         transaction.on_commit(
             lambda: _enqueue_trigger_step_continuation(
                 advance.continuation
@@ -3105,9 +3143,10 @@ def process_due_trigger_runs(
     *,
     limit: int = DEFAULT_DUE_RUN_LIMIT,
     now=None,
+    world_id: int | None = None,
 ) -> dict[str, int]:
     row_limit = max(1, min(int(limit or 1), 1_000))
-    due_at = now or timezone.now()
+    due_at = now or gameplay_now(world_id)
     result = {
         "processed": 0,
         "completed": 0,
@@ -3115,7 +3154,7 @@ def process_due_trigger_runs(
     }
     continuations: dict[int, TriggerStepContinuation] = {}
     for _ in range(row_limit):
-        advance = _advance_one_due_run(due_at=due_at)
+        advance = _advance_one_due_run(due_at=due_at, world_id=world_id)
         if advance is None:
             break
         status = advance.status
@@ -3130,7 +3169,7 @@ def process_due_trigger_runs(
 
     if result["processed"]:
         transaction.on_commit(_flush_queued_events, robust=True)
-        for continuation in continuations.values():
+        for continuation in (() if in_simulation() else continuations.values()):
             transaction.on_commit(
                 lambda continuation=continuation: (
                     _enqueue_trigger_step_continuation(continuation)

@@ -57,7 +57,7 @@ export interface CommandRequestSegments {
   requestSegments: string[];
 }
 
-export type CommandResolutionKind = "alias" | "history";
+export type CommandResolutionKind = "alias" | "history" | "hotkey";
 
 export interface CommandResolution {
   kind: CommandResolutionKind;
@@ -368,11 +368,11 @@ export const commandRequestSegments = (
 export const commandResolution = (
   message: any,
 ): CommandResolution | null => {
-  if (message?.type === "cmd.alias.resolve") {
+  if (message?.type === "cmd.alias.resolve" || message?.type === "cmd.ability.hotkey.resolve") {
     const originalText = message?.data?.command;
     if (typeof originalText !== "string" || !originalText) return null;
     return {
-      kind: "alias",
+      kind: message.type === "cmd.ability.hotkey.resolve" ? "hotkey" : "alias",
       originalText,
       requestId: commandRequestId(message),
     };

@@ -624,7 +624,8 @@ def next_character_effect_tick_ts(*, after=None):
     miss the following heartbeat and stretch each round under worker load.
     """
     if after is None:
-        return timezone.now()
+        from spawns.instance_clock import gameplay_now
+        return gameplay_now()
     return after + timedelta(microseconds=1)
 
 
@@ -718,8 +719,10 @@ def _live_hostile_effects() -> QuerySet[ActiveEffect]:
     )
 
 
-def combat_tagged_actor_ids() -> tuple[set[int], set[int]]:
+def combat_tagged_actor_ids(*, world_ids=None) -> tuple[set[int], set[int]]:
     effects = _live_hostile_effects()
+    if world_ids is not None:
+        effects = effects.filter(world_id__in=world_ids)
     player_ids = set(
         effects.filter(source_player_id__isnull=False).values_list("source_player_id", flat=True)
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 import json
 from types import SimpleNamespace
 import uuid
@@ -31,6 +32,7 @@ from spawns.handlers.registry import (
 )
 from spawns.models import Item, Mob, Player
 from spawns.request_segments import normalize_request_segment
+from spawns.trigger_gates import claim_gate, gate_is_allowed
 from spawns.trigger_matcher import (
     evaluate_match_expression,
     exact_term_match,
@@ -583,11 +585,8 @@ def _claim_cached_gate(
     if gate_delay == 0:
         return True, None
     gate_key = _cached_trigger_gate_cache_key(hook, scope_key)
-    timeout = None if gate_delay < 0 else gate_delay
-    token = uuid.uuid4().hex
-    if not cache.add(gate_key, token, timeout=timeout):
-        return False, None
-    return True, (gate_key, token)
+    claim = claim_gate(gate_key, scope_key, gate_delay)
+    return claim is not None, claim
 
 
 def _load_movement_rooms(origin_room_id: int, destination_room_id: int) -> tuple[Room | None, Room | None]:
@@ -1090,7 +1089,7 @@ def _is_gate_allowed(trigger: Trigger, scope_key: str) -> bool:
     if gate_delay == 0:
         return True
     gate_key = _trigger_gate_cache_key(trigger, scope_key)
-    return not bool(cache.get(gate_key))
+    return gate_is_allowed(gate_key, scope_key)
 
 
 def _consume_gate(
@@ -1107,11 +1106,8 @@ def _consume_gate(
     if gate_delay == 0:
         return True, None
     gate_key = _trigger_gate_cache_key(trigger, scope_key)
-    timeout = None if gate_delay < 0 else gate_delay
-    token = uuid.uuid4().hex
-    if not cache.add(gate_key, token, timeout=timeout):
-        return False, None
-    return True, (gate_key, token)
+    claim = claim_gate(gate_key, scope_key, gate_delay)
+    return claim is not None, claim
 
 
 def _dispatch_trigger_script_segment(
@@ -1276,6 +1272,14 @@ def _schedule_trigger_script_line_segments(
         "expected_room_id": getattr(actor, "room_id", None),
         "script_command_depth": script_command_depth,
     }
+
+    from spawns.instance_clock import defer_work, gameplay_now
+
+    if defer_work(
+        actor.world_id, "script_segments", task_kwargs,
+        due_at=gameplay_now(actor.world_id) + timedelta(seconds=delay_seconds), allow_live=True,
+    ):
+        return []
 
     def enqueue_delayed_line() -> None:
         spawn_tasks.execute_trigger_script_segments.apply_async(

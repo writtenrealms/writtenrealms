@@ -4,10 +4,11 @@ from dataclasses import dataclass
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
 
 from config import constants as adv_consts
+from core.world_config import validate_instance_control_config
 from worlds.models import (
     InstanceAssignment,
     InstanceParticipant,
@@ -141,6 +142,28 @@ def _assert_match_run_entry_allowed(*, run, player, template_world=None):
         )
 
 
+def _assert_single_player_run_entry_allowed(*, run, player):
+    # An ownerless run remains private when its character was deleted. Neither
+    # an instance ref, a group role, nor a new leader can claim ownership.
+    if run.single_player and run.owner_id != player.pk:
+        raise RuntimeError("This single-player instance belongs to its original owner.")
+
+
+def _run_policy_snapshot(template_world, *, owner, now):
+    config = template_world.config
+    validate_instance_control_config(world=template_world, config=config, updates={})
+    single_player = bool(config and config.instance_single_player)
+    time_control = bool(config and config.instance_time_control)
+    return {
+        'single_player': single_player,
+        'owner': owner if single_player else None,
+        'time_control': time_control,
+        'pause_in_combat': False,
+        'time_paused': False,
+        'simulation_time': now if time_control else None,
+    }
+
+
 def _assert_match_template_requires_ref(template_world, *, ref):
     if ref:
         return
@@ -186,7 +209,13 @@ def _run_for_spawned_world(spawned_world, *, leader=None, member_ids=None):
         started_at=now,
         last_active_at=now,
         seed=ref,
-        initial_member_ids=_normalize_member_ids(member_ids),
+        initial_member_ids=(
+            [] if template_world.config.instance_single_player
+            else _normalize_member_ids(member_ids)
+        ),
+        **_run_policy_snapshot(
+            template_world, owner=leader or spawned_world.leader, now=now,
+        ),
     )
 
 
@@ -207,7 +236,11 @@ def _create_run(template_world, *, leader, member_ids=None, **spawn_kwargs):
         started_at=now,
         last_active_at=now,
         seed=ref,
-        initial_member_ids=_normalize_member_ids(member_ids),
+        initial_member_ids=(
+            [] if template_world.config.instance_single_player
+            else _normalize_member_ids(member_ids)
+        ),
+        **_run_policy_snapshot(template_world, owner=leader, now=now),
     )
 
 
@@ -430,6 +463,8 @@ def enter_players_into_run(
         for player, transfer_from in player_pairs
     }
 
+    for player, _transfer_from in player_pairs:
+        _assert_single_player_run_entry_allowed(run=run, player=player)
     _ensure_spawned_instance_started(run)
 
     from spawns.models import Player
@@ -458,6 +493,7 @@ def enter_players_into_run(
             if len(players) != len(player_ids):
                 raise ValueError("One or more players no longer exist.")
             for player in players:
+                _assert_single_player_run_entry_allowed(run=run, player=player)
                 in_base_world = player.world.context_id == run.base_world_id
                 already_in_run = player.world_id == run.spawned_world_id
                 if not in_base_world and not already_in_run:
@@ -506,6 +542,9 @@ def enter_players_into_run(
                     ),
                 )
 
+                from spawns.instance_clock import rebase_character_timers
+
+                rebase_character_timers(player, player.world_id, run.spawned_world_id)
                 player.world = run.spawned_world
                 player.room = entry_room
                 player_update_fields = ['world', 'room']
@@ -546,7 +585,11 @@ def get_or_create_instance_run(
     _assert_instance_template(template_world)
 
     with transaction.atomic():
-        template_world = World.objects.select_for_update().get(pk=template_world.pk)
+        template_world = (
+            World.objects.select_for_update(of=('self',))
+            .select_related('config', 'instance_of__config')
+            .get(pk=template_world.pk)
+        )
         _assert_match_template_requires_ref(template_world, ref=ref)
 
         if ref:
@@ -574,7 +617,9 @@ def get_or_create_instance_run(
         else:
             run = _active_run_qs().select_for_update().filter(
                 template_world=template_world,
-                leader=player,
+            ).filter(
+                Q(single_player=True, owner=player)
+                | Q(single_player=False, leader=player),
             ).select_related(
                 'spawned_world',
             ).first()
@@ -596,12 +641,13 @@ def get_or_create_instance_run(
                         member_ids=member_ids,
                         **spawn_kwargs)
 
+        _assert_single_player_run_entry_allowed(run=run, player=player)
         _assert_match_run_entry_allowed(
             run=run,
             player=player,
             template_world=template_world,
         )
-        member_id_list = _normalize_member_ids(member_ids)
+        member_id_list = [] if run.single_player else _normalize_member_ids(member_ids)
         if member_id_list and not run.initial_member_ids:
             run.initial_member_ids = member_id_list
             run.save(update_fields=['initial_member_ids'])
@@ -827,6 +873,9 @@ def _transfer_instance_participant_locked(
     origin_world_id = player.world_id
     origin_room_id = player.room_id
     _clear_movement_follows_for_players([player.id])
+    from spawns.instance_clock import rebase_character_timers
+
+    rebase_character_timers(player, origin_world_id, return_runtime.pk)
     player.world = return_runtime
     player.room = destination_room
     player_update_fields = ['world', 'room']
@@ -1250,6 +1299,7 @@ def enter_instance(
         )
         if run.status not in InstanceRun.ACTIVE_STATUSES:
             raise RuntimeError("This instance run is no longer active.")
+        _assert_single_player_run_entry_allowed(run=run, player=player)
         _assert_match_run_entry_allowed(
             run=run,
             player=player,
@@ -1296,7 +1346,7 @@ def enter_instance(
                 run=run,
                 player=locked_player,
                 transfer_from=transfer_from,
-                member_ids=_normalize_member_ids(member_ids),
+                member_ids=[] if run.single_player else _normalize_member_ids(member_ids),
             )
             _mark_other_active_participations_exited(
                 run=run,
@@ -1315,6 +1365,11 @@ def enter_instance(
 
             origin_room_id = locked_player.room_id
             _clear_movement_follows_for_players([locked_player.id])
+            from spawns.instance_clock import rebase_character_timers
+
+            rebase_character_timers(
+                locked_player, locked_player.world_id, run.spawned_world_id,
+            )
             locked_player.world = run.spawned_world
             locked_player.room = transfer_to
             player_update_fields = ['world', 'room']
@@ -1609,7 +1664,42 @@ def reset_instance(*, player) -> InstanceResetResult:
             run.progress = {}
             run.outcome = {}
             run.last_active_at = timezone.now()
-            run.save(update_fields=['progress', 'outcome', 'last_active_at', 'modified_ts'])
+            run_update_fields = ['progress', 'outcome', 'last_active_at', 'modified_ts']
+            if run.time_control:
+                from spawns.instance_clock import current_simulation
+                from spawns.instance_time import synchronize_combat_pause
+                from spawns.models import InstanceClockWork
+                from spawns.models import ScheduledTriggerRun
+
+                InstanceClockWork.objects.filter(world=spawned_world).exclude(
+                    kind='advance_receipt',
+                ).delete()
+                ScheduledTriggerRun.objects.filter(
+                    runtime_world=spawned_world,
+                    status=ScheduledTriggerRun.STATUS_ACTIVE,
+                ).update(
+                    status=ScheduledTriggerRun.STATUS_CANCELLED,
+                    failure_code='instance_reset',
+                    last_error='The instance was reset.',
+                    completed_ts=timezone.now(),
+                )
+                run.pending_command = {}
+                run.pending_revision += 1
+                run.time_generation += 1
+                run_update_fields.extend([
+                    'pending_command', 'pending_revision', 'time_generation',
+                ])
+                simulation = current_simulation()
+                if simulation and simulation.run.pk == run.pk:
+                    simulation.run.pending_command = {}
+                    simulation.run.pending_revision = run.pending_revision
+                    simulation.run.time_generation = run.time_generation
+            run.save(update_fields=run_update_fields)
+            if run.time_control:
+                # Replacement scheduling carries the new generation. A reset
+                # inside an advance is rescheduled by its outer transaction.
+                if not simulation:
+                    synchronize_combat_pause(run)
 
             spawned_world.is_clean = True
             spawned_world.last_spawn_plan_run_ts = None

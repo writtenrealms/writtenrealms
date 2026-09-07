@@ -6,6 +6,7 @@
       <div class="grow flex flex-col">
         <Console :messages="messages" class="grow" />
         <Hint v-if="hint" class="shrink-0" />
+        <TimeControl />
         <Input @input="onInput" class="shrink-0" />
       </div>
     </div>
@@ -36,6 +37,7 @@
 </template>
 
 <script lang="ts" setup>
+import TimeControl from "@/components/game/TimeControl.vue";
 import { computed } from 'vue';
 import { useStore } from 'vuex';
 import Input from "@/components/game/Input.vue";

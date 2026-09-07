@@ -136,6 +136,7 @@ from core.trigger_steps import (
 from core.world_config import (
     INSTANCE_INHERITED_MANIFEST_FIELDS,
     INSTANCE_LOCAL_MANIFEST_FIELDS,
+    validate_instance_control_config,
 )
 from spawns import trigger_matcher
 from worlds.models import Room, World, WorldConfig, Zone
@@ -248,6 +249,8 @@ _WORLD_CONFIG_CONFIG_TEXT_FIELDS = (
     "name_exclusions",
 )
 _WORLD_CONFIG_CONFIG_BOOL_FIELDS = (
+    "instance_single_player",
+    "instance_time_control",
     "can_select_gender",
     "auto_equip",
     "is_narrative",
@@ -1161,6 +1164,8 @@ def world_config_to_manifest(
         "initial_state": dict(world.initial_state or {}),
     }
     if is_instance_world:
+        spec["instance_single_player"] = bool(config.instance_single_player)
+        spec["instance_time_control"] = bool(config.instance_time_control)
         spec[_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD] = (
             config.death_routing_source or DEATH_ROUTING_SOURCE_LOCAL
         )
@@ -1287,6 +1292,8 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         "built_by": config.built_by or "",
     }
     if is_instance_world:
+        config_payload["instance_single_player"] = bool(config.instance_single_player)
+        config_payload["instance_time_control"] = bool(config.instance_time_control)
         config_payload[_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD] = (
             config.death_routing_source or DEATH_ROUTING_SOURCE_LOCAL
         )
@@ -7922,6 +7929,13 @@ def parse_world_config_manifest(
         except DeathRoutingValidationError as exc:
             raise serializers.ValidationError(str(exc)) from exc
 
+    try:
+        validate_instance_control_config(
+            world=world, config=world.config, updates=config_updates,
+        )
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc)) from exc
+
     return ParsedWorldConfigManifest(
         world=world,
         world_updates=world_updates,
@@ -7953,6 +7967,12 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
             shared=False,
         )
         config = WorldConfig.objects.select_for_update().get(pk=config.pk)
+        try:
+            validate_instance_control_config(
+                world=world, config=config, updates=parsed.config_updates,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
         if "stat_system" in parsed.config_updates:
             try:
                 validate_death_routing_archetype_dependencies(

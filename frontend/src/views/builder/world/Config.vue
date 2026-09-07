@@ -39,6 +39,21 @@
         </div>
 
         <template v-else>
+          <section v-if="!isRootWorld" class="instance-options" aria-labelledby="instance-options-title">
+            <h2 id="instance-options-title">Instance access and time</h2>
+            <label>
+              <input type="checkbox" :checked="!!instanceFlags.singlePlayer" :disabled="!instanceFlags.editable || isSubmitting" @change="setInstanceFlag('instance_single_player', $event)" />
+              Single-player instance
+            </label>
+            <p>Each run belongs to the first character to enter. Other players cannot join, even when the owner is absent.</p>
+            <label>
+              <input type="checkbox" :checked="!!instanceFlags.timeControl" :disabled="!instanceFlags.editable || !instanceFlags.singlePlayer || isSubmitting" @change="setInstanceFlag('instance_time_control', $event)" />
+              Allow player time control
+            </label>
+            <p>The owner can pause the whole instance before each combat round with a checkbox or the pause/resume commands. Exploration uses normal timing. Requires a single-player instance.</p>
+            <p v-if="!instanceFlags.editable">Edit these flags directly in World YAML when using custom YAML formatting.</p>
+            <p v-else>Changes are included in World YAML below. Save World YAML to apply them.</p>
+          </section>
           <div v-if="configSubmitError" class="config-error submit-error" role="alert">
             {{ configSubmitError }}
           </div>
@@ -90,6 +105,7 @@ import { useRouter, useRoute } from "vue-router";
 import ManifestYamlEditor from "@/components/builder/world/ManifestYamlEditor.vue";
 import { builderRoomIndexRoute, builderZoneIndexRoute } from "@/core/builderRoutes";
 import { applyWorldManifest, manifestApiErrorMessage } from "@/services/manifests";
+import { instanceConfigFlags, setInstanceConfigFlag } from "@/core/instanceConfig";
 
 const store = useStore();
 const router = useRouter();
@@ -105,6 +121,10 @@ const configSubmitError = ref("");
 
 const baseWorld = computed(() => world.value.instance_of || {});
 const isRootWorld = computed(() => !baseWorld.value.id);
+const instanceFlags = computed(() => instanceConfigFlags(manifestText.value));
+const setInstanceFlag = (flag: "instance_single_player" | "instance_time_control", event: Event) => {
+  manifestText.value = setInstanceConfigFlag(manifestText.value, flag, (event.target as HTMLInputElement).checked);
+};
 
 const editWorldPrefillLink = computed(() => ({
   name: "builder_world_edit",
@@ -417,6 +437,15 @@ const assignment_link = (assignment) => {
 
 .submit-error {
   margin-bottom: 1rem;
+}
+
+.instance-options {
+  margin-bottom: 1.5rem;
+  padding: 1.25rem;
+  border: 1px solid $color-background-border;
+  label { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+  p { color: $color-text-hex-70; margin-top: 8px; line-height: 1.5; }
+  input:disabled { opacity: 0.4; }
 }
 
 .danger-zone {

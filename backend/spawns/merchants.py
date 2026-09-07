@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from spawns.instance_clock import serialized_world, time_control_run
+
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
@@ -9,7 +11,10 @@ from typing import Iterable
 
 from django.core.cache import cache
 from django.db import transaction
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 from django.utils import timezone
+from spawns.instance_clock import gameplay_now, in_simulation, is_time_controlled, live_worlds
 
 from builders.models import MerchantProfile, MerchantStockSlot
 from config import constants as adv_consts
@@ -387,7 +392,7 @@ def _profile_budget(profile: MerchantProfile) -> int | None:
 
 
 def _set_next_restock(runtime: MerchantRuntime, *, now=None) -> None:
-    now = now or timezone.now()
+    now = now or gameplay_now(runtime.world_id)
     interval = runtime.profile.restock_interval_seconds
     if interval:
         runtime.next_restock_ts = now + timedelta(seconds=int(interval))
@@ -788,11 +793,13 @@ def _restock_bundle_slot(runtime: MerchantRuntime, slot: MerchantStockSlot) -> N
             _create_stock_entry(runtime, slot, item)
 
 
+@serialized_world(lambda runtime, **kwargs: runtime.world_id)
 @transaction.atomic
 def restock_merchant(
     runtime: MerchantRuntime,
     *,
     only_if_due: bool = False,
+    now=None,
 ) -> MerchantRuntime:
     runtime = (
         MerchantRuntime.objects.select_for_update(of=("self",))
@@ -805,7 +812,7 @@ def restock_merchant(
         )
         .get(pk=runtime.pk)
     )
-    now = timezone.now()
+    now = now or gameplay_now(runtime.world_id)
     if runtime.profile.settlement_currency_id is None:
         raise ActionError(
             "That merchant has no settlement currency.",
@@ -816,6 +823,13 @@ def restock_merchant(
         != runtime.profile.settlement_currency_id
     )
     generation_changed = runtime.last_restocked_ts is None or settlement_changed
+    # First materialization belongs to initial world state even for lazily
+    # created room shops. Subsequent stock/fund/buyback changes require an
+    # advance; opening a shop panel while thinking cannot trigger restocking.
+    if runtime.last_restocked_ts is not None and (
+        is_time_controlled(runtime.world_id) and not in_simulation(runtime.world_id)
+    ):
+        return runtime
     if (
         only_if_due
         and not generation_changed
@@ -857,23 +871,60 @@ def restock_merchant(
 
 
 def restock_if_due(runtime: MerchantRuntime) -> MerchantRuntime:
+    if is_time_controlled(runtime.world_id) and not in_simulation(runtime.world_id):
+        return runtime
     if (
         runtime.last_restocked_ts is None
         or runtime.settlement_currency_id
         != runtime.profile.settlement_currency_id
         or (
             runtime.next_restock_ts
-            and runtime.next_restock_ts <= timezone.now()
+            and runtime.next_restock_ts <= gameplay_now(runtime.world_id)
         )
     ):
         return restock_merchant(runtime, only_if_due=True)
     return runtime
 
 
+def process_due_merchant_restocks(*, world_id: int, now=None, limit: int = 1000) -> dict:
+    """Reconcile only indexed, due shops in the instance being advanced."""
+    due_at = now or gameplay_now(world_id)
+    runtimes = live_worlds(MerchantRuntime.objects.filter(
+        world_id=world_id, is_active=True, next_restock_ts__lte=due_at,
+    )).order_by("next_restock_ts", "id")
+    processed = 0
+    for runtime in runtimes[:max(1, min(int(limit), 1000))]:
+        restock_merchant(runtime, only_if_due=True, now=due_at)
+        processed += 1
+    return {"processed": processed}
+
+
+def initialize_controlled_room_merchants(world):
+    """Materialize authored room shops as part of the initial world snapshot."""
+    for room in Room.objects.filter(
+        world_id=world.context_id, merchant_profile_id__isnull=False,
+    ).order_by("id").iterator(chunk_size=100):
+        create_or_update_room_merchant_runtime(room, world)
+
+
 def resolve_merchant_runtime(player: Player, selector: str | None) -> MerchantRuntime:
     if not player.room_id:
         raise ActionError("You are nowhere.", code="no_room")
     provider = _resolve_merchant_provider_for_player(player, selector)
+    if is_time_controlled(player.world_id) and not in_simulation(player.world_id):
+        provider_filter = (
+            {"mob_id": provider.mob.id} if provider.mob is not None
+            else {"room_id": provider.room.id}
+        )
+        runtime = MerchantRuntime.objects.select_related(
+            "profile", "settlement_currency", "mob", "room",
+        ).filter(world_id=player.world_id, is_active=True, **provider_filter).first()
+        if runtime is None:
+            raise ActionError(
+                "Prepare a merchant action and advance to make that merchant available.",
+                code="merchant_advance_required",
+            )
+        return runtime
     if provider.mob is not None:
         runtime = create_or_update_merchant_runtime(provider.mob)
     else:
@@ -977,26 +1028,53 @@ def _merchant_selection_cache_key(
     return f"spawns.merchant.selection.v1.{view}.{player_id}.{runtime_id}"
 
 
+def _controlled_merchant_selection_cache_key(runtime_id, view):
+    return f"spawns.merchant.selection.clock.v1.{view}.{runtime_id}"
+
+
+@receiver(post_delete, sender=MerchantRuntime, dispatch_uid="clear_controlled_merchant_selections")
+def _clear_controlled_merchant_selections(sender, instance, **kwargs):
+    # A controlled run has one owner and at most these two snapshots per shop.
+    # Their gameplay expiration cannot use a cache TTL, so release them with
+    # the runtime rather than retaining cache entries for discarded instances.
+    try:
+        cache.delete_many([
+            _controlled_merchant_selection_cache_key(instance.pk, view)
+            for view in ("stock", "offer")
+        ])
+    except Exception:
+        logger.warning("Merchant selection cleanup failed for runtime=%s.", instance.pk, exc_info=True)
+
+
 def _cache_merchant_selection(
     *,
     player_id: int,
     runtime_id: int,
     view: str,
     object_ids: Iterable[int],
+    world_id: int | None = None,
 ) -> None:
     bounded_ids = [
         int(object_id)
         for object_id in object_ids
     ][:MAX_MERCHANT_STOCK_LIST_ITEMS]
     try:
+        controlled = world_id is not None and time_control_run(world_id) is not None
+        key = (
+            _controlled_merchant_selection_cache_key(runtime_id, view)
+            if controlled else _merchant_selection_cache_key(
+                player_id=player_id, runtime_id=runtime_id, view=view,
+            )
+        )
+        snapshot = {"ids": bounded_ids}
+        if controlled:
+            snapshot.update({
+                "player_id": player_id,
+                "expires_at": gameplay_now(world_id) + timedelta(seconds=MERCHANT_SELECTION_CACHE_TIMEOUT_SECONDS),
+            })
         cache.set(
-            _merchant_selection_cache_key(
-                player_id=player_id,
-                runtime_id=runtime_id,
-                view=view,
-            ),
-            {"ids": bounded_ids},
-            timeout=MERCHANT_SELECTION_CACHE_TIMEOUT_SECONDS,
+            key, snapshot,
+            timeout=None if controlled else MERCHANT_SELECTION_CACHE_TIMEOUT_SECONDS,
         )
     except Exception:
         # Selection snapshots are an optimization/safety token, never
@@ -1017,9 +1095,12 @@ def _cached_merchant_selection_id(
     runtime_id: int,
     view: str,
     number: int,
+    world_id: int | None = None,
 ) -> int | None:
     try:
+        controlled = world_id is not None and time_control_run(world_id) is not None
         snapshot = cache.get(
+            _controlled_merchant_selection_cache_key(runtime_id, view) if controlled else
             _merchant_selection_cache_key(
                 player_id=player_id,
                 runtime_id=runtime_id,
@@ -1036,6 +1117,13 @@ def _cached_merchant_selection_id(
         )
         return None
 
+    if controlled and (
+        not isinstance(snapshot, dict)
+        or snapshot.get("player_id") != player_id
+        or not snapshot.get("expires_at")
+        or snapshot["expires_at"] <= gameplay_now(world_id)
+    ):
+        return None
     ids = snapshot.get("ids") if isinstance(snapshot, dict) else None
     if not isinstance(ids, (list, tuple)) or len(ids) > MAX_MERCHANT_STOCK_LIST_ITEMS:
         return None
@@ -1083,6 +1171,7 @@ def list_merchant_stock(player: Player, merchant_selector: str | None) -> dict:
         runtime_id=runtime.id,
         view="stock",
         object_ids=(entry.id for entry in entries),
+        world_id=runtime.world_id,
     )
     return {
         "merchant": merchant_runtime_payload(runtime),
@@ -1133,6 +1222,7 @@ def _find_stock_entry(
             runtime_id=runtime.id,
             view="stock",
             number=number,
+            world_id=runtime.world_id,
         )
         if entry_id is None:
             raise ActionError(
@@ -1167,6 +1257,7 @@ def list_merchant_offers(player: Player, merchant_selector: str | None) -> dict:
         runtime_id=runtime.id,
         view="offer",
         object_ids=(item.id for item in items),
+        world_id=runtime.world_id,
     )
     return {
         "merchant": merchant_runtime_payload(runtime),
@@ -1254,6 +1345,7 @@ def _find_player_inventory_item(
             runtime_id=runtime.id,
             view="offer",
             number=number,
+            world_id=runtime.world_id,
         )
         if item_id is None:
             raise ActionError(
