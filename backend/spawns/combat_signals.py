@@ -7,7 +7,8 @@ from spawns.models import ActiveEffect, CharacterState, Mob, MobState, Player
 
 
 POLICY_FIELDS = {'world_id', 'room_id', 'aggression', 'fights_back', 'attackable',
-                 'is_invisible', 'is_pending_deletion', 'in_game', 'group_id', 'definition_id'}
+                 'is_invisible', 'is_pending_deletion', 'in_game', 'group_id', 'definition_id',
+                 'core_faction_id'}
 
 
 def request_reconciliation(*args, **kwargs):
@@ -23,7 +24,7 @@ def capture_admission_inputs(sender, instance, raw=False, update_fields=None, **
     if raw:
         return
     fields = {f.attname for f in sender._meta.concrete_fields} & POLICY_FIELDS
-    requested = {f + '_id' if f in {'room', 'world', 'definition'} else f for f in update_fields or fields}
+    requested = {f + '_id' if f in {'room', 'world', 'definition', 'core_faction'} else f for f in update_fields or fields}
     if not fields & requested:
         return
     previous = sender.objects.filter(pk=instance.pk).values(*fields).first() if instance.pk else None

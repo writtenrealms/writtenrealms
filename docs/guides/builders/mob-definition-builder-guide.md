@@ -138,6 +138,13 @@ effects, and other combat output continue to use their ability or effect labels.
 Use `aggression: passive`, `normal`, `players`, `all`, or `friendly`. The
 alias `aggressive` is accepted for `all`.
 
+With `normal`, a mob attacks an eligible player on room entry when their faction
+relationship is hostile. For example, a Persian guard attacks a Greek player
+unless an explicit faction relationship makes them neutral or allied. Combat
+uses the player's selected core faction as well as reputation standings; the
+player does not need a separate core-faction assignment. Changing the player's
+core faction also queues a hostility check in their current room.
+
 Use `fights_back: true` when a mob should take its normal turns after combat
 starts. Set `fights_back: false` for an attackable mob that never retaliates.
 Players can immediately use `disengage` against such a mob to end only that

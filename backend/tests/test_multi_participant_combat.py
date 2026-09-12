@@ -38,12 +38,90 @@ class MultiParticipantCombatTests(WorldTestCase):
         self.player.save(update_fields=['in_game', 'health'])
         self.greek = Faction.objects.create(world=self.world, code='greek', name='Greek', type='core')
         self.persian = Faction.objects.create(world=self.world, code='persian', name='Persian', type='core')
-        self.player.faction_assignments.create(faction=self.greek)
+        self.player.core_faction = self.greek
+        self.player.save(update_fields=['core_faction'])
 
     def mob(self, name, faction=None, **kwargs):
         mob = self.create_mob(name, health=1000, health_max=1000, **kwargs)
         mob.faction_assignments.create(faction=faction or self.persian)
         return mob
+
+    def test_room_entry_aggro_uses_player_core_faction_without_assignment(self):
+        from tests.combat_fixtures import dispatch_and_drain_combat
+        from tests.utils import capture_game_messages
+        from worlds.models import Room
+
+        destination = Room.objects.create(world=self.world, zone=self.zone,
+            name='Sparabara', x=self.room.x + 1, y=self.room.y, z=self.room.z)
+        self.room.east = destination
+        self.room.save(update_fields=['east'])
+        guard = self.mob('a sparabara', aggression='normal')
+        guard.room = destination
+        guard.save(update_fields=['room'])
+        self.player.stamina = 100
+        self.player.save(update_fields=['stamina'])
+        self.assertFalse(self.player.faction_assignments.exists())
+
+        with capture_game_messages() as messages:
+            dispatch_and_drain_combat(self.player.pk, 'east')
+
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, destination.pk, messages)
+        member = CombatParticipant.objects.get(player=self.player, is_active=True)
+        self.assertTrue(member.encounter.participants.filter(mob=guard, is_active=True).exists())
+        self.assertEqual(member.encounter.round_number, 0)
+        self.assertTrue(any(message['message'].get('text') == 'A sparabara attacks you!'
+                            for message in messages))
+
+    def test_mob_room_scan_respects_direct_core_faction_diplomacy(self):
+        from builders.models import FactionRelationship
+        from spawns.combat_reconciliation import request_reconciliation
+        from spawns.models import CombatRoomState
+        from tests.combat_fixtures import drain_queued_combat
+
+        guard = self.mob('guard', aggression='normal')
+        relationship = FactionRelationship.objects.create(
+            faction=self.persian, towards=self.greek, standing=0)
+        # A mob arrival loads the player through the target page, while player
+        # movement loads the player through the changed-actor lookup.
+        CombatRoomState.objects.all().delete()
+        request_reconciliation(self.spawn_world.pk, self.room.pk, [guard.key], observed=True)
+        drain_queued_combat()
+        self.assertFalse(CombatParticipant.objects.filter(player=self.player, is_active=True).exists())
+
+        relationship.standing = -1
+        relationship.save(update_fields=['standing'])
+        drain_queued_combat()
+        self.assertTrue(CombatParticipant.objects.filter(player=self.player, is_active=True).exists())
+
+    def test_direct_core_faction_overrides_assignment_in_combat_snapshot(self):
+        from spawns.combat_encounters import faction_snapshot
+
+        self.player.faction_assignments.create(faction=self.persian)
+        reputation = Faction.objects.create(world=self.world, code='town', name='Town')
+        self.player.faction_assignments.create(faction=reputation, value=-10)
+        guard = self.mob('guard')
+
+        def check(ctx):
+            with self.assertNumQueries(0):
+                self.assertEqual(faction_snapshot(ctx.actors[self.player.key]),
+                                 {'core': 'greek', 'town': -10})
+        transact(check, keys=[self.player.key, guard.key])
+
+    def test_core_faction_changes_queue_room_scan_without_damage_rescans(self):
+        for field in ('core_faction', 'core_faction_id'):
+            with self.subTest(field=field):
+                self.player.core_faction = self.persian if self.player.core_faction_id == self.greek.pk else self.greek
+                with patch('spawns.combat_signals.request_reconciliation') as request:
+                    self.player.save(update_fields=[field])
+                request.assert_called_once_with(self.spawn_world.pk, self.room.pk,
+                                                [self.player.key], observed=True)
+
+        with patch('spawns.combat_signals.request_reconciliation') as request:
+            self.player.health -= 1
+            self.player.save(update_fields=['health'])
+            self.player.save(update_fields=['core_faction'])
+        request.assert_not_called()
 
     def test_assistance_manifest_round_trip_and_condition_validation(self):
         from builders.manifests import (apply_mob_definition_manifest,
@@ -179,7 +257,8 @@ class MultiParticipantCombatTests(WorldTestCase):
         guard = self.mob('guard')
         def check(ctx):
             actor, target = ctx.actors[self.player.key], ctx.actors[guard.key]
-            policy = CombatPolicy(list(ctx.actors.values()))
+            with self.assertNumQueries(3):
+                policy = CombatPolicy(list(ctx.actors.values()))
             with self.assertNumQueries(0):
                 for _ in range(100):
                     self.assertEqual(policy.relationship(actor, target), 'hostile')

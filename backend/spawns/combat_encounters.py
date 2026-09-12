@@ -73,6 +73,10 @@ def faction_snapshot(actor):
         factions['core' if faction_is_core(faction) else faction.code] = (
             faction.code if faction_is_core(faction) else assignment.value
         )
+    if isinstance(actor, Player) and actor.core_faction_id:
+        # New players store core identity directly, without an assignment row.
+        # The canonical identity also wins over any older core assignment.
+        factions['core'] = actor.core_faction.code
     return factions
 
 
@@ -167,7 +171,7 @@ def locked_combat(*, keys=(), encounter_ids=()):
         players = [int(k.split('.')[1]) for k in keys if k.startswith('player.')]
         mobs = [int(k.split('.')[1]) for k in keys if k.startswith('mob.')]
         player_rows = list(Player.objects.select_for_update(of=('self',))
-                           .select_related('world', 'room__zone', 'equipment')
+                           .select_related('world', 'room__zone', 'equipment', 'core_faction')
                            .prefetch_related('faction_assignments__faction')
                            .filter(pk__in=players).order_by('pk'))
         mob_rows = list(Mob.objects.select_for_update(of=('self',))
@@ -249,6 +253,8 @@ class CombatPolicy:
         self.factions = {key: faction_snapshot(a) for key, a in self.actors.items()}
         faction_ids = {assignment.faction_id for a in actors
                        for assignment in a._prefetched_objects_cache['faction_assignments']}
+        faction_ids.update(a.core_faction_id for a in actors
+                           if isinstance(a, Player) and a.core_faction_id)
         self.diplomacy = {
             (source, target): ('hostile' if standing < 0 else 'allied' if standing > 0 else 'neutral')
             for source, target, standing in FactionRelationship.objects.filter(

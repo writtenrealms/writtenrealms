@@ -66,7 +66,7 @@ def _page(world_id, room_id, kind, after=0, size=PAGE_SIZE):
     model = Player if kind == 'player' else Mob
     queryset = model.objects.filter(world_id=world_id, room_id=room_id, pk__gt=after, health__gt=0)
     queryset = queryset.filter(in_game=True) if kind == 'player' else queryset.filter(is_pending_deletion=False)
-    return list(queryset.select_related('world', 'room', *(['definition'] if kind == 'mob' else []))
+    return list(queryset.select_related('world', 'room', *(['definition'] if kind == 'mob' else ['core_faction']))
                 .prefetch_related('faction_assignments__faction').order_by('pk')[:size])
 
 
@@ -75,7 +75,7 @@ def _load_keys(keys, world_id, room_id):
     for kind, model in [('player', Player), ('mob', Mob)]:
         ids = [int(k.split('.')[1]) for k in keys if k.startswith(kind + '.')]
         rows.extend(model.objects.filter(pk__in=ids, world_id=world_id, room_id=room_id)
-                    .select_related('world', 'room', *(['definition'] if kind == 'mob' else []))
+                    .select_related('world', 'room', *(['definition'] if kind == 'mob' else ['core_faction']))
                     .prefetch_related('faction_assignments__faction').order_by('pk'))
     return [actor for actor in rows if not isinstance(actor, Player) or actor.in_game]
 
