@@ -39,6 +39,22 @@ export const advanceTurnCommand = (control: InstanceTimeControl) => ({
   },
 });
 
+export const cancelTurnCommand = (control: InstanceTimeControl) => ({
+  type: "cmd.cancel_turn",
+  text: "cancelturn",
+  data: {
+    run_id: control.run_id,
+    expected_generation: control.generation,
+    expected_pending_revision: control.pending_revision,
+  },
+});
+
+export const instanceActionText = (control: InstanceTimeControl | null): string | null => {
+  const action = control?.pending_command;
+  const resolved = (action?.payload as { _hotkey_resolution?: unknown })?._hotkey_resolution;
+  return typeof resolved === 'string' && resolved ? resolved : action?.label || null;
+};
+
 export const combatPauseCommand = (control: InstanceTimeControl, pause: boolean) => ({
   type: "cmd.time_control", text: pause ? "pause" : "resume", data: {
     pause_in_combat: pause,

@@ -82,7 +82,7 @@ def leave_participant(context, participant, *, reason, refund=True):
     ActiveEffect.objects.filter(target_filter, scope=ActiveEffect.SCOPE_ENCOUNTER,
                                 encounter_id=participant.encounter_id).delete()
     ActiveEffect.objects.filter(target_filter, scope=ActiveEffect.SCOPE_CHARACTER).update(
-        next_tick_ts=next_character_effect_tick_ts(),
+        next_tick_ts=next_character_effect_tick_ts(world=encounter.world),
     )
     for other in context.participants:
         if other.current_target_id == participant.pk:
@@ -327,7 +327,7 @@ def resolve_locked(context, encounter, *, auto_advance, expected_round=None,
             target_player=actor if isinstance(actor, Player) else None,
             target_mob=actor if isinstance(actor, Mob) else None,
             encounter=encounter, viewer=actor if isinstance(actor, Player) else None,
-            round_id=round_id,
+            round_id=round_id, due_at=now,
         )
         events.extend(outcome.events)
         if actor.health <= 0:
@@ -420,7 +420,7 @@ def resolve_locked(context, encounter, *, auto_advance, expected_round=None,
         if isinstance(actor, Player) and (changed or exclude):
             from spawns.actions.abilities import ability_state_event
             events.append(ability_state_event(actor))
-        advance_character_effect_durations(actor, current_round_id=round_id, encounter=encounter)
+        advance_character_effect_durations(actor, current_round_id=round_id, encounter=encounter, due_at=now)
         p.intent_ready = False
         p.save(update_fields=['intent_ready', 'pending_ability'])
     from spawns.ability_prepare_state import ability_prepare_state_events_for_players

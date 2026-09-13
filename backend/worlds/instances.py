@@ -555,14 +555,12 @@ def enter_players_into_run(
                     player,
                     run.spawned_world,
                 )
-                from spawns.events import player_room_enter_event
-
-                room_enter_events.append(
-                    player_room_enter_event(
+                room_enter_events.extend(
+                    _instance_entry_events(
+                        run=run,
                         player=player,
                         origin_room_id=origin_room_id,
                         destination_room_id=entry_room.id,
-                        source="instance_enter",
                     )
                 )
 
@@ -792,6 +790,29 @@ def _cancel_pending_door_action(*, player, code, message):
         code=code,
         message=message,
     )
+
+
+def _instance_entry_events(*, run, player, origin_room_id, destination_room_id):
+    from spawns.events import GameEvent, player_room_enter_event
+
+    events = [player_room_enter_event(
+        player=player,
+        origin_room_id=origin_room_id,
+        destination_room_id=destination_room_id,
+        source="instance_enter",
+    )]
+    if run.time_control and run.single_player and run.owner_id == player.pk:
+        events.append(GameEvent(
+            type="notification.instance.time_control_hint",
+            recipients=[player.key],
+            data={"run_id": run.pk, "world_id": run.spawned_world_id},
+            text=(
+                "You are in a time-controlled instance, where combat can wait "
+                "for you between rounds. Use `pause` anytime, `advance` for the "
+                "next round, or `resume` for normal timing."
+            ),
+        ))
+    return events
 
 
 def _enqueue_instance_events(events):
@@ -1384,15 +1405,14 @@ def enter_instance(
             # passed model instance immediately after entry.
             player.world = run.spawned_world
             player.room = transfer_to
-            from spawns.events import player_room_enter_event
 
             _enqueue_instance_events([
                 *cancellation_events,
-                player_room_enter_event(
+                *_instance_entry_events(
+                    run=run,
                     player=locked_player,
                     origin_room_id=origin_room_id,
                     destination_room_id=transfer_to.id,
-                    source="instance_enter",
                 ),
             ])
 
@@ -1587,6 +1607,10 @@ def reset_instance(*, player) -> InstanceResetResult:
         player_ids = list(run.participants.filter(exited_at__isnull=True).values_list('player_id', flat=True))
         with locked_combat(keys=[f'player.{pk}' for pk in {*player_ids, player.pk}],
                            encounter_ids=encounter_ids) as combat_context:
+            if run.time_control:
+                # Reset and combat teardown must share one clock object. Two
+                # copies can each resume and shift the same timers twice.
+                run = combat_context.runs[run.pk]
             player = combat_context.actors[player.key]
             if player.world_id != spawned_world.pk:
                 raise ValueError('You are no longer in that instance.')

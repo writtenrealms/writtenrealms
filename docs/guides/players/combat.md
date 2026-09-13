@@ -6,9 +6,14 @@ Some builders offer single-player instances with **Time Control**. Each run
 belongs to the character who first enters it; other players cannot join that
 copy, even when its owner is away.
 
+Entering a Time Control instance shows a **Time Control** notice styled like the
+Message of the Day. It explains that combat can wait for you between rounds and
+highlights the `pause`, `advance`, and `resume` commands.
+
 Open **Settings > Time Control** and check **Pause before every combat
-round**. You can also use the **Pause combat** checkbox beside the command
-area. The setting belongs to this run and starts unchecked in a new adventure.
+round**. On desktop, the small **Pause Combat** checkbox sits just above the
+right end of the command bar. On mobile, it is in the Time Control bar. The
+setting belongs to this run and starts unchecked in a new adventure.
 
 Unchecked, the instance uses its ordinary timing and commands. Checked, you
 still explore normally until combat starts. The whole instance then waits
@@ -18,18 +23,36 @@ Reading or spending longer thinking does not advance those systems. Gameplay
 reactions to reading or speech also wait for your next turn.
 
 Choose an ability or issue another gameplay command to prepare your next
-action. A new preparation replaces the previous one. Review it in the **Time
-Control** bar, then click **Advance Turn** or type `advance`. One round passes,
+action. A new action replaces the previous one. On desktop, it appears as an
+**Action: …** button inside the right end of the command bar; click it to
+advance. Hotkeys show their resolved command, such as **Action: crest**. With
+no action queued, the button reads **Advance Turn** and still advances the round.
+On mobile, review the Action in the Time Control bar and click **Advance Turn**.
+You can also type `advance`, or press **Enter** with an empty command input while
+combat is paused, including when no action is set. One round passes,
 the results appear, and the instance waits again. An invalid action returns an
-error without consuming the turn. Use `cancelturn` to clear your preparation.
+error without consuming the turn. Click the **×** beside the desktop Action,
+use **Clear action** on mobile, or type `cancelturn` to clear the queued choice.
+Clearing does not advance time or cancel an ability that is already charging;
+the button returns to **Advance Turn**, allowing the existing cast to continue.
 With no prepared action, combat uses your normal basic attack or continues an
 existing cast. Inspection, help, and communication remain immediately available.
+
+Abilities are checked before they replace your queued choice. If you are already
+charging an ability, or the new ability fails its knowledge, requirements,
+cooldown, or resource checks, the command reports the reason and leaves your
+previous choice intact. You can still queue `flee` while charging; accepting that
+action on advance cancels the cast and begins your escape. Target and execution
+checks still run when you advance, so a queued action can fail if circumstances
+change.
 
 Each advance progresses two seconds of gameplay time and one round of active
 combat. An action with a longer delay needs additional advances to finish.
 Combat initiative remains unchanged. When your combat ends, exploration and
 ordinary timing resume automatically; the checkbox stays checked for the next
-fight.
+fight. Remaining cooldowns and character effects continue on the normal world
+heartbeat outside combat, including after an instance reset. Time spent paused
+does not add an extra delay before they start counting down again.
 
 Uncheck the box at any time to resume ordinary timing, including during a
 fight. Remaining timer durations are preserved; the instance does not catch up
@@ -42,6 +65,10 @@ Quick commands:
 - `resume` disables combat pausing and restores ordinary timing.
 - `time toggle` switches the checkbox on or off.
 - `time` shows the current setting; `time pause` and `time resume` also work.
+
+These commands confirm the resulting setting in the console: **Combat pauses
+before each round.** or **Normal world timing is enabled.** Repeating `pause`
+or `resume` confirms the same setting without toggling it.
 
 While combat is paused, disconnecting does not advance it, and thinking does
 not trigger idle logout. Normal cleanup rules still apply to abandoned or

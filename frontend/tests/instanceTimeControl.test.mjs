@@ -10,7 +10,7 @@ const loadModule = async (path) => {
   }).outputText;
   return import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 };
-const { applyInstanceTimeControl, advanceTurnCommand, combatPauseCommand, simulationTimeMs, gameplayTimeMs, pendingTurnCommandState } = await loadModule("../src/core/instanceTimeControl.ts");
+const { applyInstanceTimeControl, advanceTurnCommand, cancelTurnCommand, combatPauseCommand, instanceActionText, simulationTimeMs, gameplayTimeMs, pendingTurnCommandState } = await loadModule("../src/core/instanceTimeControl.ts");
 const { instanceConfigFlags, setInstanceConfigFlag } = await loadModule("../src/core/instanceConfig.ts");
 const snapshot = (overrides = {}) => ({
   enabled: true, pause_in_combat: true, paused: true, clock_offset_seconds: 0, tick: 7, generation: 3,
@@ -57,6 +57,25 @@ test("pause and resume commands carry the current preference version", () => {
     type: "cmd.time_control", text: "resume", data: { pause_in_combat: false, run_id: 14, expected_generation: 3 },
   });
   assert.equal(combatPauseCommand(snapshot(), true).data.pause_in_combat, true);
+});
+
+test("clearing an action is fenced to the displayed queue and uses the replayable command", () => {
+  const current = snapshot();
+  const command = cancelTurnCommand(current);
+  assert.deepEqual(command, { type: "cmd.cancel_turn", text: "cancelturn", data: {
+    run_id: 14, expected_generation: 3, expected_pending_revision: 11,
+  } });
+  current.pending_revision = 12;
+  assert.equal(command.data.expected_pending_revision, 11);
+});
+
+test("action labels prefer resolved hotkeys and handle absent or ordinary actions", () => {
+  assert.equal(instanceActionText(null), null);
+  assert.equal(instanceActionText(snapshot()), null);
+  assert.equal(instanceActionText(snapshot({ pending_command: { label: 'north' } })), 'north');
+  assert.equal(instanceActionText(snapshot({ pending_command: {
+    label: '6', payload: { _hotkey_resolution: 'crest' },
+  } })), 'crest');
 });
 
 test("controlled timers use the server simulation clock without wall-time interpolation", () => {

@@ -7,7 +7,6 @@ import math
 from typing import Any
 
 from django.db.models import F, Q, QuerySet
-from django.utils import timezone
 
 from config import constants as adv_consts
 from spawns.models import ActiveEffect, CombatEncounter, Mob, Player
@@ -599,7 +598,7 @@ def refresh_or_add_character_effect(
         "tick": deepcopy(effect.get("tick") or {}),
         "source_snapshot": deepcopy(effect.get("source_snapshot") or _source_snapshot(source)),
         "is_hostile": _effect_is_hostile(effect),
-        "next_tick_ts": next_character_effect_tick_ts(),
+        "next_tick_ts": next_character_effect_tick_ts(world=target.world),
         "last_tick_ts": None,
         "last_tick_token": "",
     }
@@ -615,7 +614,7 @@ def refresh_or_add_character_effect(
     return action
 
 
-def next_character_effect_tick_ts(*, after=None):
+def next_character_effect_tick_ts(*, after=None, world=None):
     """Make an effect eligible for the next shared heartbeat round.
 
     This is an eligibility watermark, not a per-effect round timer. A new
@@ -625,7 +624,7 @@ def next_character_effect_tick_ts(*, after=None):
     """
     if after is None:
         from spawns.instance_clock import gameplay_now
-        return gameplay_now()
+        return gameplay_now(world)
     return after + timedelta(microseconds=1)
 
 
@@ -636,7 +635,8 @@ def advance_character_effect_durations(
     encounter: CombatEncounter | None = None,
     due_at=None,
 ) -> bool:
-    pulse_at = due_at or timezone.now()
+    from spawns.instance_clock import gameplay_now
+    pulse_at = due_at or gameplay_now()
     queryset = _actor_effect_queryset(actor).filter(
         world=actor.world,
         scope=ActiveEffect.SCOPE_CHARACTER,
@@ -667,7 +667,7 @@ def advance_character_effect_durations(
             effect.remaining_rounds = remaining
             effect.rounds_elapsed += 1
             effect.last_tick_token = current_round_id or effect.last_tick_token
-            effect.last_tick_ts = timezone.now()
+            effect.last_tick_ts = pulse_at
             effect.next_tick_ts = next_character_effect_tick_ts(after=pulse_at)
             effect.save(
                 update_fields=[

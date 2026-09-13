@@ -1519,6 +1519,56 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertEqual(state_message["data"]["world"]["instance_of_id"], self.world.id)
         self.assertEqual(state_message["data"]["world"]["instance_ref"], run.ref)
         self.assertEqual(state_message["data"]["room"]["id"], self.instance_room.id)
+        self.assertIsNone(self._message_by_type(messages, "notification.instance.time_control_hint"))
+
+    def test_time_control_entry_and_reentry_show_owner_command_hint(self):
+        self._link_current_room_to_instance()
+        self.instance_config.instance_single_player = True
+        self.instance_config.instance_time_control = True
+        self.instance_config.save(update_fields=["instance_single_player", "instance_time_control"])
+
+        for entry in range(2):
+            with self.subTest(entry=entry):
+                with capture_game_messages() as messages:
+                    dispatch_and_drain_combat(self.player.pk, "enter")
+                    flush_game_event_outbox()
+                self.player.refresh_from_db()
+                run = InstanceRun.objects.get()
+                hints = [row for row in messages
+                         if row["message"]["type"] == "notification.instance.time_control_hint"]
+                self.assertEqual(len(hints), 1)
+                self.assertEqual(hints[0]["player_key"], self.player.key)
+                self.assertEqual(hints[0]["message"]["text"],
+                    "You are in a time-controlled instance, where combat can wait "
+                    "for you between rounds. Use `pause` anytime, `advance` for the "
+                    "next round, or `resume` for normal timing.")
+                self.assertEqual(hints[0]["message"]["data"]["run_id"], run.pk)
+                self.assertEqual(self.player.world_id, run.spawned_world_id)
+                self.assertFalse(run.pause_in_combat)
+                World.leave_instance(player=self.player)
+
+    def test_single_player_entry_without_time_control_has_no_command_hint(self):
+        self.instance_config.instance_single_player = True
+        self.instance_config.save(update_fields=["instance_single_player"])
+        with capture_game_messages() as messages:
+            self._enter()
+            flush_game_event_outbox()
+        self.assertIsNone(self._message_by_type(messages, "notification.instance.time_control_hint"))
+
+    def test_admission_into_existing_time_control_run_shows_command_hint(self):
+        self.instance_config.instance_single_player = True
+        self.instance_config.instance_time_control = True
+        self.instance_config.save(update_fields=["instance_single_player", "instance_time_control"])
+        run = create_fresh_instance_run(self.instance_template, leader=self.player)
+        with capture_game_messages() as messages:
+            enter_players_into_run(run, players_and_transfer_rooms=[(self.player, self.room)],
+                                   entry_room=self.instance_room)
+            flush_game_event_outbox()
+        hints = [row for row in messages
+                 if row["message"]["type"] == "notification.instance.time_control_hint"]
+        self.assertEqual(len(hints), 1)
+        self.assertEqual(hints[0]["player_key"], self.player.key)
+        self.assertEqual(hints[0]["message"]["data"]["run_id"], run.pk)
 
     def test_look_at_instance_entrance_includes_enter_action(self):
         self._link_current_room_to_instance()

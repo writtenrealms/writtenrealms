@@ -1,8 +1,8 @@
 <template>
-  <div v-if="control?.enabled" class="combat-pause-toggle">
+  <div v-if="control?.enabled" class="combat-pause-toggle" :class="{ dense }">
     <label>
       <input type="checkbox" :checked="control.pause_in_combat" :disabled="!connected || !!pending" @change="toggle" />
-      <span>{{ compact ? 'Pause combat' : 'Pause before every combat round' }}</span>
+      <span>{{ compact ? 'Pause Combat' : 'Pause before every combat round' }}</span>
     </label>
     <span v-if="error && !compact" class="error" role="alert">{{ error }}</span>
   </div>
@@ -13,7 +13,7 @@ import { computed } from "vue";
 import { useStore } from "vuex";
 import { combatPauseCommand, type InstanceTimeControl } from "@/core/instanceTimeControl";
 
-defineProps<{ compact?: boolean }>();
+defineProps<{ compact?: boolean; dense?: boolean }>();
 const store = useStore();
 const control = computed<InstanceTimeControl | null>(() => store.state.game.instance_time_control);
 const connected = computed(() => store.state.game.is_connected);
@@ -31,4 +31,6 @@ input { width: 20px; height: 20px; margin: 0; accent-color: #bb9865; }
 input:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
 input:disabled { cursor: default; }
 .error { display: block; color: #eb5757; }
+.dense label { min-height: 24px; gap: 6px; font-size: 12px; }
+.dense input { width: 14px; height: 14px; }
 </style>

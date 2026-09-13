@@ -4337,7 +4337,8 @@ def _advance_character_periodic_effects(
     advance_player_character_effects: bool = True,
     locked_source_player_ids: set[int] | None = None,
 ) -> EffectAdvanceOutcome:
-    pulse_at = due_at or timezone.now()
+    from spawns.instance_clock import gameplay_now
+    pulse_at = due_at or gameplay_now()
     target_filter = Q()
     if target_player is not None:
         target_filter |= Q(target_player=target_player)
@@ -4507,7 +4508,7 @@ def _advance_character_periodic_effects(
         if remaining > 0:
             effect_row.remaining_rounds = remaining
             effect_row.rounds_elapsed = elapsed
-            effect_row.last_tick_ts = timezone.now()
+            effect_row.last_tick_ts = pulse_at
             effect_row.last_tick_token = tick_token
             effect_row.next_tick_ts = next_character_effect_tick_ts(after=pulse_at)
             effect_row.save(

@@ -6,13 +6,14 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
+from builders.models import AbilityDefinition
 from config import constants as adv_consts
 from spawns.actions.base import ActionError
 from spawns.combat_rounds import resolve
 from spawns.handlers import dispatch_command
 from spawns.instance_clock import SIMULATION_STEP_SECONDS, gameplay_now, live_worlds
 from spawns.instance_time import advance, cancel, configure, snapshot_for_player
-from spawns.models import CombatEncounter, InstanceClockWork, Mob, Player
+from spawns.models import ActiveEffect, CombatEncounter, InstanceClockWork, Mob, Player
 from spawns.tasks import WR2_STANDING_REGEN_RATE, run_game_heartbeat, resume_instance_schedulers
 from tests.base import WorldTestCase
 from tests.utils import apply_basic_stat_system, capture_game_messages, create_active_effect, dispatch_text_command
@@ -75,6 +76,30 @@ class TestInstanceTimeControl(WorldTestCase):
                     expected_pending_revision=run.pending_revision)
         args.update(kwargs)
         return advance(**args)
+
+    def _turn_abilities(self):
+        abilities = [AbilityDefinition.objects.create(
+            world=self.world, slug=slug, name=name, command_verbs=[verb],
+            cast_time={'rounds': rounds}, cost={'resource': 'energy', 'amount': 5},
+            target={'type': 'hostile', 'default': 'current_target'},
+            components=[{'type': 'damage', 'profile': 'basic_physical'}],
+        ) for slug, name, verb, rounds in (
+            ('test-trident', 'Test Trident', 'tri', 1), ('test-tide', 'Test Tide', 'tide', 0),
+        )]
+        self.player.known_abilities = [ability.slug for ability in abilities]
+        self.player.ability_hotkeys = {'3': abilities[0].slug, '4': abilities[1].slug}
+        self.player.energy = 100
+        self.player.save(update_fields=['known_abilities', 'ability_hotkeys', 'energy'])
+        return abilities
+
+    def _charging_fight(self):
+        _, encounter = self._fight()
+        self._turn_abilities()
+        dispatch_text_command(self.player.pk, 'tri')
+        self._advance()
+        participant = encounter.participants.get(player=self.player)
+        self.assertEqual(participant.pending_ability['status'], 'casting')
+        return encounter, participant
 
     def test_permission_alone_keeps_normal_commands_and_heartbeat(self):
         self.assertFalse(self.run.pause_in_combat)
@@ -161,6 +186,76 @@ class TestInstanceTimeControl(WorldTestCase):
         encounter.refresh_from_db()
         self.assertEqual(encounter.round_number, 1)
 
+    def test_manual_round_effect_timestamps_use_simulation_time_before_resuming(self):
+        self._fight()
+        effects = [create_active_effect(target=self.player, source=self.player, payload=payload)
+                   for payload in (
+                       {'effect': 'crest', 'remaining_rounds': 3},
+                       {'effect': 'renewal', 'remaining_rounds': 3, 'tick': {
+                           'every_rounds': 1, 'primitives': [{'type': 'resource_change',
+                           'resource': 'energy', 'amount': 1, 'target': 'effect.target'}],
+                       }},
+                   )]
+        resumed_at = self.run.simulation_time + timedelta(minutes=10)
+        with patch('django.utils.timezone.now', return_value=resumed_at):
+            self._advance()
+            self.run.refresh_from_db()
+            for effect in effects:
+                effect.refresh_from_db()
+                self.assertEqual(effect.remaining_rounds, 2)
+                self.assertEqual(effect.last_tick_ts, self.run.simulation_time)
+                self.assertEqual(effect.next_tick_ts, self.run.simulation_time + timedelta(microseconds=1))
+            configure(self.player.pk, pause_in_combat=False)
+        for effect in effects:
+            effect.refresh_from_db()
+            self.assertEqual(effect.last_tick_ts, resumed_at)
+            self.assertEqual(effect.next_tick_ts, resumed_at + timedelta(microseconds=1))
+
+    def test_reset_of_paused_combat_resumes_effects_and_cooldowns_on_next_heartbeat(self):
+        self._fight()
+        self.player.ability_cooldowns = {'crest': 2}
+        self.player.save(update_fields=['ability_cooldowns'])
+        effect = create_active_effect(target=self.player, source=self.player,
+                                      payload={'effect': 'crest', 'remaining_rounds': 2})
+        resumed_at = self.run.simulation_time + timedelta(minutes=10)
+        with patch('django.utils.timezone.now', return_value=resumed_at):
+            reset_instance(player=self.player)
+        self.run.refresh_from_db()
+        effect.refresh_from_db()
+        self.assertFalse(self.run.time_paused)
+        self.assertEqual(self.run.clock_offset_seconds, 600)
+        self.assertFalse(CombatEncounter.objects.filter(world=self.run.spawned_world, status='active').exists())
+        self.assertLessEqual(effect.next_tick_ts, resumed_at)
+        for offset, remaining in ((0.1, 1), (2.1, 0)):
+            with patch('django.utils.timezone.now', return_value=resumed_at + timedelta(seconds=offset)):
+                run_game_heartbeat()
+            self.player.refresh_from_db()
+            self.assertEqual(self.player.ability_cooldowns.get('crest', 0), remaining)
+            self.assertEqual(ActiveEffect.objects.filter(pk=effect.pk).values_list('remaining_rounds', flat=True).first() or 0,
+                             remaining)
+
+    def test_winning_a_manual_round_resumes_remaining_effects_and_cooldowns(self):
+        self._fight(health=1)
+        self.player.ability_cooldowns = {'crest': 3}
+        self.player.save(update_fields=['ability_cooldowns'])
+        effect = create_active_effect(target=self.player, source=self.player,
+                                      payload={'effect': 'crest', 'remaining_rounds': 3})
+        resumed_at = self.run.simulation_time + timedelta(minutes=10)
+        with patch('django.utils.timezone.now', return_value=resumed_at):
+            self._advance()
+        self.run.refresh_from_db()
+        self.player.refresh_from_db()
+        effect.refresh_from_db()
+        self.assertFalse(self.run.time_paused)
+        self.assertLessEqual(effect.next_tick_ts, resumed_at + timedelta(microseconds=1))
+        cooldown, duration = self.player.ability_cooldowns['crest'], effect.remaining_rounds
+        with patch('django.utils.timezone.now', return_value=resumed_at + timedelta(seconds=0.1)):
+            run_game_heartbeat()
+        self.player.refresh_from_db()
+        effect.refresh_from_db()
+        self.assertEqual(self.player.ability_cooldowns.get('crest', 0), cooldown - 1)
+        self.assertEqual(effect.remaining_rounds, duration - 1)
+
     def test_unchecked_preserves_inherited_command_driven_combat(self):
         self.world.config.combat_resolution_interval = -1
         self.world.config.save(update_fields=['combat_resolution_interval'])
@@ -219,8 +314,137 @@ class TestInstanceTimeControl(WorldTestCase):
         resolutions = lambda: [row['message'] for row in self.messages if row['message']['type'] == 'cmd.ability.hotkey.resolve']
         self.assertEqual([message['text'] for message in resolutions()], ['1 opponent -> strike opponent'])
         self.assertEqual(resolutions()[0]['data']['request_id'], 'prepared-hotkey')
+        self.assertEqual(self.run.pending_command['label'], 'strike opponent')
+        confirmations = [row['message']['text'] for row in self.messages if row['message']['type'] == 'cmd.prepare_turn.success']
+        self.assertEqual(confirmations, ['Action: strike opponent.'])
         self._advance()
         self.assertEqual(len(resolutions()), 1)
+
+    def test_charging_rejects_new_actions_from_verbs_hotkeys_and_aliases_before_queueing(self):
+        encounter, participant = self._charging_fight()
+        dispatch_text_command(self.player.pk, 'alias wave tide')
+        self.run.refresh_from_db()
+        revision, tick = self.run.pending_revision, self.run.simulation_tick
+        cast = dict(participant.pending_ability)
+        for command in ('tide', 'test-tide', '4', 'wave', 'tri', '3'):
+            with self.subTest(command=command):
+                before = len(self.messages)
+                dispatch_text_command(self.player.pk, command)
+                errors = [row['message'] for row in self.messages[before:]
+                          if row['message']['type'] == 'cmd.ability.error']
+                self.assertEqual([error['data']['code'] for error in errors], ['ability_cast_in_progress'])
+                self.run.refresh_from_db()
+                participant.refresh_from_db()
+                self.assertFalse(self.run.pending_command)
+                self.assertEqual((self.run.pending_revision, self.run.simulation_tick), (revision, tick))
+                self.assertEqual(participant.pending_ability, cast)
+        self._advance()
+        participant.refresh_from_db()
+        encounter.refresh_from_db()
+        self.assertFalse(participant.pending_ability)
+        self.assertEqual(encounter.round_number, 2)
+
+    def test_rejected_ability_preserves_queued_flee_and_flee_cancels_cast(self):
+        encounter, participant = self._charging_fight()
+        dispatch_text_command(self.player.pk, 'flee')
+        self.run.refresh_from_db()
+        queued, revision = dict(self.run.pending_command), self.run.pending_revision
+        self.assertEqual(queued['command_type'], 'flee')
+        dispatch_text_command(self.player.pk, 'tide')
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.pending_command, queued)
+        self.assertEqual(self.run.pending_revision, revision)
+        self._advance()
+        participant.refresh_from_db()
+        self.assertFalse(participant.pending_ability)
+        self.assertEqual(participant.pending_flee['status'], 'ready')
+
+    def test_clearing_an_old_invalid_action_preserves_the_cast_and_unblocks_advance(self):
+        encounter, participant = self._charging_fight()
+        # Reproduce a choice saved before preparation validation was introduced.
+        InstanceRun.objects.filter(pk=self.run.pk).update(pending_command={
+            'command_type': 'text', 'payload': {'text': 'tide'}, 'label': 'tide',
+        })
+        with self.assertRaises(ActionError) as error:
+            self._advance()
+        self.assertEqual(error.exception.code, 'ability_cast_in_progress')
+        cast = dict(participant.pending_ability)
+        before = self.run.simulation_time
+        dispatch_text_command(self.player.pk, 'cancelturn')
+        self.run.refresh_from_db()
+        participant.refresh_from_db()
+        self.assertFalse(self.run.pending_command)
+        self.assertEqual(self.run.simulation_time, before)
+        self.assertEqual(participant.pending_ability, cast)
+        self._advance()
+        participant.refresh_from_db()
+        encounter.refresh_from_db()
+        self.assertFalse(participant.pending_ability)
+        self.assertEqual(encounter.round_number, 2)
+
+    def test_unready_abilities_do_not_replace_the_previous_action_or_spend_resources(self):
+        _, encounter = self._fight()
+        _, ability = self._turn_abilities()
+        dispatch_text_command(self.player.pk, 'kill opponent')
+        self.run.refresh_from_db()
+        queued, revision = dict(self.run.pending_command), self.run.pending_revision
+        for changes, code in (
+            ({'known_abilities': []}, 'ability_unknown'),
+            ({'ability_cooldowns': {ability.slug: 2}}, 'ability_on_cooldown'),
+            ({'energy': 0}, 'insufficient_resource'),
+        ):
+            with self.subTest(code=code):
+                defaults = {'known_abilities': ['test-trident', ability.slug], 'ability_cooldowns': {}, 'energy': 100}
+                Player.objects.filter(pk=self.player.pk).update(**{**defaults, **changes})
+                before = len(self.messages)
+                dispatch_text_command(self.player.pk, 'tide')
+                errors = [row['message'] for row in self.messages[before:]
+                          if row['message']['type'] == 'cmd.ability.error']
+                self.assertEqual([error['data']['code'] for error in errors], [code])
+                self.run.refresh_from_db()
+                self.assertEqual((self.run.pending_command, self.run.pending_revision), (queued, revision))
+                self.assertEqual(self.run.simulation_tick, 0)
+        Player.objects.filter(pk=self.player.pk).update(energy=100)
+        ability.availability = {'min_level': self.player.level + 1}
+        ability.save(update_fields=['availability'])
+        dispatch_text_command(self.player.pk, 'tide')
+        self.run.refresh_from_db()
+        self.assertEqual(self.run.pending_command, queued)
+        self.assertEqual(self.messages[-1]['message']['data']['code'], 'ability_unavailable')
+        ability.availability = {}
+        ability.save(update_fields=['availability'])
+        dispatch_text_command(self.player.pk, 'tide')
+        self.run.refresh_from_db()
+        self.player.refresh_from_db()
+        self.assertEqual(self.run.pending_command['label'], 'tide')
+        self.assertEqual(self.player.energy, 100)
+        self.assertFalse(self.player.ability_cooldowns)
+        self.assertFalse(encounter.participants.get(player=self.player).pending_ability)
+
+    def test_preparation_cast_check_is_one_indexed_read_independent_of_instance_population(self):
+        from spawns.actions.abilities import validate_ability_preparation
+        _, participant = self._charging_fight()
+        ability = AbilityDefinition.objects.get(world=self.world, slug='test-tide')
+        samples = []
+        for count in (1, 64):
+            if count > 1:
+                for index in range(count - 1):
+                    self._mob(f'Offscreen {index}', room=self.east)
+            start = perf_counter()
+            with CaptureQueriesContext(connection) as queries, self.assertRaises(ActionError) as error:
+                validate_ability_preparation(self.player, ability)
+            self.assertEqual(error.exception.code, 'ability_cast_in_progress')
+            self.assertEqual(len(queries), 1)
+            self.assertIn('"player_id" =', queries[0]['sql'])
+            samples.append((count, len(queries), round((perf_counter() - start) * 1000, 2)))
+        print('Preparation cast-check profile (offscreen mobs, queries, milliseconds):', samples)
+
+    def test_normal_timing_does_not_run_preparation_validation(self):
+        self._fight(paused=False)
+        self._turn_abilities()
+        with patch('spawns.actions.abilities.validate_ability_preparation') as validate:
+            dispatch_text_command(self.player.pk, 'tri')
+        validate.assert_not_called()
 
     def test_resume_preserves_remaining_combat_delay_and_schedules_normal_rounds(self):
         _, encounter = self._fight()
@@ -280,12 +504,39 @@ class TestInstanceTimeControl(WorldTestCase):
 
     def test_quick_text_pause_resume_and_toggle(self):
         self._fight()
-        for command, expected in [('resume', False), ('pause', True), ('time toggle', False), ('time on', True)]:
-            dispatch_text_command(self.player.pk, command)
-            self.run.refresh_from_db()
-            self.assertEqual(self.run.pause_in_combat, expected)
-            self.assertEqual(self.run.time_paused, expected)
-            self.assertEqual(self.run.simulation_tick, 0)
+        for command, expected in [
+            ('resume', False), ('resume', False), ('pause', True), ('pause', True),
+            ('time toggle', False), ('time toggle', True), ('time resume', False),
+            ('time pause', True), ('time off', False), ('time on', True),
+        ]:
+            with self.subTest(command=command, expected=expected):
+                before = len(self.messages)
+                dispatch_text_command(self.player.pk, command)
+                self.run.refresh_from_db()
+                self.assertEqual(self.run.pause_in_combat, expected)
+                self.assertEqual(self.run.time_paused, expected)
+                self.assertEqual(self.run.simulation_tick, 0)
+                confirmations = [row['message'] for row in self.messages[before:]
+                                 if row['message']['type'] == 'cmd.time_control.success']
+                self.assertEqual(len(confirmations), 1)
+                self.assertEqual(confirmations[0].get('text'),
+                    'Combat pauses before each round.' if expected else 'Normal world timing is enabled.')
+                self.assertEqual(confirmations[0]['data']['pause_in_combat'], expected)
+
+    def test_pause_and_resume_confirm_setting_during_exploration(self):
+        for command, expected, text in [
+            ('pause', True, 'Combat pauses before each round.'),
+            ('resume', False, 'Normal world timing is enabled.'),
+        ]:
+            with self.subTest(command=command):
+                before = len(self.messages)
+                dispatch_text_command(self.player.pk, command)
+                self.run.refresh_from_db()
+                self.assertEqual(self.run.pause_in_combat, expected)
+                self.assertFalse(self.run.time_paused)
+                confirmations = [row['message'] for row in self.messages[before:]
+                                 if row['message']['type'] == 'cmd.time_control.success']
+                self.assertEqual([message.get('text') for message in confirmations], [text])
 
     def test_invalid_preparation_rolls_back_the_entire_turn(self):
         self._fight()

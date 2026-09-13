@@ -2,12 +2,11 @@
   <div id="augmented-game-desktop" class="flex grow flex-row game-frame">
     <Panel />
 
-    <div class="flex grow">
-      <div class="grow flex flex-col">
+    <div class="flex grow min-w-0">
+      <div class="grow flex flex-col min-w-0">
         <Console :messages="messages" class="grow" />
         <Hint v-if="hint" class="shrink-0" />
-        <TimeControl />
-        <Input @input="onInput" class="shrink-0" />
+        <CommandBar @input="onInput" class="shrink-0" />
       </div>
     </div>
 
@@ -37,10 +36,9 @@
 </template>
 
 <script lang="ts" setup>
-import TimeControl from "@/components/game/TimeControl.vue";
+import CommandBar from "@/components/game/desktop/CommandBar.vue";
 import { computed } from 'vue';
 import { useStore } from 'vuex';
-import Input from "@/components/game/Input.vue";
 import Console from "@/components/game/console/Console.vue";
 import Panel from "@/components/game/desktop/Panel.vue";
 import Lookup from "@/components/game/lookup/Lookup.vue";
@@ -126,10 +124,6 @@ const onMouseOut = _.debounce(closeLookup, 150);
     position: absolute;
     // Safari layering bug
     -webkit-transform: translate3d(0, 0, 0);
-  }
-
-  #input {
-    padding: 0 20px;
   }
 }
 </style>

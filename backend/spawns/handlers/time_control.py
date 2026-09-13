@@ -69,7 +69,8 @@ class TimeControlHandler(CommandHandler):
             _error(ctx, self.command_type, exc)
             return
         ctx.publish({'type': 'instance.time_control', 'data': result})
-        ctx.publish_success('time_control', result)
+        ctx.publish_success('time_control', result,
+            'Combat pauses before each round.' if result['pause_in_combat'] else 'Normal world timing is enabled.')
 
 
 @register_handler

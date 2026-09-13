@@ -1396,6 +1396,22 @@ def _raise_if_ability_casting(pending: Any) -> None:
     )
 
 
+def validate_ability_preparation(player: Player, ability: AbilityDefinition) -> None:
+    """Read-only checks before storing a paused turn, without executing it.
+
+    One indexed membership lookup catches committed casts before more expensive
+    requirement or percentage-cost checks. Execution still validates targets and
+    readiness under the ordinary combat locks when the player advances.
+    """
+    from spawns.models import CombatParticipant
+
+    pending = CombatParticipant.objects.filter(
+        player_id=player.pk, is_active=True,
+    ).values_list('pending_ability', flat=True).first()
+    _raise_if_ability_casting(pending)
+    validate_ability_ready(player, ability)
+
+
 def _combat_interval(config) -> float:
     if not config:
         return 0.0

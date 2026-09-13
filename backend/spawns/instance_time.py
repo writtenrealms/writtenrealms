@@ -66,7 +66,7 @@ def _owned_run(player_id, *, run_id=None):
     return run, player
 
 
-def prepare_command(ctx, command_type):
+def prepare_command(ctx, command_type, *, ability=None):
     if in_simulation(ctx.world) or command_type in FREE_COMMANDS:
         return False
     # Text parses aliases/chains first, then gates each concrete action.
@@ -95,16 +95,28 @@ def prepare_command(ctx, command_type):
         })
         return True
     with transaction.atomic():
-        run, _ = _owned_run(ctx.player.pk, run_id=run.pk)
+        run, player = _owned_run(ctx.player.pk, run_id=run.pk)
         request_key = ctx.payload.get('_request_id')
         if request_key and (run.pending_command.get('payload') or {}).get('_request_id') == request_key and (
             (run.pending_command.get('payload') or {}).get('_request_segment') == ctx.payload.get('_request_segment')
         ):
             # Broker retry of a preparation cannot replace a newer revision.
             return True
+        if command_type == 'text':
+            from spawns.actions.abilities import resolve_ability_for_command, validate_ability_preparation
+            # Reuse hotkey resolution. Ordinary timing exits above, so these
+            # reads happen only when a player submits a paused instance action.
+            ability = ability or resolve_ability_for_command(ctx.world, ctx.payload.get('command'))
+            if ability is not None:
+                try:
+                    validate_ability_preparation(player, ability)
+                except ActionError as exc:
+                    ctx.publish({'type': 'cmd.ability.error', 'text': exc.message,
+                                 'data': {'code': exc.code, 'error': exc.message, **exc.data}})
+                    return True  # Preserve the previous action and revision.
         run.pending_command = {
             'command_type': command_type, 'payload': dict(ctx.payload),
-            'label': ctx.payload.get('raw_text') or ctx.payload.get('text') or command_type,
+            'label': ctx.payload.get('_hotkey_resolution') or ctx.payload.get('raw_text') or ctx.payload.get('text') or command_type,
         }
         run.pending_revision += 1
         run.save(update_fields=['pending_command', 'pending_revision'])
@@ -112,7 +124,7 @@ def prepare_command(ctx, command_type):
         enqueue_game_events([state_event(run)])
     ctx.publish({'type': 'instance.time_control', 'data': snapshot(run)})
     ctx.publish_success('prepare_turn', {'pending_revision': run.pending_revision},
-                        f'Prepared: {run.pending_command["label"]}.')
+                        f'Action: {run.pending_command["label"]}.')
     return True
 
 

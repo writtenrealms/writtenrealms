@@ -57,6 +57,7 @@ import RecipeDetails from "@/components/game/console/RecipeDetails.vue";
 import SalvageList from "@/components/game/console/SalvageList.vue";
 import ScrollTool from "@/components/game/console/ScrollTool.vue";
 import Stats from "@/components/game/console/Stats.vue";
+import TimeControlNotice from "@/components/game/console/TimeControlNotice.vue";
 import Who from "@/components/game/console/Who.vue";
 import Whois from "@/components/game/console/Whois.vue";
 
@@ -77,6 +78,7 @@ const consoleMessage = (message) => {
   const type_mapping = {
     "cmd.compare.success": Compare,
     "notification.death": DeathMessage,
+    "notification.instance.time_control_hint": TimeControlNotice,
     "effect.start": Effect,
     "cmd.equipment.success": Equipment,
     "cmd.exits.success": Exits,

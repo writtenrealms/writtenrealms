@@ -379,7 +379,7 @@ class TextCommandHandler(CommandHandler):
             else:
                 hotkey_ability = self._resolve_hotkey(ctx)
                 from spawns.instance_time import prepare_command
-                if prepare_command(ctx, 'text'):
+                if prepare_command(ctx, 'text', ability=hotkey_ability):
                     return
                 if ctx.actor_type in ("player", "mob"):
                     from spawns.handlers.abilities import handle_dynamic_ability_command

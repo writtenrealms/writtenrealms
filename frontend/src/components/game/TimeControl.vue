@@ -7,7 +7,7 @@
       <span v-else-if="commandState === 'awaiting'">{{ control.paused ? 'Waiting for your command to be prepared…' : 'Waiting for your command…' }}</span>
       <span v-else-if="control.paused">Prepare an action, then advance. The whole instance waits.</span>
       <span v-else-if="control.pause_in_combat">Combat will pause before every round.</span>
-      <span v-if="control.paused" class="prepared-action">{{ control.pending_command ? `Prepared: ${control.pending_command.label}` : 'No action prepared.' }}</span>
+      <span v-if="control.paused" class="prepared-action">{{ actionText ? `Action: ${actionText}` : 'No action set.' }}</span>
       <span v-if="error" class="turn-error" role="alert">{{ error }}</span>
     </div>
     <div class="turn-actions">
@@ -22,12 +22,13 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useStore } from "vuex";
-import { advanceTurnCommand, pendingTurnCommandState, type InstanceTimeControl } from "@/core/instanceTimeControl";
+import { advanceTurnCommand, cancelTurnCommand, instanceActionText, pendingTurnCommandState, type InstanceTimeControl } from "@/core/instanceTimeControl";
 import CombatPauseToggle from "@/components/game/CombatPauseToggle.vue";
 import Settings from "@/components/game/Settings.vue";
 
 const store = useStore();
 const control = computed<InstanceTimeControl | null>(() => store.state.game.instance_time_control);
+const actionText = computed(() => instanceActionText(control.value));
 const pending = computed(() => store.state.game.time_control_request);
 const error = computed(() => store.state.game.time_control_error);
 const connected = computed(() => store.state.game.is_connected);
@@ -38,13 +39,7 @@ const advance = () => {
 };
 const cancel = () => {
   if (!control.value || pending.value) return;
-  store.dispatch("game/time_control_command", {
-    type: "cmd.cancel_turn", text: "cancel turn", data: {
-      run_id: control.value.run_id,
-      expected_generation: control.value.generation,
-      expected_pending_revision: control.value.pending_revision,
-    },
-  });
+  store.dispatch("game/time_control_command", cancelTurnCommand(control.value));
 };
 const openSettings = () => store.commit("ui/modal/open_view", { component: Settings });
 </script>

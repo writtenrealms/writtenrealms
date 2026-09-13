@@ -2,10 +2,9 @@
   <div class="look-room">
 
     <div v-if="isStateSnapshot && motd_lines.length" class="motd-wrapper mb-4">
-      <div class="motd">
-        <div class="motd-header mb-4">Message of the Day</div>
+      <ConsoleNotice title="Message of the Day" class="motd">
         <div v-for="(line, index) in motd_lines" :key="index" v-html="line" class="motd-line"></div>
-      </div>
+      </ConsoleNotice>
     </div>
 
     <div v-if="isStateSnapshot && message.data.world.instance_ref" class="mb-4">
@@ -125,6 +124,7 @@ import { useStore } from "vuex";
 import { DIRECTIONS } from "@/constants";
 import { stackedInventory, getTargetInGroup } from "@/core/utils";
 import LookRoomChar from "@/components/game/console/LookRoomChar.vue";
+import ConsoleNotice from "@/components/game/console/ConsoleNotice.vue";
 import { formatMoney } from "@/core/economy.ts";
 import { parseLinks } from "@/core/utils";
 import {
@@ -382,14 +382,6 @@ const motd_lines = computed(() => {
 }
 
 .motd {
-  border: 1px solid $color-background-light-border;
-  padding: 1rem;
-
-  .motd-header {
-    color: $color-primary;
-    font-weight: bold;
-  }
-
   .motd-line {
     :deep(a) {
       color: $color-text-70;

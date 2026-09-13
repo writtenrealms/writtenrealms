@@ -1,7 +1,7 @@
 <template>
   <div id="input">
     <form @submit.prevent="onSubmit">
-      <div class="form-group">
+      <div class="form-group" :class="{ 'with-action': !!$slots.action }">
         <input
           id="console-input"
           type="text"
@@ -14,6 +14,7 @@
           autocapitalize="off"
           spellcheck="false"
         />
+        <slot name="action" />
       </div>
     </form>
   </div>
@@ -23,6 +24,7 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { useStore } from 'vuex';
 import { getMovementDirectionFromArrowKey } from '@/core/keyboard';
+import { advanceTurnCommand, pendingTurnCommandState } from '@/core/instanceTimeControl';
 
 const store = useStore();
 
@@ -36,6 +38,16 @@ const communicationCommands = [
 
 let last_sent = '';
 const onSubmit = () => {
+  const game = store.state.game;
+  const control = game.instance_time_control;
+  if (!input.value.trim() && control?.paused) {
+    input.value = '';
+    if (control.can_advance && game.is_connected && !game.time_control_request
+      && !pendingTurnCommandState(game.messages || [])) {
+      store.dispatch('game/time_control_command', advanceTurnCommand(control));
+    }
+    return;
+  }
 
   let user_input = '';
 
@@ -157,5 +169,21 @@ onBeforeUnmount(() => {
 });
 </script>
 
-<style lang="scss">
+<style lang="scss" scoped>
+@import "@/styles/colors.scss";
+.with-action {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid $color-form-border;
+  border-radius: 2px;
+  background: $color-form-background;
+
+  #console-input {
+    flex: 1 1 0;
+    min-width: 0;
+    width: 0;
+    border: 0;
+  }
+}
 </style>
