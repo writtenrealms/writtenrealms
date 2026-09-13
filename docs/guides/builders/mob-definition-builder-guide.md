@@ -160,6 +160,9 @@ Higher values are targeted first; ties keep the normal room mob order. Negative
 values sit behind default-priority mobs. This is useful for encounters such as a
 `target_priority: 1` shieldbearer protecting a default-priority fighter and a
 `target_priority: -1` archer in the same room.
+In a Time Control instance with combat pausing enabled, room-entry admission
+finishes before the opening pause, so priority considers the admitted pack.
+Explicit player target choices still take precedence over automatic priority.
 
 Use a positive `roam_chance` to give that mob the highest-precedence ambient
 roam chance. For backward compatibility, a value of `0` means "inherit": WR2

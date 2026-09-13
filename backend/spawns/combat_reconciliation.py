@@ -23,6 +23,7 @@ PAGE_SIZE = 32
 SOURCE_PAGE_SIZE = 8
 MAX_CHANGED = 64
 MAX_ADMISSIONS = 8
+MAX_OPENING_PAGES = 64
 
 
 def request_reconciliation(world_id, room_id, keys=(), *, observed=False):
@@ -95,10 +96,39 @@ def _initiates(policy, actor, target):
 
 @serialized_world(lambda state_id: CombatRoomState.objects.filter(pk=state_id).values_list('world_id', flat=True).first())
 def reconcile(state_id):
-    from spawns.instance_clock import gameplay_now, is_time_controlled, in_simulation
-    runtime_id = CombatRoomState.objects.filter(pk=state_id).values_list('world_id', flat=True).first()
-    if is_time_controlled(runtime_id) and not in_simulation(runtime_id):
+    from spawns.instance_clock import in_simulation, time_control_run
+    ref = CombatRoomState.objects.filter(pk=state_id).values('world_id', 'room_id').first()
+    if ref is None:
         return 0
+    runtime_id = ref['world_id']
+    run = time_control_run(runtime_id)
+    if run and run.time_paused and not in_simulation(runtime_id):
+        return 0
+    if not (run and run.pause_in_combat and not in_simulation(runtime_id)
+            and Player.objects.filter(pk=run.owner_id, world_id=runtime_id,
+                                      room_id=ref['room_id'], in_game=True).exists()):
+        return _reconcile_page(state_id, runtime_id)
+
+    # The exclusive instance lock prevents a command or scheduled round from
+    # interleaving with this opening. Keep the normal bounded pages, but finish
+    # this room (including assistance) before the first admission pauses time.
+    # Other rooms and ordinary multiplayer worlds retain one page per job.
+    from spawns.instance_clock_transitions import defer_combat_pause
+    admitted = 0
+    with defer_combat_pause(run):
+        for _ in range(MAX_OPENING_PAGES):
+            admitted += _reconcile_page(state_id, runtime_id, enqueue_continuation=False)
+            state = CombatRoomState.objects.filter(pk=state_id).values('next_run_ts', 'lease_until').first()
+            if not state or state['next_run_ts'] is None or state['lease_until'] is not None:
+                break
+        else:
+            raise ActionError('This room has too much combat admission work before pausing.',
+                              code='instance_turn_budget')
+    return admitted
+
+
+def _reconcile_page(state_id, runtime_id, *, enqueue_continuation=True):
+    from spawns.instance_clock import gameplay_now, is_time_controlled, in_simulation
     now = gameplay_now(runtime_id)
     with transaction.atomic():
         state = CombatRoomState.objects.select_for_update().filter(pk=state_id).first()
@@ -253,7 +283,7 @@ def reconcile(state_id):
         fresh.active_until = active_until
         fresh.next_run_ts = now if not done or fresh.dirty_generation != frozen_generation else None
         fresh.save(update_fields=['cursor', 'applied_generation', 'lease_until', 'active_until', 'next_run_ts'])
-        if fresh.next_run_ts and not is_time_controlled(fresh.world_id):
+        if enqueue_continuation and fresh.next_run_ts and not is_time_controlled(fresh.world_id):
             from spawns.tasks import reconcile_combat_room
             transaction.on_commit(lambda: reconcile_combat_room.delay(state_id), robust=True)
     return admitted

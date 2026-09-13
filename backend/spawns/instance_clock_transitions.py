@@ -1,4 +1,6 @@
 """Atomic combat pause boundaries and preservation of ordinary timer deadlines."""
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import timedelta
 
 from django.db import transaction
@@ -6,6 +8,22 @@ from django.db.models import DateTimeField, ExpressionWrapper, F, Value
 from django.utils import timezone
 
 from spawns.instance_clock import in_simulation, time_control_run
+
+
+_deferred_pause_world = ContextVar('deferred_combat_pause_world', default=None)
+
+
+@contextmanager
+def defer_combat_pause(run):
+    """Finish room admission under the run lock before publishing its pause."""
+    token = _deferred_pause_world.set(run.spawned_world_id)
+    try:
+        yield
+    finally:
+        _deferred_pause_world.reset(token)
+    # Exceptions leave the enclosing clock-guard transaction to roll back;
+    # only a completed admission boundary may expose the paused encounter.
+    synchronize_combat_pause(run)
 
 
 def owner_in_combat(run):
@@ -108,6 +126,8 @@ def resume_clock(run):
 def synchronize_combat_pause(run, *, force=False):
     """Run under the exclusive instance lock, including before an opening round."""
     if not run or not run.time_control or (in_simulation(run.spawned_world_id) and not force):
+        return False
+    if _deferred_pause_world.get() == run.spawned_world_id:
         return False
     should_pause = run.pause_in_combat and run.status in run.ACTIVE_STATUSES and owner_in_combat(run)
     if should_pause == run.time_paused:

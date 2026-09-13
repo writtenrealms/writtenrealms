@@ -246,7 +246,9 @@ automatic faceoff target for normal attacks. Builders can give mobs a
 `target_priority`; higher-priority mobs become your automatic target first, and
 the next hostile takes over after that target dies. Unset priority is `0`, so
 positive values stand ahead of default mobs and negative values stand behind
-them. Explicit opener abilities such as Charge can temporarily override that
+them. With **Pause Combat** enabled, room-entry hostiles join and your initial
+target is selected before the opening pause, without advancing a combat round.
+Explicit opener abilities such as Charge can temporarily override that
 priority by making the chosen opener target your current faceoff target.
 Some supplemental abilities can also strike a secondary active hostile in the
 same room while your normal primary attack continues against the faceoff target.
