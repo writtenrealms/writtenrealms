@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import patch
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -16,7 +17,9 @@ from core.death_routing import (
     resolve_death_destination,
 )
 from spawns.actions.combat import apply_player_death
+from spawns.events import PLAYER_ROOM_ENTER_EVENT_TYPE
 from spawns.models import CharacterState, DeathResolutionReceipt, Item, Player
+from spawns.state_payloads import build_state_sync
 from tests.base import WorldTestCase
 from tests.utils import apply_basic_stat_system
 from worlds.models import (
@@ -1005,6 +1008,10 @@ class TestDeterministicDeathRoutingRuntime(WorldTestCase):
             state_queries,
         )
         self.assertTrue(first_events)
+        self.assertNotIn(
+            "cmd.state.sync.success",
+            [event.type for event in first_events],
+        )
         self.assertEqual(retry_events, [])
         self.assertEqual(
             (
@@ -1090,6 +1097,10 @@ class TestDeterministicDeathRoutingRuntime(WorldTestCase):
         self.assertEqual(receipt.routing_source, DEATH_ROUTING_SOURCE_LOCAL)
         self.assertEqual(receipt.destination_world_id, spawned_instance.id)
         self.assertEqual(receipt.matched_route_position, 0)
+        self.assertNotIn(
+            "cmd.state.sync.success",
+            [event.type for event in _events],
+        )
 
     def test_base_delegation_uses_recorded_runtime_and_origin_penalty(self):
         base_destination = self._create_room(
@@ -1193,6 +1204,107 @@ class TestDeterministicDeathRoutingRuntime(WorldTestCase):
             receipt.penalty["mode"],
             adv_consts.DEATH_MODE_LOSE_EQ,
         )
+
+    def test_base_delegation_refreshes_world_and_explored_map_before_arrival(self):
+        explored_room = self._create_room(self.world, "A Familiar Street")
+        self._create_room(self.world, "An Unexplored Street")
+        base_destination = self._create_room(self.world, "The Base Death Hall")
+        self.player.viewed_rooms.add(self.room, explored_room)
+        self._install_policy(
+            self.world,
+            [self._always_route(base_destination)],
+        )
+        instance_template = self._create_instance_template(
+            routing_source=DEATH_ROUTING_SOURCE_BASE_WORLD,
+        )
+        self._enter_instance(instance_template)
+        instance_room = self.player.room
+        self.player.viewed_rooms.add(instance_room)
+        death_token = uuid.uuid4()
+
+        result, events = apply_player_death(
+            player=self.player,
+            death_token=death_token,
+            forced=True,
+        )
+
+        sync_events = [
+            event for event in events
+            if event.type == "cmd.state.sync.success"
+        ]
+        self.assertEqual(len(sync_events), 1)
+        sync = sync_events[0]
+        self.assertEqual(sync.recipients, [self.player.key])
+        self.assertEqual(sync.data["world"]["id"], self.spawn_world.id)
+        self.assertEqual(sync.data["world"]["name"], self.spawn_world.name)
+        self.assertEqual(sync.data["room"]["id"], base_destination.id)
+        self.assertEqual(sync.data["actor"]["key"], self.player.key)
+        self.assertIsNone(sync.data["instance_time_control"])
+        self.assertEqual(
+            {room["key"] for room in sync.data["map"]},
+            {
+                f"room.{room.relative_id}"
+                for room in (self.room, explored_room, base_destination)
+            },
+        )
+        self.assertTrue(result.viewed_rooms.filter(pk=explored_room.id).exists())
+        self.assertTrue(result.viewed_rooms.filter(pk=instance_room.id).exists())
+        event_types = [event.type for event in events]
+        self.assertLess(
+            event_types.index("affect.death"),
+            event_types.index("cmd.state.sync.success"),
+        )
+        self.assertLess(
+            event_types.index("cmd.state.sync.success"),
+            event_types.index(PLAYER_ROOM_ENTER_EVENT_TYPE),
+        )
+
+        _retry_player, retry_events = apply_player_death(
+            player=result,
+            death_token=death_token,
+            forced=True,
+        )
+        self.assertEqual(retry_events, [])
+
+    def test_base_delegation_snapshot_queries_do_not_scale_with_explored_rooms(self):
+        base_destination = self._create_room(self.world, "The Base Death Hall")
+        self._install_policy(
+            self.world,
+            [self._always_route(base_destination)],
+        )
+        instance_template = self._create_instance_template(
+            routing_source=DEATH_ROUTING_SOURCE_BASE_WORLD,
+        )
+        query_counts = []
+        map_sizes = []
+
+        def measured_state_sync(player):
+            with CaptureQueriesContext(connection) as queries:
+                state = build_state_sync(player)
+            query_counts.append(len(queries))
+            map_sizes.append(len(state.map))
+            return state
+
+        for additional_rooms in (0, 100):
+            rooms = [
+                self._create_room(self.world, f"Known Street {index}")
+                for index in range(additional_rooms)
+            ]
+            self.player.viewed_rooms.add(*rooms)
+            self._enter_instance(instance_template)
+            with patch(
+                "spawns.state_payloads.build_state_sync",
+                side_effect=measured_state_sync,
+            ):
+                self.player, _events = apply_player_death(
+                    player=self.player,
+                    death_token=uuid.uuid4(),
+                    forced=True,
+                )
+
+        self.assertEqual(len(query_counts), 2)
+        self.assertEqual(map_sizes[1] - map_sizes[0], 100)
+        self.assertLessEqual(query_counts[1], query_counts[0])
 
     def test_base_delegation_evaluates_base_conditional_routes(self):
         base_zone_room = self._create_room(
@@ -1366,3 +1478,7 @@ class TestDeterministicDeathRoutingRuntime(WorldTestCase):
         self.assertEqual(receipt.fallback_reason, "invalid_return_runtime")
         self.assertIsNone(receipt.matched_route_position)
         self.assertEqual(receipt.destination_world_id, spawned_instance.id)
+        self.assertNotIn(
+            "cmd.state.sync.success",
+            [event.type for event in _events],
+        )

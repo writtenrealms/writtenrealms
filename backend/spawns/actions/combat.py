@@ -1525,6 +1525,12 @@ def apply_player_death(
             )
         enqueue_game_events(domain_events)
 
+    runtime_changed = destination_runtime.id != committed_origin_world.id
+    if runtime_changed:
+        from spawns.state_payloads import get_player_with_related
+
+        updated_player = get_player_with_related(updated_player.id)
+
     death_room = destination_room
     if loaded_character_state_for_routing:
         # The death event serializes character state as ``marks``. Reuse the
@@ -1562,6 +1568,28 @@ def apply_player_death(
             data=affect_data,
             text=target_text or "You have been slain.",
         ),
+    ]
+    if runtime_changed:
+        from spawns.state_payloads import build_state_sync
+        from spawns.text_output import render_event_text
+
+        # Restore the destination world's explored map and world metadata.
+        # Send this before arrival triggers can relocate the player again.
+        # Local deaths keep the existing compact room update.
+        state_payload = build_state_sync(updated_player).model_dump()
+        events.append(
+            GameEvent(
+                type="cmd.state.sync.success",
+                recipients=[updated_player.key],
+                data=state_payload,
+                text=render_event_text(
+                    "cmd.state.sync.success",
+                    state_payload,
+                    viewer=updated_player,
+                ),
+            ),
+        )
+    events.extend([
         player_room_enter_event(
             player=updated_player,
             origin_room_id=(
@@ -1573,7 +1601,7 @@ def apply_player_death(
             source="death",
         ),
         ability_prepare_state_event(updated_player),
-    ]
+    ])
 
     if room_text and not updated_player.is_invisible:
         recipients = _death_notification_recipients(

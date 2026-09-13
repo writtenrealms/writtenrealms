@@ -495,6 +495,13 @@ The existing client event remains `affect.death`. Its room payload is the final
 committed destination, while `origin_room` identifies where the death and
 penalty occurred.
 
+When death changes the runtime world, `affect.death` is followed by the existing
+`cmd.state.sync.success` snapshot before the room-entry lifecycle. This restores
+the destination world's explored map, world metadata, and instance controls
+before arrival triggers can move the player again. The snapshot uses the shared
+state builder with prefetched player relations and batched map queries; local
+deaths and transport fallbacks add no snapshot work or network payload.
+
 Death also emits the canonical player-room-entry lifecycle with
 `event.source: death`. Destination mob-definition `enter` reactions and the
 room-scoped `event: enter` triggers run first;
