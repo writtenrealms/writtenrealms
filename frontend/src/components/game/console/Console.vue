@@ -80,6 +80,7 @@ const consoleMessage = (message) => {
     "notification.death": DeathMessage,
     "notification.instance.time_control_hint": TimeControlNotice,
     "effect.start": Effect,
+    "notification.combat.effect": Effect,
     "cmd.equipment.success": Equipment,
     "cmd.exits.success": Exits,
     "cmd.factions.success": Factions,

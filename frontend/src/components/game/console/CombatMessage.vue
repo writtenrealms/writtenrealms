@@ -125,19 +125,10 @@ const target = computed(() => {
 */
 
 const message_type = computed(() => {
-  const attack = props.message.data.attack;
-
-  if (props.message.data.label && props.message.data.label != "Attack") {
-    return props.message.data.label;
-  }
-
-  let label;
-  const world = store.state.game.world;
-  if (world.labels.attacks[attack]) {
-    label = world.labels.attacks[attack];
-  }
-
-  return label || "Special Attack";
+  // WR2 supplies the authored label on each event, including basic attacks.
+  // Its world label bundle does not contain WR1's attacks map.
+  const { label, attack } = props.message.data;
+  return label || capfirst(attack) || "Attack";
 });
 </script>
 

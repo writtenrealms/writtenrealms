@@ -1,5 +1,15 @@
 # Combat
 
+## Combat Text
+
+Enable **Combat Brief Mode** in **Settings > Preferences**, then choose
+**Save Changes** for compact combat output. Each attack shows its label,
+attacker, target, and damage or healing amount. A `!` marks a critical hit;
+`(dodge)` and `(12 abs)` indicate a dodge and absorbed damage respectively.
+Combat effect applications show their duration in rounds. Uncheck the setting
+to restore full combat sentences. This preference changes the display only;
+combat timing and outcomes stay the same.
+
 ## Turn-Based Instances
 
 Some builders offer single-player instances with **Time Control**. Each run
