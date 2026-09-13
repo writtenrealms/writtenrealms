@@ -15,6 +15,14 @@ Realms Core.
 - [Crafting](crafting-player-guide.md)
 - [Socials](socials.md)
 
+## Clearing the Console
+
+Type `clear` on its own to empty the game console on desktop or mobile. New
+messages appear normally afterward. Your character, map, combat, and separate
+logs are unaffected, and commands already in progress continue to run. The
+command works immediately, including while combat is paused or the connection
+is unavailable.
+
 ## Client Preferences
 
 Open the game menu, choose **Settings**, and use **Save Changes** to apply

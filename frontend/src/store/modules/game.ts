@@ -1338,6 +1338,11 @@ const actions = {
       }
     }
 
+    if (cmd.trim().toLowerCase() === "clear") {
+      commit("messages_clear");
+      return;
+    }
+
     const lcmd = cmd.toLowerCase();
     const lfirst_token = lcmd.split(" ")[0];
     const isHistoryReplay = /^!\d+$/.test(cmd.trim());
@@ -1729,10 +1734,19 @@ const mutations = {
   },
 
   messages_clear: (state) => {
-    clearCommandReceiptTimers();
-    state.messages = [];
-    state.received_event_ids = {};
-    state.received_event_id_order = [];
+    // Keep in-flight receipts for acknowledgement and turn-control checks,
+    // but remove every previous entry from the visible transcript. This is
+    // bounded by MESSAGE_LIMIT, including any retained hidden receipts.
+    state.messages = state.messages.filter((message) => {
+      if (pendingTurnCommandState([message])) {
+        message.console_hidden = true;
+        return true;
+      }
+      if (message.request_id) clearCommandReceiptTimers(message.request_id);
+      return false;
+    });
+    state.last_viewed_room_message = null;
+    state.last_message = {};
   },
 
   ws_uri_set: (state, uri) => {
@@ -2278,6 +2292,8 @@ const mutations = {
 const getters = {
   consoleMessages: (state) => {
     return _.filter(state.messages, (message) => {
+      if (message.console_hidden) return false;
+
       // Exclude chat messages option
       if (!state.player_config.display_chat && message.type == 'notification.cmd.chat.success') {
         return false;
