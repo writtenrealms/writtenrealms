@@ -31,6 +31,7 @@ from core.leveling import (
     get_world_leveling_config,
 )
 from core.model_mixins import CharMixin, ItemMixin, MobMixin
+from spawns.deletion import deactivate_combat_actor
 
 
 lifecycle_logger = logging.getLogger('lifecycle')
@@ -1114,14 +1115,14 @@ class CombatParticipant(BaseModel):
     )
     player = models.ForeignKey(
         'spawns.Player',
-        on_delete=models.SET_NULL,
+        on_delete=deactivate_combat_actor,
         related_name='combat_participations',
         blank=True,
         null=True,
     )
     mob = models.ForeignKey(
         'spawns.Mob',
-        on_delete=models.SET_NULL,
+        on_delete=deactivate_combat_actor,
         related_name='combat_participations',
         blank=True,
         null=True,

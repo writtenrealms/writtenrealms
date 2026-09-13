@@ -1475,6 +1475,34 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
 
         mock_stop.assert_called_once()
 
+    def test_monitor_cleans_idle_instance_with_active_mob_combat(self):
+        for stopped in [False, True]:
+            with self.subTest(stopped=stopped):
+                spawned_instance = self._enter()
+                World.leave_instance(player=self.player)
+                mob = Mob.objects.create(
+                    name='Guard', world=spawned_instance, room=self.instance_room,
+                )
+                create_combat_encounter(
+                    world=spawned_instance, room=self.instance_room, mob=mob,
+                )
+                old = timezone.now() - timezone.timedelta(minutes=6)
+                InstanceRun.objects.filter(spawned_world=spawned_instance).update(
+                    last_active_at=old,
+                )
+                if stopped:
+                    World.objects.filter(pk=spawned_instance.pk).update(
+                        lifecycle=adv_consts.WORLD_LIFECYCLE_STOPPED,
+                        lifecycle_change_ts=old,
+                    )
+
+                monitor_worlds()
+
+                self.assertFalse(World.objects.filter(pk=spawned_instance.pk).exists())
+                self.assertFalse(InstanceRun.objects.filter(spawned_world=spawned_instance).exists())
+                self.player.refresh_from_db()
+                self.assertEqual(self.player.world_id, self.spawn_world.pk)
+
     def test_monitor_does_not_treat_offline_instance_players_as_active(self):
         spawned_instance = self._enter()
         run = spawned_instance.instance_run

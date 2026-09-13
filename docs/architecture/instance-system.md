@@ -949,6 +949,13 @@ use the `InstanceRun.last_active_at` timestamp as their idle reference and are
 stopped/deleted after roughly five minutes of inactivity, plus monitor cadence.
 This is intentionally hardcoded until the fuller policy below is implemented.
 
+The monitor also retries deletion of spawned instances that have remained
+stopped for five minutes. Combat actor deletion first deactivates referencing
+participants, then clears their actor foreign key in the same deletion
+transaction. These updates are batched by Django's deletion collector, so
+active mob combat cannot violate the participant actor constraint during world
+cleanup or the stopped-instance retry.
+
 Recommended template policy:
 
 ```yaml

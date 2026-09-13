@@ -696,6 +696,12 @@ last active player leaves a spawned instance, WR2 records activity on the
 minutes, plus up to one monitor tick, before stopping and deleting the spawned
 runtime world.
 
+The monitor runs once a minute while the backend services are running. Stopping
+normally deletes an instance immediately; an instance left in `stopped` state
+is retried once it has been stopped for five minutes. Lingering combat records
+do not extend this grace period. Players and their carried equipment return to
+the base world before the instance is removed.
+
 ## Inventory And Equipment
 
 When a player enters an instance, WR2 moves the world ownership of carried and
