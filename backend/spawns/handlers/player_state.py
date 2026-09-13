@@ -44,11 +44,12 @@ class RestHandler(CommandHandler):
 class StandHandler(CommandHandler):
     command_type = "stand"
     text_commands = ("stand",)
+    text_aliases = {"st": "stand", "sta": "stand"}
     help = {
         "name": "Stand",
-        "format": "stand",
+        "format": "stand | st | sta",
         "description": "Stop resting and return to standing.",
-        "examples": ["stand"],
+        "examples": ["stand", "st", "sta"],
     }
 
     def handle(self, ctx: CommandContext) -> None:

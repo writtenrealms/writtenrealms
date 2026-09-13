@@ -264,6 +264,10 @@ explicit regeneration values from your stats still apply, and stamina keeps its
 baseline recovery. These passive updates refresh the vitals display silently;
 they do not add entries to the game console.
 
+Use `rest` (or `r`) to begin resting and `stand` (or `st` or `sta`) to stand up.
+The shared prefixes `st` and `sta` resolve to `stand`; use `stat` or `stats` to
+review your stats.
+
 ## Death Destinations
 
 A world may use one fixed death room or deterministic routes based on facts

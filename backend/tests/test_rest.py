@@ -86,19 +86,26 @@ class TestRestCommands(WorldTestCase):
         self.assertIsNone(self._message_by_type(messages, "cmd.roll.success", self.player.key))
 
     def test_stand_command_returns_player_to_standing(self):
-        self.player.state = adv_consts.CHARACTER_STATE_RESTING
-        self.player.save(update_fields=["state"])
+        for command in ("st", "sta", "stan", "stand"):
+            with self.subTest(command=command):
+                self.player.state = adv_consts.CHARACTER_STATE_RESTING
+                self.player.save(update_fields=["state"])
 
-        with capture_game_messages() as messages:
-            dispatch_and_drain_combat(self.player.id, "stand")
+                with capture_game_messages() as messages:
+                    dispatch_and_drain_combat(self.player.id, command)
 
-        self.player.refresh_from_db()
-        self.assertEqual(self.player.state, adv_consts.CHARACTER_STATE_STANDING)
+                self.player.refresh_from_db()
+                self.assertEqual(self.player.state, adv_consts.CHARACTER_STATE_STANDING)
 
-        stand_message = self._message_by_type(messages, "cmd.stand.success", self.player.key)
-        self.assertIsNotNone(stand_message)
-        self.assertEqual(stand_message["text"], "You stand up.")
-        self.assertEqual(stand_message["data"]["actor"]["state"], "standing")
+                stand_message = self._message_by_type(
+                    messages, "cmd.stand.success", self.player.key
+                )
+                self.assertIsNotNone(stand_message)
+                self.assertEqual(stand_message["text"], "You stand up.")
+                self.assertEqual(stand_message["data"]["actor"]["state"], "standing")
+                self.assertIsNone(
+                    self._message_by_type(messages, "cmd.stats.success", self.player.key)
+                )
 
     def test_rest_state_is_in_state_sync_payloads(self):
         from spawns.state_payloads import build_state_sync

@@ -11,6 +11,24 @@ class TestStatsCommand(WorldTestCase):
                 return msg["message"]
         return None
 
+    def test_stat_prefix_and_stats_command_preserve_resting_state(self):
+        self.player.state = adv_consts.CHARACTER_STATE_RESTING
+        self.player.save(update_fields=["state"])
+
+        for command in ("stat", "stats"):
+            with self.subTest(command=command):
+                with capture_game_messages() as messages:
+                    dispatch_text_command(self.player.id, command)
+
+                self.assertIsNotNone(
+                    self._message_by_type(messages, "cmd.stats.success")
+                )
+                self.assertIsNone(
+                    self._message_by_type(messages, "cmd.stand.success")
+                )
+                self.player.refresh_from_db()
+                self.assertEqual(self.player.state, adv_consts.CHARACTER_STATE_RESTING)
+
     def test_stats_command_returns_actor_and_world_snapshot(self):
         self.world.config.stat_system = {
             "labels": {
