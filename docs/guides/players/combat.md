@@ -123,6 +123,14 @@ existing command-driven pacing: either contestant can advance the shared round.
 Leaving or dying removes your character from the fight. Other combatants keep
 fighting while both sides still have members. NPC fights in an unobserved room
 can continue for a short activity window, then pause until someone returns.
+Returning to watch does not put you back in combat: occupied mobs keep fighting
+their current opponents. You rejoin when you attack or another actor engages
+you. Idle hostile mobs can still attack you on entry.
+
+Room descriptions show combatants as **“Name is here, fighting target.”**
+(or **“fighting you”**) instead of their usual idle descriptions. When a mob
+starts attacking, everyone who can see the fight receives an announcement,
+including when a friendly mob attacks an arriving enemy.
 
 When a mob dies, experience and currency are split equally among living player
 opponents still participating in the encounter who damaged that mob. Those

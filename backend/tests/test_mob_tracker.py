@@ -596,6 +596,8 @@ class TestMobTracker(WorldTestCase):
                 self.assertEqual(len(callbacks), 1)
                 callbacks[0]()
                 callbacks[0]()
+                from spawns.events import flush_game_event_outbox
+                flush_game_event_outbox()
 
         tracker.refresh_from_db()
         self.assertEqual(tracker.room_id, self.destination.id)
@@ -659,6 +661,7 @@ class TestMobTracker(WorldTestCase):
                 )
 
                 callbacks[0]()
+                flush_game_event_outbox()
 
         tracker.refresh_from_db()
         self.assertEqual(tracker.room_id, self.destination.id)
@@ -697,6 +700,8 @@ class TestMobTracker(WorldTestCase):
                 )
 
                 callbacks[0]()
+                from spawns.events import flush_game_event_outbox
+                flush_game_event_outbox()
 
         tracker.refresh_from_db()
         self.assertEqual(tracker.room_id, self.destination.id)

@@ -180,6 +180,10 @@ Aggression evaluates player and mob candidates. `passive` never starts a fight;
 `players` targets players; `all` can target non-allied actors; `normal` and
 `friendly` start fights against actors their faction policy treats as hostile.
 `fights_back` independently controls the mob's turns after admission.
+Automatic aggression and assistance only recruit idle mobs. A mob already in
+combat keeps its opponent when someone enters the room; entry alone does not
+pull that newcomer into the existing fight. When an opponent leaves, remaining
+combatants immediately select another opponent from their fight.
 
 Configure automatic assistance and its condition in `spec.combat`:
 
@@ -210,6 +214,9 @@ opposing core faction, and clear the commander's `captive` state when released.
 The commander can then initiate against the headsman or assist a Greek player
 already fighting him. The same rules work when the headsman arrives later.
 There is no special combat command required in the release Trigger.
+The room receives an attack announcement when the commander joins, before its
+first combat turn. Combatants' room listings show their current opponents in
+place of their authored `room_description`.
 
 Movement, scoped character-state changes, and runtime faction or aggression
 changes queue room reconciliation. This is asynchronous: the state change

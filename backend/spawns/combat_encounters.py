@@ -103,6 +103,17 @@ def current_context():
     return _current.get()
 
 
+def after_combat_publication(callback):
+    """Dispatch follow-up jobs after the owning action's outbox fast path."""
+    context = current_context()
+    if context is None:
+        transaction.on_commit(callback, robust=True)
+    else:
+        callbacks = getattr(context, '_after_publication', [])
+        callbacks.append(callback)
+        context._after_publication = callbacks
+
+
 @contextmanager
 def locked_combat(*, keys=(), encounter_ids=()):
     keys = set(keys)
@@ -220,6 +231,8 @@ def locked_combat(*, keys=(), encounter_ids=()):
                     synchronize_combat_pause(run)
         finally:
             _current.reset(token)
+        for callback in getattr(context, '_after_publication', []):
+            transaction.on_commit(callback, robust=True)
 
 
 def transact(callback, *, keys=(), encounter_ids=()):
@@ -384,6 +397,10 @@ def engage_locked(context, attacker, target, *, reason='attack', match=None, all
                 (actor.world_id, actor.room_id) != (source.world_id, source.room_id)):
             detach_actor(context, participant.actor_key, reason='unavailable')
     a, b = context.participant(actor_key(attacker)), context.participant(actor_key(target))
+    if reason in {'automatic', 'assist'} and a is not None:
+        # Candidate pages are optimistic; another admission may have occupied
+        # this mob before we acquired its locks.
+        raise ActionError('That mob is already in combat.', code='engagement_ineligible')
     if a and b and a.encounter_id == b.encounter_id:
         if a.side_id == b.side_id:
             raise ActionError('You cannot attack an ally in this fight.', code='unsupported_combat_topology')

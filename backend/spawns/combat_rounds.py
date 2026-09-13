@@ -85,9 +85,9 @@ def leave_participant(context, participant, *, reason, refund=True):
         next_tick_ts=next_character_effect_tick_ts(world=encounter.world),
     )
     for other in context.participants:
-        if other.current_target_id == participant.pk:
+        if other.is_active and other.current_target_id == participant.pk:
             other.current_target = None
-            other.save(update_fields=['current_target'])
+            target_for(context, other, intent=False)
 
 
 def finish_encounter(context, encounter):

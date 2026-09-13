@@ -1,5 +1,6 @@
 """Canonical combat output with recipient projection at publication time."""
 from copy import deepcopy
+from dataclasses import replace
 
 from spawns.events import GameEvent
 from spawns.models import Player
@@ -14,6 +15,26 @@ def room_recipients(context, encounter):
         ).order_by('pk').values_list('pk', flat=True)]
         context._room_recipients = cache
     return cache[key]
+
+
+def engagement_events(context, encounter, attacker, target):
+    """Announce a new attack to its target and visible room observers once."""
+    from spawns.actions.combat import _engage_events, stand_player
+    from spawns.state_payloads import safe_capitalize
+
+    events = []
+    if isinstance(target, Player):
+        stand_player(target)
+        events = _engage_events(player=target, room=target.room, mob=attacker)
+        events[0] = replace(events[0], text=f'{safe_capitalize(attacker.name)} attacks you!')
+    recipients = [key for key in room_recipients(context, encounter) if key != target.key]
+    if recipients and not attacker.is_invisible and not target.is_invisible:
+        events.append(GameEvent('notification.combat.engage', {
+            'encounter_id': encounter.pk,
+            'actor': {'key': attacker.key, 'name': attacker.name},
+            'target': {'key': target.key, 'name': target.name},
+        }, recipients, f'{safe_capitalize(attacker.name)} attacks {target.name}!'))
+    return events
 
 
 def snapshot_event(context, encounter):

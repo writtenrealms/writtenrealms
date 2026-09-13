@@ -757,7 +757,7 @@ class ResolveTrackerChaseAction:
                 *movement_events,
                 *engagement_events,
                 *follow_movement_events,
-            ])
+            ], force=True)
 
         if not moved_mob_ids:
             return ActionResult(

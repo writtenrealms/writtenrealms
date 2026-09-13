@@ -1666,8 +1666,14 @@ def _engage_events(*, player: Player, room: Room, mob: Mob) -> list[GameEvent]:
     )
     target_payload = _combat_state_payload(
         serialize_char_from_mob(mob).model_dump(),
-        target_payload=serialize_char_from_player(player).model_dump(),
+        target_payload=None,
     )
+    if ctx and ctx.participant(mob.key):
+        target = target_for(ctx, ctx.participant(mob.key), intent=False)
+        if target:
+            target_payload = _combat_state_payload(
+                target_payload, target_payload=_serialize_combat_char(ctx.actors[target.actor_key]),
+            )
     target_name = target_payload.get("name") or "them"
     return [
         GameEvent(
@@ -5533,16 +5539,14 @@ class ScanRoomAggroAction:
     def _start_aggro_encounter(self, *, player, room, mob, **kwargs):
         from spawns.combat_encounters import transact, engage_locked
         from spawns.combat_commands import schedule
-        from spawns.combat_publication import snapshot_event
+        from spawns.combat_publication import engagement_events, snapshot_event
 
         def run(ctx):
             encounter, _, _, changed = engage_locked(ctx, ctx.actors[mob.key], ctx.actors[player.key])
             if not changed:
                 return ActionResult()
             schedule(encounter)
-            stand_player(ctx.actors[player.key])
-            events = _engage_events(player=ctx.actors[player.key], room=room, mob=ctx.actors[mob.key])
-            events[0] = replace(events[0], text=f'{safe_capitalize(mob.name)} attacks you!')
+            events = engagement_events(ctx, encounter, ctx.actors[mob.key], ctx.actors[player.key])
             return ActionResult(events=[*events, snapshot_event(ctx, encounter)])
         return transact(run, keys=[player.key, mob.key])
 

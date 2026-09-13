@@ -1,10 +1,9 @@
 """Player commands against authoritative combat participants."""
-from django.db import transaction
 from django.utils import timezone
 
 from spawns.actions.base import ActionError, ActionResult
 from spawns.actions.targeting import resolve_room_mob_target
-from spawns.combat_encounters import actor_key, engage_locked, transact
+from spawns.combat_encounters import actor_key, after_combat_publication, engage_locked, transact
 from spawns.combat_publication import snapshot_event
 from spawns.combat_rounds import resolve_locked, target_for
 from spawns.events import GameEvent, persist_follow_dependent_game_events
@@ -39,7 +38,7 @@ def schedule(encounter):
             'encounter_id': encounter_id, 'expected_generation': generation,
             'expected_round': round_number,
         }, countdown=delay)
-    transaction.on_commit(enqueue, robust=True)
+    after_combat_publication(enqueue)
 
 
 def _finish_command(context, encounter, events):

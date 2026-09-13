@@ -73,6 +73,164 @@ class MultiParticipantCombatTests(WorldTestCase):
         self.assertTrue(any(message['message'].get('text') == 'A sparabara attacks you!'
                             for message in messages))
 
+    def test_returning_observer_stays_out_of_npc_fight(self):
+        from tests.combat_fixtures import dispatch_and_drain_combat
+        from tests.utils import capture_game_messages
+        from spawns.combat_rounds import detach_actor
+
+        greek = self.mob('a freed Greek', self.greek, aggression='normal',
+                         room_description='A freed Greek grips a captured spear.')
+        headsman = self.mob("the Great King's headsman", aggression='normal',
+                            room_description="The Great King's headsman drags a bloodied axe.")
+        encounter = engage(self.player, headsman)[0]
+        engage(greek, headsman)
+        outside = self.room.create_at('west')
+        self.player.room = outside
+        self.player.stamina = 100
+        self.player.save(update_fields=['room', 'stamina'])
+        transact(lambda ctx: detach_actor(ctx, self.player.key, reason='fled'),
+                 keys=[self.player.key])
+        self.assertEqual(CombatParticipant.objects.get(mob=headsman, is_active=True).current_target.mob_id,
+                         greek.pk)
+
+        with capture_game_messages() as messages:
+            dispatch_and_drain_combat(self.player.pk, 'east')
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.pk)
+        self.assertFalse(CombatParticipant.objects.filter(player=self.player, is_active=True).exists())
+        self.assertEqual(encounter.participants.filter(is_active=True).count(), 2)
+        own_messages = [entry['message'] for entry in messages if entry['player_key'] == self.player.key]
+        self.assertFalse(any(message['type'] == 'cmd.kill.success' for message in own_messages))
+        room_message = next(message for message in own_messages if message['type'] == 'cmd.move.success')
+        chars = {char['key']: char for char in room_message['data']['room']['chars']}
+        self.assertEqual(chars[headsman.key]['target']['key'], greek.key)
+        self.assertEqual(chars[greek.key]['target']['key'], headsman.key)
+        self.assertIn("The Great King's headsman is here, fighting a freed Greek.", room_message['text'])
+        self.assertNotIn('drags a bloodied axe', room_message['text'])
+
+    def test_tracker_arrives_then_attacks_and_greek_joins_before_first_round(self):
+        from tests.combat_fixtures import drain_queued_combat, dispatch_and_drain_combat
+        from tests.utils import capture_game_messages, dispatch_text_command
+
+        destination = self.room.create_at('east')
+        greek = self.mob('a freed Greek', self.greek, aggression='normal')
+        greek.room = destination
+        greek.save(update_fields=['room'])
+        headsman = self.mob("the Great King's headsman", aggression='normal',
+                            trait_instances=[{'key': 'tracker'}])
+        self.player.stamina = 100
+        self.player.save(update_fields=['stamina'])
+        engage(self.player, headsman)
+
+        with patch('spawns.tasks.resolve_combat_encounter.apply_async'), capture_game_messages() as messages:
+            with self.captureOnCommitCallbacks(execute=True):
+                dispatch_text_command(self.player.pk, 'east')
+            drain_queued_combat()
+
+        texts = [entry['message'].get('text') for entry in messages if entry['player_key'] == self.player.key]
+        arrival = "The Great King's headsman has arrived from the west."
+        attack = "The Great King's headsman attacks you!"
+        assist = "A freed Greek attacks the Great King's headsman!"
+        self.assertEqual(texts.count(arrival), 1, texts)
+        self.assertEqual(texts.count(attack), 1, texts)
+        self.assertEqual(texts.count(assist), 1, texts)
+        self.assertLess(texts.index(arrival), texts.index(attack), texts)
+        self.assertLess(texts.index(attack), texts.index(assist), texts)
+        member = CombatParticipant.objects.get(mob=headsman, is_active=True)
+        encounter = member.encounter
+        self.assertEqual(encounter.round_number, 0)
+        self.assertEqual(member.current_target.player_id, self.player.pk)
+        self.assertEqual(CombatParticipant.objects.get(mob=greek, is_active=True).encounter_id, encounter.pk)
+
+        # Flee through the only exit, then return while the two mobs keep fighting.
+        CombatEncounter.objects.filter(pk=encounter.pk).update(resolution_interval=-1, next_resolution_ts=None)
+        dispatch_and_drain_combat(self.player.pk, 'flee')
+        dispatch_and_drain_combat(self.player.pk, 'flee')
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, self.room.pk)
+        headsman.refresh_from_db()
+        self.assertEqual(headsman.room_id, destination.pk)
+        self.assertEqual(CombatParticipant.objects.get(mob=headsman, is_active=True).current_target.mob_id,
+                         greek.pk)
+        with capture_game_messages() as returned:
+            dispatch_and_drain_combat(self.player.pk, 'east')
+        self.assertFalse(CombatParticipant.objects.filter(player=self.player, is_active=True).exists())
+        self.assertFalse(any(entry['message'].get('text') == attack for entry in returned))
+
+    def test_busy_mob_cannot_automatically_admit_player_under_locks(self):
+        from spawns.combat_encounters import engage_locked
+
+        greek = self.mob('Greek', self.greek)
+        headsman = self.mob('headsman', aggression='normal')
+        engage(headsman, greek)
+        with self.assertRaises(ActionError) as raised:
+            transact(lambda ctx: engage_locked(ctx, ctx.actors[headsman.key], ctx.actors[self.player.key],
+                     reason='automatic'), keys=[headsman.key, self.player.key])
+        self.assertEqual(raised.exception.code, 'engagement_ineligible')
+        self.assertFalse(CombatParticipant.objects.filter(player=self.player, is_active=True).exists())
+
+    def test_tracker_arrival_precedes_fast_room_reconciliation(self):
+        from spawns.actions.mob_movement import ResolveTrackerChaseAction
+        from spawns.combat_reconciliation import reconcile
+        from spawns.combat_rounds import detach_actor
+        from spawns.events import publish_events
+        from spawns.models import CombatRoomState
+        from tests.utils import capture_game_messages
+
+        destination = self.room.create_at('east')
+        greek = self.mob('a freed Greek', self.greek, aggression='normal')
+        greek.room = destination
+        greek.save(update_fields=['room'])
+        headsman = self.mob("the Great King's headsman", aggression='normal',
+                            trait_instances=[{'key': 'tracker'}])
+        engage(self.player, headsman)
+        self.player.room = destination
+        self.player.save(update_fields=['room'])
+        transact(lambda ctx: detach_actor(ctx, self.player.key), keys=[self.player.key])
+        CombatRoomState.objects.all().delete()
+
+        with patch('spawns.tasks.reconcile_combat_room.delay', side_effect=reconcile), \
+                patch('spawns.tasks.resolve_combat_encounter.apply_async'), capture_game_messages() as messages:
+            # Execute commit callbacks before the task can publish returned
+            # events, matching a worker that processes admission immediately.
+            with self.captureOnCommitCallbacks(execute=True):
+                result = ResolveTrackerChaseAction().execute(
+                    chase_key='fast-admission', player_id=self.player.pk, world_id=self.spawn_world.pk,
+                    origin_room_id=self.room.pk, destination_room_id=destination.pk,
+                    direction='east', encounter_ids=[], mob_ids=[headsman.pk], source='move',
+                )
+            publish_events(result.events)
+        texts = [entry['message'].get('text') for entry in messages if entry['player_key'] == self.player.key]
+        arrival = "The Great King's headsman has arrived from the west."
+        attack = "The Great King's headsman attacks you!"
+        assist = "A freed Greek attacks the Great King's headsman!"
+        self.assertEqual(texts.count(attack), 1, texts)
+        self.assertEqual(texts.count(assist), 1, texts)
+        self.assertLess(texts.index(arrival), texts.index(attack), texts)
+        self.assertLess(texts.index(attack), texts.index(assist), texts)
+
+    def test_room_combat_targets_use_one_query_and_viewer_specific_descriptions(self):
+        from spawns.schemas import Char
+        from spawns.state_payloads import apply_room_combat_state
+
+        guard = self.mob('a guard')
+        encounter = engage(self.player, guard)[0]
+        for index in range(6):
+            engage(self.mob(f'guard {index}'), self.player)
+        actors = [self.player, *Mob.objects.filter(world=self.spawn_world, room=self.room)]
+        chars = [Char(id=a.pk, key=a.key, name=a.name, health=a.health) for a in actors]
+        with self.assertNumQueries(1):
+            apply_room_combat_state(chars, room_id=self.room.pk, runtime_world=self.spawn_world,
+                                   viewer=self.player)
+        guard_char = next(char for char in chars if char.key == guard.key)
+        self.assertEqual(guard_char.room_description, 'A guard is here, fighting you.')
+        self.assertEqual(guard_char.target.key, self.player.key)
+        self.assertTrue(all(char.state == 'combat' for char in chars))
+        CombatEncounter.objects.filter(pk=encounter.pk).update(status='paused')
+        with self.assertNumQueries(1):
+            apply_room_combat_state(chars, room_id=self.room.pk, runtime_world=self.spawn_world)
+        self.assertEqual(guard_char.room_description, f'A guard is here, fighting {self.player.name}.')
+
     def test_mob_room_scan_respects_direct_core_faction_diplomacy(self):
         from builders.models import FactionRelationship
         from spawns.combat_reconciliation import request_reconciliation

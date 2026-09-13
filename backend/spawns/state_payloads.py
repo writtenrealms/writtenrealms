@@ -37,6 +37,7 @@ from spawns.actions.effects import active_character_effects, active_combat_effec
 from spawns.ability_prepare_state import active_prepared_ability_slugs
 from spawns.item_querysets import with_item_salvageability
 from spawns.models import (
+    CombatParticipant,
     DoorState,
     Item,
     Mob,
@@ -54,6 +55,7 @@ from spawns.schemas import (
     QuestIndicator,
     Room as RoomSchema,
     StateSyncData,
+    Target,
     TrainingProvider as TrainingProviderSchema,
     WhoListEntry,
     Zone as ZoneSchema,
@@ -861,6 +863,44 @@ def build_map_payload(
     return map_rooms, id_to_key
 
 
+def apply_room_combat_state(chars: List[Char], *, room_id, runtime_world=None, viewer=None):
+    """Attach current opponents with one room-scoped query, never one per mob."""
+    from spawns.combat_encounters import actor_filter
+
+    by_key = {char.key: char for char in chars}
+    if not by_key:
+        return
+    members = CombatParticipant.objects.filter(
+        actor_filter(by_key), is_active=True, encounter__room_id=room_id,
+        encounter__status__in=['active', 'paused'],
+    )
+    if runtime_world is not None:
+        members = members.filter(encounter__world_id=runtime_world.pk)
+    rows = members.values('id', 'player_id', 'mob_id', 'current_target_id')
+    by_id = {
+        row['id']: (by_key[f'player.{row["player_id"]}' if row['player_id'] else f'mob.{row["mob_id"]}'],
+                    row['current_target_id'])
+        for row in rows
+    }
+    viewer_key = getattr(viewer, 'key', None)
+    for char, target_id in by_id.values():
+        if char.health <= 0:
+            continue
+        char.state = 'combat'
+        target = by_id.get(target_id, (None, None))[0]
+        if target is None or target.health <= 0:
+            char.room_description = f'{safe_capitalize(char.name)} is here, fighting.'
+            continue
+        if target.is_invisible and target.key != viewer_key:
+            target_name = 'someone'
+        else:
+            char.target = Target(**target.model_dump(include={
+                'id', 'key', 'name', 'health', 'health_max', 'level', 'keywords',
+            }))
+            target_name = 'you' if target.key == viewer_key else target.name
+        char.room_description = f'{safe_capitalize(char.name)} is here, fighting {target_name}.'
+
+
 def serialize_room(
     room: Optional[Room],
     room_key_lookup: Dict[int, str],
@@ -915,6 +955,7 @@ def serialize_room(
         )
         for m in room_mobs
     )
+    apply_room_combat_state(chars, room_id=room.id, runtime_world=runtime_world, viewer=viewer)
 
     zone = ZoneSchema(key=room.zone.key, name=room.zone.name) if room.zone else None
     details = list(room.details.filter(is_hidden=False).values_list("description", flat=True))

@@ -419,6 +419,7 @@ class MoveHandler(CommandHandler):
 
                 requires_durable_publication = bool(
                     follow_context is not None
+                    or tracker_plan.tracker_mob_ids
                     or durable_follow_event.data.get(
                         FOLLOW_HAS_FOLLOWERS_KEY
                     )
@@ -443,7 +444,7 @@ class MoveHandler(CommandHandler):
                         persisted_events = (
                             persist_follow_dependent_game_events(
                                 [*events_result.events, *followup_events],
-                                force=follow_context is not None,
+                                force=follow_context is not None or bool(tracker_plan.tracker_mob_ids),
                                 actor_key=ctx.player.key,
                                 connection_id=ctx.connection_id,
                             )

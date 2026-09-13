@@ -2,7 +2,6 @@
 from spawns.instance_clock import serialized_world
 
 from datetime import timedelta
-from dataclasses import replace
 
 from django.db import transaction
 from django.db.models import Q
@@ -11,10 +10,11 @@ from django.utils import timezone
 from config import constants
 from spawns.actions.base import ActionError
 from spawns.combat_encounters import (
-    CombatPolicy, NPC_ACTIVITY_SECONDS, actor_filter, actor_key, engage_locked, eligible, transact,
+    CombatPolicy, NPC_ACTIVITY_SECONDS, actor_filter, actor_key, after_combat_publication,
+    engage_locked, eligible, transact,
 )
 from spawns.combat_commands import schedule
-from spawns.combat_publication import snapshot_event
+from spawns.combat_publication import engagement_events, snapshot_event
 from spawns.events import persist_follow_dependent_game_events
 from spawns.models import CombatEncounter, CombatParticipant, CombatRoomState, Mob, Player
 
@@ -47,7 +47,7 @@ def request_reconciliation(world_id, room_id, keys=(), *, observed=False):
             from spawns.tasks import reconcile_combat_room
             reconcile_combat_room.delay(state_id)
         if not already_pending and not is_time_controlled(world_id):
-            transaction.on_commit(enqueue, robust=True)
+            after_combat_publication(enqueue)
 
 
 def recover_due_reconciliations(*, limit=100):
@@ -211,6 +211,10 @@ def _reconcile_page(state_id, runtime_id, *, enqueue_continuation=True):
         for actor, target in ((left, right), (right, left)):
             if admitted >= MAX_ADMISSIONS:
                 break
+            # An occupied mob keeps its opponent. Room entry alone must not
+            # recruit bystanders into that mob's existing fight.
+            if actor_key(actor) in members:
+                continue
             ally_key = None
             initiates = _initiates(policy, actor, target)
             if not initiates and isinstance(actor, Mob) and actor_key(target) in members:
@@ -237,12 +241,7 @@ def _reconcile_page(state_id, runtime_id, *, enqueue_continuation=True):
                 members.update({p.actor_key: p for p in ctx.members(encounter)})
                 if changed:
                     schedule(encounter)
-                    events = []
-                    if isinstance(b, Player):
-                        from spawns.actions.combat import _engage_events, stand_player
-                        stand_player(b)
-                        events = _engage_events(player=b, room=b.room, mob=a)
-                        events[0] = replace(events[0], text=f'{a.name[:1].upper() + a.name[1:]} attacks you!')
+                    events = engagement_events(ctx, encounter, a, b)
                     events.append(snapshot_event(ctx, encounter))
                     persist_follow_dependent_game_events(events, force=True)
                 return changed
