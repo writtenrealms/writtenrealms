@@ -7,6 +7,7 @@ import traceback
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.postgres.indexes import GinIndex
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, router, transaction
@@ -1175,6 +1176,7 @@ class InstanceClearRecord(BaseModel):
     class Meta(BaseModel.Meta):
         indexes = [
             models.Index(fields=['template_world', 'time_control', 'clear_time_ms'], name='worlds_clear_ranking_idx'),
+            GinIndex(fields=['participants'], opclasses=['jsonb_path_ops'], name='worlds_clear_participants_gin'),
         ]
 
 

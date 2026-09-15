@@ -30,6 +30,14 @@
       </router-link>
     </div>
 
+    <PlayerInstanceCompletions
+      :completions="completions"
+      :loading="completionsLoading"
+      :error="completionsError"
+      :has-more="Boolean(completionsNext)"
+      @load="loadCompletions"
+    />
+
     <div class="data-and-map">
       <div class="player-data">
         <div class="instance-details" v-if="!store.state.builder.world.is_multiplayer">
@@ -99,6 +107,8 @@ import { useStore } from "vuex";
 import { useRouter, useRoute } from "vue-router";
 import Map from "@/components/ui/Map.vue";
 import CurrentFacts from "@/components/builder/world/CurrentFacts.vue";
+import PlayerInstanceCompletions from "@/components/builder/world/PlayerInstanceCompletions.vue";
+import { fetchPlayerCompletions, type PlayerCompletion } from "@/services/playerCompletions";
 import { Room } from "@/core/interfaces.ts";
 import { EQUIPMENT_SLOT_LIST } from "@/constants";
 
@@ -108,6 +118,27 @@ const router = useRouter();
 
 const fetched = ref(false);
 const center_key = ref("");
+const completions = ref<PlayerCompletion[]>([]);
+const completionsNext = ref<string | null>(null);
+const completionsLoading = ref(false);
+const completionsError = ref(false);
+
+const loadCompletions = async () => {
+  if (completionsLoading.value) return;
+  completionsLoading.value = true;
+  completionsError.value = false;
+  try {
+    const page = await fetchPlayerCompletions(
+      String(route.params.world_id), String(route.params.player_id), completionsNext.value,
+    );
+    completions.value.push(...page.results);
+    completionsNext.value = page.next;
+  } catch {
+    completionsError.value = true;
+  } finally {
+    completionsLoading.value = false;
+  }
+};
 
 const player = computed<any>(() => store.state.builder.worlds.player);
 
@@ -119,6 +150,7 @@ onMounted(async () => {
   });
   fetched.value = true;
   center_key.value = player.value.room.key;
+  await loadCompletions();
 });
 
 const editInfo = () => {

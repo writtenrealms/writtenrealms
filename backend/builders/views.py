@@ -4801,6 +4801,11 @@ class PlayerListViewSet(BaseWorldBuilderViewSet):
 class PlayerDetailViewSet(PlayerListViewSet):
     serializer_class = builder_serializers.PlayerDetailSerializer
 
+    def completions(self, request, world_pk, pk):
+        from builders.player_completions import player_completion_history
+
+        return player_completion_history(request, self.get_object())
+
     @action(detail=False)
     def reset(self, request, world_pk, pk):
         player = get_object_or_404(
@@ -4820,6 +4825,7 @@ player_detail = PlayerDetailViewSet.as_view({
 player_reset = PlayerDetailViewSet.as_view({
     'post': 'reset',
 })
+player_completions = PlayerDetailViewSet.as_view({'get': 'completions'})
 
 
 class FactList(APIView):

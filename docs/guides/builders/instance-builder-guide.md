@@ -815,6 +815,13 @@ to do, and absences; the time-control flag is retained for future leaderboard
 filtering. These are historical clear records, not a public ranking or a claim
 that a run was free of builder assistance.
 
+Open **World > Players** and select a character to see **Instance Completions**.
+The history lists completed runs the character participated in, newest first,
+with the instance name, completion date, wall-clock clear time, and timing mode.
+Use **Load more** to view older results. Each completed reset attempt has its
+own entry, and the history remains available after the runtime is cleaned up.
+Participation may include a character who left before the final kill.
+
 Players receive an **Instance Complete** notice, styled consistently with the
 Time Control introduction and Message of the Day. They may leave and use
 `enter` to revisit their latest completed run with the same Instance ID and

@@ -235,6 +235,7 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/players/', builder_views.player_list, name='builder-player-list'),
     path('builder/worlds/<world_pk>/players/<pk>/', builder_views.player_detail, name='builder-player-detail'),
     path('builder/worlds/<world_pk>/players/<pk>/reset/', builder_views.player_reset, name='builder-player-reset'),
+    path('builder/worlds/<world_pk>/players/<pk>/completions/', builder_views.player_completions, name='builder-player-completions'),
     path('builder/worlds/<world_pk>/players/<pk>/restore/', builder_views.player_restore, name='builder-player-restore'),
     path('builder/worlds/<world_pk>/players/<player_pk>/restore/<pk>/', builder_views.player_restore_item, name='builder-player-restore-item'),
 
