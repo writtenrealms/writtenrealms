@@ -8,7 +8,10 @@
     </div>
 
     <div v-if="isStateSnapshot && message.data.world.instance_ref" class="mb-4">
-      Instance ID: {{ message.data.world.instance_ref }}
+      <div>Instance ID: {{ message.data.world.instance_ref }}</div>
+      <div v-if="message.data.world.instance_status === 'completed'" class="instance-completed color-secondary">
+        Status: Completed
+      </div>
     </div>
 
     <div v-if="message.type === 'affect.death'" class="mt-4 color-text-red font-text-regular">

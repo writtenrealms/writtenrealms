@@ -1148,6 +1148,36 @@ class InstanceRun(BaseModel):
         return "InstanceRun %s for %s" % (self.id, self.template_world)
 
 
+class InstanceGoalMember(models.Model):
+    """Initial cohort identities survive mob death, but belong to one runtime."""
+
+    run = models.ForeignKey(InstanceRun, on_delete=models.CASCADE, related_name='goal_members')
+    mob_runtime_id = models.BigIntegerField(unique=True)
+    defeated_at = models.DateTimeField(null=True)
+    processed = models.BooleanField(default=False)
+
+
+class InstanceClearRecord(BaseModel):
+    """Historical results survive runtime cleanup and resetting the same run."""
+
+    run = models.ForeignKey(InstanceRun, on_delete=models.SET_NULL, null=True, related_name='clear_records')
+    template_world = models.ForeignKey(World, on_delete=models.SET_NULL, null=True, related_name='instance_clear_records')
+    template_name = models.TextField()
+    template_slug = models.TextField()
+    attempt_id = models.UUIDField(unique=True)
+    started_at = models.DateTimeField()
+    completed_at = models.DateTimeField()
+    clear_time_ms = models.PositiveBigIntegerField()
+    time_control = models.BooleanField(default=False)
+    goal_spec = models.JSONField(default=dict)
+    participants = models.JSONField(default=list)
+
+    class Meta(BaseModel.Meta):
+        indexes = [
+            models.Index(fields=['template_world', 'time_control', 'clear_time_ms'], name='worlds_clear_ranking_idx'),
+        ]
+
+
 class InstanceParticipant(BaseModel):
     ROLE_LEADER = 'leader'
     ROLE_MEMBER = 'member'
@@ -1338,6 +1368,7 @@ class WorldConfig(BaseModel):
     # Booleans
     instance_single_player = models.BooleanField(default=False)
     instance_time_control = models.BooleanField(default=False)
+    instance_goal = models.JSONField(default=dict, blank=True)
     can_select_faction = models.BooleanField(default=True)
     auto_equip = models.BooleanField(default=True)
     allow_combat = models.BooleanField(default=True)

@@ -1199,6 +1199,14 @@ def serialize_world(world: World) -> Dict:
     data["instance_of_id"] = None
     if world.context and world.context.instance_of_id:
         data["instance_of_id"] = world.context.instance_of_id
+        # State snapshots are the entry/reconnect boundary. Fetch only the
+        # status using the runtime world's unique run index, without loading
+        # goal/participant history or adding work to room/combat events.
+        from worlds.models import InstanceRun
+
+        data["instance_status"] = InstanceRun.objects.filter(
+            spawned_world_id=world.pk,
+        ).values_list('status', flat=True).first()
 
     return data
 

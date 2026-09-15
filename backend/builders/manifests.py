@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import copy
 import json
 import math
 import re
@@ -1166,6 +1167,7 @@ def world_config_to_manifest(
     if is_instance_world:
         spec["instance_single_player"] = bool(config.instance_single_player)
         spec["instance_time_control"] = bool(config.instance_time_control)
+        spec["instance_goal"] = copy.deepcopy(config.instance_goal)
         spec[_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD] = (
             config.death_routing_source or DEATH_ROUTING_SOURCE_LOCAL
         )
@@ -1294,6 +1296,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
     if is_instance_world:
         config_payload["instance_single_player"] = bool(config.instance_single_player)
         config_payload["instance_time_control"] = bool(config.instance_time_control)
+        config_payload["instance_goal"] = copy.deepcopy(config.instance_goal)
         config_payload[_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD] = (
             config.death_routing_source or DEATH_ROUTING_SOURCE_LOCAL
         )
@@ -7563,6 +7566,7 @@ def parse_world_config_manifest(
     allowed_fields.add(_WORLD_CONFIG_DEATH_ROUTING_FIELD)
     allowed_fields.add(_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD)
     allowed_fields.add("initial_state")
+    allowed_fields.add("instance_goal")
     allowed_fields.update({
         "default_currency",
         "starting_balances",
@@ -7692,6 +7696,13 @@ def parse_world_config_manifest(
                 field_name=f"spec.{field_name}",
             )
         )
+
+    if "instance_goal" in spec:
+        from worlds.instance_goals import normalize_instance_goal
+        try:
+            config_updates['instance_goal'] = normalize_instance_goal(spec['instance_goal'])
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
     for field_name in _WORLD_CONFIG_CONFIG_TEXT_FIELDS:
         if field_name in spec:

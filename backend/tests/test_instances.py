@@ -439,7 +439,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             2,
         )
 
-    def test_completed_leader_run_is_not_reused_for_a_new_entry(self):
+    def test_completed_leader_run_is_reopened_with_its_original_identity(self):
         first_instance = self._enter()
         first_run = first_instance.instance_run
         World.leave_instance(player=self.player)
@@ -449,11 +449,12 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
 
         second_instance = self._enter()
 
-        self.assertNotEqual(second_instance.id, first_instance.id)
-        self.assertNotEqual(second_instance.instance_run.id, first_run.id)
-        self.assertEqual(second_instance.instance_run.status, InstanceRun.STATUS_ACTIVE)
+        self.assertEqual(second_instance.id, first_instance.id)
+        self.assertEqual(second_instance.instance_run.id, first_run.id)
+        self.assertEqual(second_instance.instance_run.status, InstanceRun.STATUS_COMPLETED)
+        self.assertEqual(second_instance.instance_run.completed_at, first_run.completed_at)
 
-    def test_completed_run_reference_cannot_be_reentered(self):
+    def test_completed_run_reference_rejects_new_participants(self):
         member = self.create_player("Member")
         first_instance = self._enter()
         first_run = first_instance.instance_run
@@ -735,7 +736,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         with patch(
             "worlds.instances._ensure_spawned_instance_started",
             side_effect=complete_before_move,
-        ), self.assertRaisesRegex(RuntimeError, "no longer active"):
+        ), self.assertRaisesRegex(RuntimeError, "active contestants"):
             self._enter(player=member, ref=run.ref)
 
         member.refresh_from_db()

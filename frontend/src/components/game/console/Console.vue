@@ -45,6 +45,7 @@ import Exits from "@/components/game/console/Exits.vue";
 import Factions from "@/components/game/console/Factions.vue";
 import Help from "@/components/game/console/Help.vue";
 import Inventory from "@/components/game/console/Inventory.vue";
+import InstanceCompletionNotice from "@/components/game/console/InstanceCompletionNotice.vue";
 import List from "@/components/game/console/List.vue";
 import LookChar from "@/components/game/console/LookChar.vue";
 import LookItem from "@/components/game/console/LookItem.vue";
@@ -79,6 +80,7 @@ const consoleMessage = (message) => {
     "cmd.compare.success": Compare,
     "notification.death": DeathMessage,
     "notification.instance.time_control_hint": TimeControlNotice,
+    "instance.completed": InstanceCompletionNotice,
     "effect.start": Effect,
     "notification.combat.effect": Effect,
     "cmd.equipment.success": Equipment,

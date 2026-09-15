@@ -645,6 +645,10 @@ def publish_events(
     follow_movement_data: list[dict] = []
     for event in event_list:
         event_type = str(event.type or "").strip().lower()
+        if event_type == 'private.instance.mob_defeated':
+            from worlds.instance_goals import process_instance_mob_defeat
+            process_instance_mob_defeat(event.data)
+            continue
         if event_type == 'private.combat.tracker_chase':
             from spawns.tasks import resolve_combat_tracker_chase
             resolve_combat_tracker_chase.delay({

@@ -16,7 +16,7 @@ There are three layers:
 | Layer | Builder meaning |
 | --- | --- |
 | Base world | Owns shared definitions and player progression. |
-| Instance template | Owns the instance layout, local config, spawn plans, and future goal/timer policy. |
+| Instance template | Owns the instance layout, local config, spawn plans, and optional clear goal. |
 | Instance run | One live or historical playthrough created when a player or group enters. |
 
 Builders edit the base world and instance templates. Players create instance
@@ -47,10 +47,10 @@ The foundation exists now:
 - `pvp_mode: match` templates support private 1v1 duels created through
   challenge and acceptance
 
-Goal, timer, clear-time, and leaderboard evaluation are the next layer. The
-manifest examples in this guide describe the target authoring shape. They are
-included so builders can design instance content now and so implementation work
-has concrete acceptance examples.
+Initial-population clear goals and server-timed clear records are implemented
+through `spec.instance_goal` on the instance template’s ordinary `kind: world`
+manifest. General objectives, countdown timers, and leaderboard screens remain
+planned; their examples below are design previews.
 
 Only the ordinary world, room, zone, path, mob definition, item definition, and
 spawn plan manifests are currently applied by **World > Edit**. `kind:
@@ -98,7 +98,7 @@ An instance template owns its own playable space and run policy:
 - death room
 - exit behavior
 - single-player admission and permission for player time control
-- future goal, timer, leaderboard, and cleanup policy
+- optional population-clear goals and future timer, leaderboard, and cleanup policy
 
 The death room for an instance must be inside the instance template. By
 default, a player who dies inside an instance follows the template's local
@@ -164,9 +164,8 @@ From the base world:
 4. Build its zones, rooms, paths, and spawn plans.
 5. Configure its starting room and death room.
 6. Link a base-world room to the instance template from the base room's config.
-7. If the instance will eventually need a goal, record the intended objective
-   and timer behavior in builder notes. Do not apply a `kind: instance`
-   document; goal ingestion is not implemented yet.
+7. For a timed population clear, configure `instance_goal` in **World > Edit**
+   as described below. `kind: instance` documents remain a future format.
 
 When editing an instance template, open **World > Config** and use the base
 world config link to jump directly back to the base world's config screen.
@@ -635,8 +634,8 @@ game commands from the linked base room.
 
 | Command | Use |
 | --- | --- |
-| `enter` | Start or re-enter the player's active run for that instance. |
-| `enter <instance_ref>` | Join an existing active run for the same instance template. |
+| `enter` | Start a run or revisit the player's latest active or completed run for that instance. |
+| `enter <instance_ref>` | Join an active run or revisit a completed run the player participated in, for the same instance template. |
 | `leave` | Leave the current instance and return to the remembered base-world room. |
 | `instance` | Show the linked entrance, or show the current run's Instance ID while inside. |
 | `/exitinstance <player> world@base/room@N` | Builder/trusted-script: exit a player to one explicitly chosen authored room in their recorded base runtime. |
@@ -762,39 +761,80 @@ Instance runs currently use these status names:
 | `closed` | Run no longer accepts entry. |
 | `cleaned` | Runtime contents have been cleaned. |
 
-The initial implementation creates active runs and participant history. Goal,
-timer, leaderboard, and cleanup automation should build on this state rather
-than inventing another run model.
+Runs record participant history. Configured clear goals additionally track
+first entry, remaining targets, completion, and a durable clear record.
 
 ## Goals And Timers
 
+### Timed Population Clears
+
+Use the instance template's **World > Edit** YAML to enable a goal. For
+**A Persian Outpost**, select the template and apply this ordinary world
+manifest (omit metadata to use the selected world):
+
+```yaml
+kind: world
+spec:
+  instance_goal:
+    type: clear_initial_mobs
+    where:
+      eq: [event.mob.core_faction, persian]
+```
+
+Set `instance_goal: {}` to disable it for future runs. Goals are instance-local,
+are included in world and family exports, and cannot be combined with PvP match
+mode. Editing a template never changes the goal snapshot of an existing run.
+
+`where` uses the shared [condition DSL](condition-builder-guide.md). Supported
+operators are `always`, `all`, `any`, `not`, `eq`, `ne`, and `in`. Comparison left
+operands are `event.mob.core_faction`, `event.mob.definition_slug`, or
+`event.mob.factions.<code>` (true when a mob belongs to that core or reputation
+faction). Right operands are literals; `in` takes a literal list. For example,
+`eq: [event.mob.factions.persian, true]` selects any Persian faction membership.
+
+After initial spawning and the first successful player admission, the server
+snapshots the living matching mobs and sets `started_at`. Empty target sets
+reject admission with a configuration error. The initial population is bounded
+to 10,000 mobs. Use `respawn: {mode: none}` in the applicable spawn plans so the
+clear has a finite, understandable population. Later summons or respawns are
+not added to an initial cohort, and administrative removal is not a kill.
+
+Every target must die, whether killed by a player, an allied NPC, or a damage
+effect. Deaths outside this runtime do not count. On the final target's death,
+the durable event subscriber marks the run `completed` and records:
+
+- `started_at` and `completed_at` as server UTC wall-clock timestamps;
+- `clear_time_ms`, calculated from those timestamps;
+- the goal snapshot, template identity, and whether time control was enabled;
+- participant IDs, names, roles, and entry/exit timestamps.
+
+The completion timestamp comes from the last actual death, even when events
+are delivered late, retried, or out of order. Leaving and reentering does not
+restart the timer. Wall-clock timing includes pauses, time spent deciding what
+to do, and absences; the time-control flag is retained for future leaderboard
+filtering. These are historical clear records, not a public ranking or a claim
+that a run was free of builder assistance.
+
+Players receive an **Instance Complete** notice, styled consistently with the
+Time Control introduction and Message of the Day. They may leave and use
+`enter` to revisit their latest completed run with the same Instance ID and
+recorded clear time. Entry and reconnect snapshots show **Status: Completed**
+below the Instance ID. Previous group participants may also revisit using
+`enter <instance_ref>`; new participants and completed duel matches remain
+ineligible. New combat in a completed run stays disabled.
+Builder `/reset` replaces the cohort and starts a new timed attempt; stale death
+events cannot complete it. Successful records survive reset and runtime cleanup.
+Builder/admin run payloads expose `goal_spec`, `progress`, and `outcome`.
+
+### Future Objective And Timer Authoring
+
 ::: warning Planned authoring surface
-Goals, timers, leaderboards, and `kind: instance` ingestion are not implemented.
-The shapes in this section are design previews and must not be pasted into
-**World > Edit**. They may change before the feature ships.
+The remaining `kind: instance` examples are design previews. General objective
+lists, countdown timers, configurable timer starts, and leaderboard screens are
+not implemented. Do not paste these previews into **World > Edit**.
 :::
 
-Instance goals are the target authoring model. A goal belongs to the instance
-template and is evaluated separately for each `InstanceRun`.
-
-Goals should be authored in a future `kind: instance` manifest. The runtime
-should store the normalized goal spec on the run, track objective progress, and
-evaluate completion through the shared WR2 condition DSL.
-
-Planned goal styles:
-
-- no goal
-- kill a specific boss
-- kill one of several key mobs
-- kill all selected key mobs
-- clear all completion-counting mobs
-- satisfy a custom condition
-
-Goal conditions should use the shared WR2 condition DSL. Do not create a new
-predicate format for instances.
-
-Timer support should record server-side start and completion timestamps so WR2
-can produce clear times and fastest-clear records.
+General objectives should build on the run model and shared WR2 condition DSL.
 
 ### Goal Manifest Shape
 

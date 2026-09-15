@@ -1,4 +1,5 @@
 import uuid
+from copy import deepcopy
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -88,8 +89,21 @@ def _assignment_member_ids(member_ids):
     return ' '.join(str(member_id) for member_id in _normalize_member_ids(member_ids))
 
 
-def _active_run_qs():
-    return InstanceRun.objects.filter(status__in=InstanceRun.ACTIVE_STATUSES)
+def _enterable_run_qs():
+    return InstanceRun.objects.filter(status__in=(
+        *InstanceRun.ACTIVE_STATUSES, InstanceRun.STATUS_COMPLETED,
+    ))
+
+
+def _assert_run_entry_allowed(*, run, player):
+    if run.status == InstanceRun.STATUS_COMPLETED:
+        # Finished adventures remain visitable by their original participants.
+        # Match admission remains under the duel service's stricter policy.
+        _assert_match_run_entry_allowed(run=run, player=player)
+        if not run.participants.filter(player_id=player.pk).exists():
+            raise RuntimeError('Only previous participants can revisit this completed instance.')
+    elif run.status not in InstanceRun.ACTIVE_STATUSES:
+        raise RuntimeError('This instance run is no longer active.')
 
 
 def _is_match_instance_template(template_world):
@@ -155,6 +169,7 @@ def _run_policy_snapshot(template_world, *, owner, now):
     single_player = bool(config and config.instance_single_player)
     time_control = bool(config and config.instance_time_control)
     return {
+        'goal_spec': deepcopy(config.instance_goal),
         'single_player': single_player,
         'owner': owner if single_player else None,
         'time_control': time_control,
@@ -206,7 +221,7 @@ def _run_for_spawned_world(spawned_world, *, leader=None, member_ids=None):
         ref=ref,
         leader=leader or spawned_world.leader,
         status=InstanceRun.STATUS_ACTIVE,
-        started_at=now,
+        started_at=None if template_world.config.instance_goal else now,
         last_active_at=now,
         seed=ref,
         initial_member_ids=(
@@ -233,7 +248,7 @@ def _create_run(template_world, *, leader, member_ids=None, **spawn_kwargs):
         ref=ref,
         leader=leader,
         status=InstanceRun.STATUS_ACTIVE,
-        started_at=now,
+        started_at=None if template_world.config.instance_goal else now,
         last_active_at=now,
         seed=ref,
         initial_member_ids=(
@@ -476,8 +491,8 @@ def enter_players_into_run(
             'spawned_world',
             'template_world',
         ).get(pk=run.pk)
-        if run.status not in InstanceRun.ACTIVE_STATUSES:
-            raise RuntimeError("This instance run is no longer active.")
+        for player, _transfer_from in player_pairs:
+            _assert_run_entry_allowed(run=run, player=player)
 
         # Player rows are the per-player participation reservation. Run-owned
         # flows consistently lock Run, then Players in id order, then any
@@ -564,6 +579,8 @@ def enter_players_into_run(
                     )
                 )
 
+            from worlds.instance_goals import start_instance_goal
+            start_instance_goal(run)
             run.last_active_at = now
             run.save(update_fields=['last_active_at'])
             _enqueue_instance_events(room_enter_events)
@@ -591,7 +608,7 @@ def get_or_create_instance_run(
         _assert_match_template_requires_ref(template_world, ref=ref)
 
         if ref:
-            run = _active_run_qs().select_for_update().filter(
+            run = _enterable_run_qs().select_for_update().filter(
                 ref=ref,
                 template_world=template_world,
             ).select_related(
@@ -613,14 +630,14 @@ def get_or_create_instance_run(
                     leader=spawned_world.leader or player,
                     member_ids=member_ids)
         else:
-            run = _active_run_qs().select_for_update().filter(
+            run = _enterable_run_qs().select_for_update().filter(
                 template_world=template_world,
             ).filter(
                 Q(single_player=True, owner=player)
                 | Q(single_player=False, leader=player),
             ).select_related(
                 'spawned_world',
-            ).first()
+            ).order_by('-created_ts', '-pk').first()
             if not run:
                 spawned_world = template_world.spawned_worlds.select_for_update().filter(
                     leader=player,
@@ -640,6 +657,7 @@ def get_or_create_instance_run(
                         **spawn_kwargs)
 
         _assert_single_player_run_entry_allowed(run=run, player=player)
+        _assert_run_entry_allowed(run=run, player=player)
         _assert_match_run_entry_allowed(
             run=run,
             player=player,
@@ -1318,8 +1336,7 @@ def enter_instance(
             )
             .get(pk=run.pk)
         )
-        if run.status not in InstanceRun.ACTIVE_STATUSES:
-            raise RuntimeError("This instance run is no longer active.")
+        _assert_run_entry_allowed(run=run, player=player)
         _assert_single_player_run_entry_allowed(run=run, player=player)
         _assert_match_run_entry_allowed(
             run=run,
@@ -1401,6 +1418,8 @@ def enter_instance(
                 locked_player,
                 run.spawned_world,
             )
+            from worlds.instance_goals import start_instance_goal
+            start_instance_goal(run)
             # Preserve the existing service contract for callers that reuse the
             # passed model instance immediately after entry.
             player.world = run.spawned_world
@@ -1685,6 +1704,7 @@ def reset_instance(*, player) -> InstanceResetResult:
                         )
                     )
 
+            run.goal_members.all().delete()
             run.progress = {}
             run.outcome = {}
             run.last_active_at = timezone.now()
@@ -1718,6 +1738,11 @@ def reset_instance(*, player) -> InstanceResetResult:
                     simulation.run.pending_command = {}
                     simulation.run.pending_revision = run.pending_revision
                     simulation.run.time_generation = run.time_generation
+            if run.goal_spec:
+                run.started_at = None
+                run.completed_at = None
+                run.status = InstanceRun.STATUS_ACTIVE
+                run_update_fields.extend(['started_at', 'completed_at', 'status'])
             run.save(update_fields=run_update_fields)
             if run.time_control:
                 # Replacement scheduling carries the new generation. A reset
@@ -1730,6 +1755,8 @@ def reset_instance(*, player) -> InstanceResetResult:
             spawned_world.save(update_fields=['is_clean', 'last_spawn_plan_run_ts'])
 
             run_spawn_plans_for_world(world=spawned_world, initial=True)
+            from worlds.instance_goals import start_instance_goal
+            start_instance_goal(run)
             _enqueue_instance_events([
                 *cancellation_events,
                 *room_enter_events,

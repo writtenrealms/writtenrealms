@@ -322,6 +322,12 @@ Current required mappings:
   deterministic lowercase `instance_slug` that is unique within that base
   family, and use `instance.<instance_slug>` as its bundle scope. Do not use a
   WR1 world database id as a bundle ref.
+- WR2 instance world documents may author `spec.instance_goal` as
+  `{type: clear_initial_mobs, where: <shared condition DSL>}` or `{}`. It is local
+  template configuration and round-trips in world/family manifests. Cohorts,
+  progress, timestamps, and clear records are runtime data and are not exported.
+  The optional WR1 authored-world exporter may emit this setting when the
+  authored goal has those semantics; it must not export live completion history.
 - WR2 instance world documents can opt into `spec.instance_single_player`
   and `spec.instance_time_control`. Time control requires single-player;
   both default to false. These are authored instance-template permissions,

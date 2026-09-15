@@ -6,6 +6,11 @@ Use **Copy YAML** to copy the editor contents and **Save YAML** to apply changes
 to the selected world. **World > Edit** remains available for general and
 multi-document manifest workflows.
 
+Instance templates can also set `instance_goal` to record timed population
+clears, such as killing every initially spawned Persian mob. See
+[timed population clears](instance-builder-guide.md#timed-population-clears)
+for the YAML, faction conditions, and timestamp semantics.
+
 World config manifests are update-only. Applying a `kind: world` document
 updates the selected world; it does not create or delete worlds.
 

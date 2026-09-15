@@ -502,6 +502,7 @@ class World(BaseModel):
     instance_of: Optional[str] = None
     instance_of_id: Optional[int] = None
     instance_ref: Optional[str] = None
+    instance_status: Optional[str] = None
 
     is_multiplayer: bool = False
     tier: int = 1

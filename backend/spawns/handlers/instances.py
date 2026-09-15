@@ -50,8 +50,8 @@ class EnterInstanceHandler(CommandHandler):
         "format": "enter [instance_ref]",
         "description": "Enter the instance linked from your current room.",
         "details": [
-            "Use `enter` to start or re-enter your own run.",
-            "Use `enter <instance_ref>` to join an existing active run for the same instance template.",
+            "Use `enter` to start or re-enter your latest run, including a completed run.",
+            "Use `enter <instance_ref>` to join an active run or revisit a completed run you participated in for the same instance template.",
         ],
         "examples": [
             "enter",
@@ -208,7 +208,8 @@ class InstanceInfoHandler(CommandHandler):
                 return
             text = (
                 "This room is linked to %s.\n"
-                "Use `enter` to start or re-enter your run, or `enter <instance_ref>` to join another active run."
+                "Use `enter` to start or re-enter your latest run, including a completed run. "
+                "Use `enter <instance_ref>` to join an active run or revisit a completed run you participated in."
             ) % transfer_to.world.name
             ctx.publish(
                 {

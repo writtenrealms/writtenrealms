@@ -2544,6 +2544,9 @@ def _append_mob_defeat_events(
         killer=player,
         room=room,
     )
+    from worlds.instance_goals import record_instance_mob_defeat
+
+    record_instance_mob_defeat(target_mob)
     target_mob.delete()
 
     reward_update_fields: list[str] = []
@@ -2683,6 +2686,9 @@ def _append_uncredited_mob_defeat_events(
         killer=None,
         room=room,
     )
+    from worlds.instance_goals import record_instance_mob_defeat
+
+    record_instance_mob_defeat(target_mob)
     target_mob.delete()
     recipients = [
         f"player.{player_id}"

@@ -30,6 +30,7 @@ INSTANCE_INHERITED_CONFIG_FIELDS = {
 INSTANCE_LOCAL_CONFIG_FIELDS = {
     "instance_single_player",
     "instance_time_control",
+    "instance_goal",
     "built_by",
     "death_currency",
     "death_currency_penalty",
@@ -65,6 +66,7 @@ INSTANCE_INHERITED_MANIFEST_FIELDS = {
 INSTANCE_LOCAL_MANIFEST_FIELDS = {
     "instance_single_player",
     "instance_time_control",
+    "instance_goal",
     "built_by",
     "death_currency",
     "death_currency_penalty",
@@ -103,6 +105,12 @@ def validate_instance_control_config(*, world, config, updates):
         )
     if time_control and not single_player:
         raise ValueError("Instance time control requires a single-player instance.")
+    from worlds.instance_goals import normalize_instance_goal
+    goal = normalize_instance_goal(updates.get('instance_goal', getattr(config, 'instance_goal', {})))
+    if goal and (not getattr(world, 'instance_of_id', None) or getattr(world, 'context_id', None)):
+        raise ValueError('Instance goals are only configurable for instance templates.')
+    if goal and updates.get('pvp_mode', getattr(config, 'pvp_mode', None)) == 'match':
+        raise ValueError('Instance goals cannot be combined with PvP match mode.')
     if single_player and updates.get('pvp_mode', getattr(config, 'pvp_mode', None)) == 'match':
         raise ValueError('Single-player instances cannot use PvP match mode.')
 

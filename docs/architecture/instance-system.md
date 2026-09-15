@@ -7,6 +7,36 @@ clock and owner-only admission.
 
 This document describes the target architecture for instances in WR2.
 
+Implemented population-clear goals use `WorldConfig.instance_goal` in ordinary
+`kind: world` manifests; see the builder guide's
+[timed population clears](../guides/builders/instance-builder-guide.md#timed-population-clears).
+`worlds/instance_goals.py` snapshots matching runtime faction identities at first
+entry, using the shared condition DSL. An indexed `InstanceGoalMember` row per
+initial target records its death atomically with combat; administrative deletion
+never counts. The existing game event outbox delivers private death notifications
+after combat releases its shared run lock. The subscriber locks only that run,
+counts each member once, and finalizes the result atomically. There are no per-tick
+population scans, per-player death fanouts, or shared-to-exclusive lock upgrades.
+Cohort selection batches faction reads; death processing is constant work per
+target and completion alone snapshots participants. The population cap is 10,000.
+
+`InstanceClearRecord` retains start/completion UTC wall time, milliseconds, the
+goal and template snapshots, time-control mode, and participant identities.
+Runtime/template links use SET_NULL, so deleting transient runs does not delete
+records. Attempt UUIDs keep completed results distinct when a builder resets the
+same runtime. An index on template, time-control mode, and duration supports
+future ranking. Wall time includes pauses and absences; leaderboard eligibility
+and public ranking remain future policy, as do the more general goal shapes
+below. Completion timestamps use death time, never outbox delivery time.
+
+Completed adventures remain open to their previous participants. Ordinary
+`enter` selects the owner's or leader's latest active or completed run; former
+group members can return by reference. Reentry preserves the run's completed
+status and frozen result, while match admission retains its separate duel
+policy. Entry/reconnect snapshots include the run status through one indexed
+lookup, and the client shows **Status: Completed** below the Instance ID.
+Completion, Time Control, and MOTD messages share the same console notice.
+
 Instances are a core game structure: private or semi-private copies of authored
 content that can have their own layout, local spawn behavior, lifecycle,
 optional goal, timer, and cleanup policy while still belonging to a base world.

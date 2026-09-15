@@ -39,6 +39,9 @@ def defeat_mob(context, encounter, participant, mob, killer):
         corpse = Item.objects.get(pk=corpse_id)
         combat.roll_mob_loot(mob=mob, corpse=corpse, killer=players[0], room=encounter.room)
     deactivate_merchant_runtime(mob)
+    from worlds.instance_goals import record_instance_mob_defeat
+
+    record_instance_mob_defeat(mob)
     mob.delete()
     rewards = []
     projections = {}

@@ -10,6 +10,23 @@ Combat effect applications show their duration in rounds. Uncheck the setting
 to restore full combat sentences. This preference changes the display only;
 combat timing and outcomes stay the same.
 
+## Timed Instance Clears
+
+Some instances, including a configured Persian Outpost, complete when every
+member of their initial target population has died. The timer starts on first
+entry and stops at the final target's death. You receive an **Instance Complete**
+notice, using the same framed style as Time Control and the Message of the Day,
+with your clear time, and the server saves the timestamps and participant
+history for future records.
+
+The timer measures real elapsed time, including pauses and time outside the
+instance. Reentering an unfinished run does not reset it. After completion,
+you can leave normally; `enter` reopens your latest completed run, keeping its
+Instance ID and clear time. **Status: Completed** appears below the ID when
+you return or reconnect. Previous group participants can return with
+`enter <instance_ref>`. Combat remains disabled in a completed run; builder
+`/reset` starts a new attempt.
+
 ## Turn-Based Instances
 
 Some builders offer single-player instances with **Time Control**. Each run

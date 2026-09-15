@@ -17,6 +17,7 @@ _INSTANCE_CONFIG_LOCAL_ROOM_FIELDS = {
 _WORLD_CONFIG_CLONE_SKIP_FIELDS = {
     "instance_single_player",
     "instance_time_control",
+    "instance_goal",
     "id",
     "created_ts",
     "modified_ts",
