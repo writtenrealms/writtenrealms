@@ -368,13 +368,12 @@ def _targeted_command_fallback_triggers(
     if not trigger_world:
         return []
 
-    target_filter = Q()
-    has_targets = False
+    target_ids_by_type: dict[int, set[int]] = {}
     for target_type, target_id in target_pairs:
-        target_filter |= Q(target_type=target_type, target_id=target_id)
-        has_targets = True
-    if not has_targets:
-        return []
+        target_ids_by_type.setdefault(target_type.id, set()).add(target_id)
+    target_filter = Q()
+    for target_type_id, target_ids in target_ids_by_type.items():
+        target_filter |= Q(target_type_id=target_type_id, target_id__in=target_ids)
 
     triggers = list(
         Trigger.objects.filter(
@@ -1404,27 +1403,48 @@ def get_room_action_labels_for_actor(actor: Player | Mob | None, room: Room | No
 def get_item_action_labels_for_actor(actor: Player | Mob | None, item: Item | None) -> list[str]:
     if not actor or not item:
         return []
+    return get_items_action_labels_for_actor(actor, [item]).get(item.id, [])
+
+
+def get_items_action_labels_for_actor(
+    actor: Player | Mob | None, items: list[Item],
+) -> dict[int, list[str]]:
+    """Resolve display actions with one trigger read for an inventory batch."""
+    if not actor or not items:
+        return {}
 
     cts = _scope_content_types()
-    target_pairs: list[tuple[ContentType, int]] = [(cts[Item], item.id)]
-    if item.definition_id:
-        target_pairs.append((cts[ItemDefinition], item.definition_id))
+    target_pairs = [(cts[Item], item.id) for item in items]
+    target_pairs.extend(
+        (cts[ItemDefinition], definition_id)
+        for definition_id in {item.definition_id for item in items if item.definition_id}
+    )
 
     triggers = _targeted_command_fallback_triggers(
         actor,
         target_pairs=target_pairs,
     )
     if not triggers:
-        return []
+        return {}
 
+    by_target: dict[tuple[int, int], list[Trigger]] = {}
+    for trigger in triggers:
+        by_target.setdefault((trigger.target_type_id, trigger.target_id), []).append(trigger)
     room, zone, world = _actor_scope_context(actor)
-    return _collect_display_action_labels(
-        actor=actor,
-        triggers=triggers,
-        room=room,
-        zone=zone,
-        world=world,
-    )
+    labels = {}
+    for item in items:
+        applicable = [
+            *by_target.get((cts[Item].id, item.id), []),
+            *by_target.get((cts[ItemDefinition].id, item.definition_id), []),
+        ]
+        labels[item.id] = _collect_display_action_labels(
+            actor=actor,
+            triggers=_ordered_triggers(applicable),
+            room=room,
+            zone=zone,
+            world=world,
+        )
+    return labels
 
 
 def get_char_action_labels_for_actor(actor: Player | Mob | None, char: Player | Mob | None) -> list[str]:

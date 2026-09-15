@@ -258,17 +258,23 @@ class GetHandler(CommandHandler):
     text_commands = ("get", "loot")
     help = {
         "name": "Get",
-        "format": "get <item> | get <item> <container> | loot [<corpse>]",
+        "format": "get <item> | get <item> <container> | loot [all | <corpse>]",
         "description": "Take an item from the room, or from a container in the room/inventory.",
         "details": [
             "`loot` is shorthand for `get all corpse`. Add a corpse selector "
-            "to choose among multiple corpses.",
+            "to choose among multiple corpses. `loot all` means `get all all.corpse`.",
+            "Use `all.<container>` to take items from every matching container. "
+            "The item selector applies separately to each container; empty or "
+            "nonmatching containers are skipped.",
         ],
         "examples": [
             "get lantern",
             "get all chest",
+            "get all all.corpse",
+            "get all.coin all.pouch",
             "get 2.apple backpack",
             "loot",
+            "loot all",
             "loot 2.corpse",
         ],
     }
@@ -287,6 +293,8 @@ class GetHandler(CommandHandler):
         if ctx.payload.get("command") == "loot":
             selector = "all"
             source = " ".join(args).strip() or "corpse"
+            if source.lower() == "all":
+                source = "all.corpse"
         elif not selector:
             if args:
                 selector = args[0]

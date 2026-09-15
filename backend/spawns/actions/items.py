@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from typing import Callable
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.db.models import Q
 
 from config import constants as adv_consts
 from core.equipment_system import (
@@ -300,14 +302,11 @@ def _is_bound_quest_item(item: Item) -> bool:
     return item.type == adv_consts.ITEM_TYPE_QUEST
 
 
-def _resolve_accessible_container(player: Player, room: Room, selector: str) -> Item:
+def _resolve_accessible_containers(player: Player, room: Room, selector: str) -> list[Item]:
     if not selector:
         raise ActionError("From where?", code="missing_container")
 
     selector = selector.strip().lower()
-    if selector == "all" or selector.startswith("all."):
-        raise ActionError("Specify a single container.", code="invalid_container")
-
     containers = [
         item
         for item in _room_items(room, runtime_world=player.world)
@@ -318,13 +317,19 @@ def _resolve_accessible_container(player: Player, room: Room, selector: str) -> 
     if not containers:
         raise ActionError("You don't see any containers here.", code="no_containers")
 
-    resolved = _select_items(
+    return _select_items(
         containers,
         selector,
         empty_error="From where?",
         not_found_error=lambda token: f"You don't see a {token} here.",
     )
-    return resolved[0]
+
+
+def _resolve_accessible_container(player: Player, room: Room, selector: str) -> Item:
+    normalized = (selector or "").strip().lower()
+    if normalized == "all" or normalized.startswith("all."):
+        raise ActionError("Specify a single container.", code="invalid_container")
+    return _resolve_accessible_containers(player, room, selector)[0]
 
 
 def _room_visibility_target(item: Item | None, room: Room) -> bool:
@@ -765,25 +770,86 @@ class GetAction:
                 raise ActionError("You are nowhere. Cannot get items.", code="no_room")
 
             room = Room.objects.get(pk=player.room_id)
-            source_container: Item | None = None
+            source_containers: list[Item] = []
+            item_source_ids: dict[int, int] = {}
 
             if source_selector:
-                source_container = _resolve_accessible_container(player, room, source_selector)
-                source_items = [
-                    item
-                    for item in _container_items(source_container)
-                    if item.is_pickable
+                source_selector = source_selector.strip().lower()
+                source_containers = _resolve_accessible_containers(player, room, source_selector)
+                multiple_sources = source_selector == "all" or source_selector.startswith("all.")
+                # Keep the selected containers accessible throughout the move.
+                # Lock sources and then contents in ID order for competing looters.
+                accessible_sources = {
+                    item.id: item
+                    for item in Item.objects.select_for_update(of=("self",))
+                    .filter(
+                        Q(
+                            container_type=ContentType.objects.get_for_model(Room),
+                            container_id=room.id,
+                        )
+                        | Q(
+                            container_type=ContentType.objects.get_for_model(Player),
+                            container_id=player.id,
+                        ),
+                        world=player.world,
+                        pk__in=[item.id for item in source_containers],
+                        is_pending_deletion=False,
+                    )
+                    .select_related("definition", "currency")
+                    .order_by("id")
+                }
+                source_containers = [
+                    accessible_sources[item.id]
+                    for item in source_containers
+                    if item.id in accessible_sources
                 ]
-                if not source_items:
-                    raise ActionError("It is empty.", code="empty_container")
-                selected_items = _select_items(
-                    source_items,
-                    selector,
-                    empty_error="Get what?",
-                    not_found_error=(
-                        lambda token: f"You don't see a {token} in {source_container.name}."
-                    ),
-                )
+                if not source_containers:
+                    raise ActionError("You don't see that here.", code="item_not_found")
+
+                # Fetch every source's contents together, applying item selectors
+                # independently within each container (as in WR1).
+                contents = defaultdict(list)
+                for item in (
+                    Item.objects.filter(
+                        world=player.world,
+                        container_type=ContentType.objects.get_for_model(Item),
+                        container_id__in=accessible_sources,
+                        is_pending_deletion=False,
+                        is_pickable=True,
+                    )
+                    .select_related("definition", "currency")
+                    .order_by("id")
+                ):
+                    contents[item.container_id].append(item)
+                if not contents:
+                    raise ActionError(
+                        "They are empty." if multiple_sources else "It is empty.",
+                        code="empty_container",
+                    )
+                selected_items = []
+                for source in source_containers:
+                    try:
+                        selected_items.extend(
+                            _select_items(
+                                contents[source.id],
+                                selector,
+                                empty_error="Get what?",
+                                not_found_error=(
+                                    lambda token: f"You don't see a {token} in {resolve_item_name(source)}."
+                                ),
+                            )
+                        )
+                    except ActionError as err:
+                        if not multiple_sources or err.code != "item_not_found":
+                            raise
+                if not selected_items:
+                    raise ActionError(
+                        "You don't see that in any matching container.",
+                        code="item_not_found",
+                    )
+                item_source_ids = {
+                    item.id: item.container_id for item in selected_items
+                }
             else:
                 room_items = _visible_room_items(player, room)
                 if not room_items:
@@ -799,7 +865,6 @@ class GetAction:
             quest_room_items = _quest_room_item_candidates(selected_items)
 
             item_ids = [item.id for item in room_backed_items]
-            origin = source_container or room
             locked_items = {}
             if item_ids:
                 # Revalidate containment under the row lock in case another
@@ -807,14 +872,21 @@ class GetAction:
                 origin_content_type_id = room_backed_items[0].container_type_id
                 locked_items = {
                     item.id: item
-                    for item in Item.objects.select_for_update()
+                    for item in Item.objects.select_for_update(of=("self",))
                     .filter(
                         world=player.world,
                         pk__in=item_ids,
                         container_type_id=origin_content_type_id,
-                        container_id=origin.id,
+                        container_id__in=(
+                            [source.id for source in source_containers]
+                            if source_selector else [room.id]
+                        ),
                         is_pending_deletion=False,
+                        is_pickable=True,
                     )
+                    .select_related("definition", "currency")
+                    .order_by("id")
+                    if not source_selector or item.container_id == item_source_ids[item.id]
                 }
             moved_items = [
                 locked_items[item_id]
@@ -861,8 +933,21 @@ class GetAction:
             "items": item_payloads,
             "room": room_payload.model_dump(),
         }
-        if source_container:
-            data["source"] = serialize_item(source_container).model_dump()
+        # One actor update and one observer notification, even for many sources.
+        # Retain the single-source field for existing consumers.
+        source_item_keys = defaultdict(list)
+        for item in moved_items:
+            if item.id in item_source_ids:
+                source_item_keys[item_source_ids[item.id]].append(item.key)
+        used_sources = [source for source in source_containers if source_item_keys[source.id]]
+        source_groups = [
+            {"source": payload.model_dump(), "item_keys": source_item_keys[source.id]}
+            for source, payload in zip(used_sources, serialize_inventory(used_sources))
+        ]
+        if source_groups:
+            data["sources"] = source_groups
+            if len(source_groups) == 1:
+                data["source"] = source_groups[0]["source"]
 
         text = render_event_text("cmd.get.success", data, viewer=updated_player)
 
@@ -876,11 +961,16 @@ class GetAction:
             )
         ]
 
-        if (
-            not updated_player.is_invisible
-            and moved_items
-            and _room_visibility_target(source_container, room)
-        ):
+        room_content_type_id = ContentType.objects.get_for_model(Room).id
+        visible_source_ids = {
+            source.id for source in source_containers
+            if source.container_type_id == room_content_type_id and source.container_id == room.id
+        }
+        visible_item_keys = {
+            item.key for item in moved_items
+            if not source_selector or item_source_ids[item.id] in visible_source_ids
+        }
+        if not updated_player.is_invisible and visible_item_keys:
             recipients = (
                 Player.objects.filter(
                     world=updated_player.world,
@@ -891,16 +981,21 @@ class GetAction:
                 .values_list("id", flat=True)
             )
             if recipients:
-                moved_item_payloads = [
-                    payload.model_dump()
-                    for payload in serialize_inventory(moved_items)
-                ]
                 notify_data = {
                     "actor": serialize_char_from_player(updated_player).model_dump(),
-                    "items": moved_item_payloads,
+                    "items": [
+                        payload for payload in item_payloads
+                        if payload["key"] in visible_item_keys
+                    ],
                 }
-                if source_container:
-                    notify_data["source"] = serialize_item(source_container).model_dump()
+                visible_groups = [
+                    group for group in source_groups
+                    if any(key in visible_item_keys for key in group["item_keys"])
+                ]
+                if visible_groups:
+                    notify_data["sources"] = visible_groups
+                    if len(visible_groups) == 1:
+                        notify_data["source"] = visible_groups[0]["source"]
 
                 notify_text = render_event_text(
                     "notification.cmd.get.success",

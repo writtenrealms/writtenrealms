@@ -349,6 +349,31 @@ corpse is present, add the normal numbered selector:
 loot 2.corpse
 ```
 
+To take every pickable item from every matching corpse, use `loot all`:
+
+```text
+loot all
+get all all.corpse
+```
+
+These commands are equivalent. Empty corpses are skipped when others still
+contain loot. If every matching corpse is empty, the command tells you so.
+
+Multi-container `get` also works with other containers in the room or your
+inventory. The item selector applies separately inside each matching container:
+
+```text
+get all.coin all.pouch
+get pelt all.corpse
+get 2.apple all.bag
+```
+
+These take every coin from every pouch, the first pelt from each corpse, or the
+second apple from each bag. Containers without a matching item are skipped.
+Only directly accessible containers are searched; this does not recursively
+empty nested containers. `get all all` takes items from all accessible
+containers, regardless of type.
+
 Personal aliases take precedence over the built-in shortcut, so
 `alias loot = <command>` can replace it. Removing that personal alias with
 `unalias loot` restores the built-in behavior.

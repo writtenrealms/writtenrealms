@@ -332,6 +332,7 @@ def serialize_item(
     viewer: Player | Mob | None = None,
     include_inventory: bool = False,
     salvageable_definition_ids: set[int] | None = None,
+    action_labels: list[str] | None = None,
 ) -> ItemSchema:
     """Serialize an item into the WR2 Item schema."""
     from spawns.triggers import get_item_action_labels_for_actor
@@ -343,7 +344,10 @@ def serialize_item(
     armor_value = getattr(item, "armor", None)
     if armor_value is None:
         armor_value = 0
-    actions = get_item_action_labels_for_actor(viewer, item)
+    actions = (
+        action_labels if action_labels is not None
+        else get_item_action_labels_for_actor(viewer, item)
+    )
     keywords = item.keywords or ""
     if not keywords and item.definition:
         keywords = item.definition.keywords or ""
@@ -449,7 +453,10 @@ def serialize_inventory(
     viewer: Player | Mob | None = None,
     include_inventory: bool = False,
 ) -> List[ItemSchema]:
+    from spawns.triggers import get_items_action_labels_for_actor
+
     item_list = list(items)
+    action_labels = get_items_action_labels_for_actor(viewer, item_list)
     salvageable_definition_ids: set[int] = set()
     unresolved_definition_ids: set[int] = set()
     for item in item_list:
@@ -478,6 +485,7 @@ def serialize_inventory(
             viewer=viewer,
             include_inventory=include_inventory,
             salvageable_definition_ids=salvageable_definition_ids,
+            action_labels=action_labels.get(item.id, []),
         )
         for item in item_list
     ]

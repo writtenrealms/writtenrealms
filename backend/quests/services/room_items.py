@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from django.contrib.contenttypes.models import ContentType
+
 from builders.models import ItemDefinition
 from config import constants as adv_consts
 from quests.entity_refs import resolve_entity_ref_id, resolve_room_ref_id
@@ -113,10 +115,16 @@ def _normalize_claim_map(raw_claims: Any) -> dict[str, list[int]]:
 
 
 def _collect_item_tree_ids(items: list[Item]) -> set[int]:
-    item_ids: set[int] = set()
-    for item in items:
-        item_ids.add(item.id)
-        item_ids.update(item.get_contained_ids())
+    item_ids = {item.id for item in items}
+    pending_ids = item_ids
+    item_type = ContentType.objects.get_for_model(Item)
+    # One query per nesting level, including for a large flat loot inventory.
+    while pending_ids:
+        pending_ids = set(Item.objects.filter(
+            container_type=item_type,
+            container_id__in=pending_ids,
+        ).values_list("id", flat=True)) - item_ids
+        item_ids.update(pending_ids)
     return item_ids
 
 

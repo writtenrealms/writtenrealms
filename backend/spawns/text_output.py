@@ -241,6 +241,11 @@ def _render_get_text(event_type: str, data: dict) -> str | None:
 
     source = data.get("source") or {}
     source_name = source.get("name")
+    item_source_names = {
+        key: (group.get("source") or {}).get("name")
+        for group in data.get("sources") or []
+        for key in group.get("item_keys") or []
+    }
 
     if event_type == "cmd.get.success":
         prefix = "You get "
@@ -251,11 +256,12 @@ def _render_get_text(event_type: str, data: dict) -> str | None:
             return None
         prefix = f"{actor_name} gets "
 
-    suffix = f" from {source_name}" if source_name else ""
     lines = []
     for item in items:
         name = item.get("name")
         if name:
+            item_source_name = item_source_names.get(item.get("key"), source_name)
+            suffix = f" from {item_source_name}" if item_source_name else ""
             lines.append(f"{prefix}{name}{suffix}.")
     return "\n".join(lines) if lines else None
 

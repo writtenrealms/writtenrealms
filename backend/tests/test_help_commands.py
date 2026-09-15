@@ -170,6 +170,7 @@ class TestHelpCommands(WorldTestCase):
         self.assertIsNotNone(message)
         self.assertEqual(message["data"]["command"]["command"], "loot")
         self.assertIn("get all corpse", message.get("text", ""))
+        self.assertIn("get all all.corpse", message.get("text", ""))
 
     def test_help_set_lists_settable_fields(self):
         with capture_game_messages() as messages:

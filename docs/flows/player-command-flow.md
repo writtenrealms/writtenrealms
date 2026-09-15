@@ -79,7 +79,13 @@ This document describes the WR2 flow from a player entering a command in the in-
    - Maps parsed args into payload fields expected by handlers (`direction`, `target`, `item`, etc.).
    - Delegates to resolved domain handler (`look`, `scan`, `move`, `drop`, `help`, `/load`, ...).
    - Resolves built-in command synonyms in the registered handler. For example,
-     `loot` routes to the item handler as `get all corpse`.
+     `loot` routes to the item handler as `get all corpse`; `loot all` routes
+     as `get all all.corpse`. Multi-container `get` applies the item selector
+     within each matching source, batches content reads and transfers under
+     ordered row locks, and publishes one actor update. Its `sources` groups
+     pair each source payload with the transferred `item_keys` for text output;
+     single-source results also retain `source`. Observer notifications include
+     only transfers from room containers.
    - `help <target>` first checks command help, then checks abilities the player
      already knows or can learn right now. Ability help is returned as plain
      console text with `data.ability`, not as the structured command help table.
