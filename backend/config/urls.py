@@ -73,6 +73,7 @@ api_v1_urls = [
     path('lobby/worlds/<pk>/chars/', lobby_views.world_chars, name='lobby-world-chars'),
     path('lobby/worlds/<world_pk>/chars/<pk>/', lobby_views.world_char, name='lobby-world-char'),
     path('lobby/worlds/<pk>/leaders/', lobby_views.world_leaders, name='lobby-world-leaders'),
+    path('lobby/worlds/<pk>/leaderboards/', lobby_views.WorldLeaderboards.as_view(), name='lobby-world-leaderboards'),
     path('lobby/worlds/<world_pk>/transfer/', lobby_views.transfer, name='lobby-world-transfer'),
 
     # Game calls made by a player either in game or in lobby

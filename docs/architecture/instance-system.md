@@ -25,9 +25,22 @@ goal and template snapshots, time-control mode, and participant identities.
 Runtime/template links use SET_NULL, so deleting transient runs does not delete
 records. Attempt UUIDs keep completed results distinct when a builder resets the
 same runtime. An index on template, time-control mode, and duration supports
-future ranking. Wall time includes pauses and absences; leaderboard eligibility
-and public ranking remain future policy, as do the more general goal shapes
-below. Completion timestamps use death time, never outbox delivery time.
+ranking. Wall time includes pauses and absences. Lobby panels support typed
+ranking policies through base-world `spec.leaderboards`; see
+[Lobby Leaderboards](../guides/builders/world-config-builder-guide.md#lobby-leaderboards).
+The more general goal shapes below remain future policy. Completion timestamps
+use death time, never outbox delivery time.
+
+Clear records snapshot solo/group mode, the solo character identity, and ranking
+eligibility. Builder participants at first entry or completion disqualify a
+result; builder resets are unranked. Records without this snapshot remain
+historical only. A partial index supports eligible personal-best queries. The
+lobby aggregates minima and duel results in PostgreSQL within a selected
+template/base world, limits responses to 50 entries per panel and eight panels,
+and caches the shared response for 30 seconds. A refresh lease coalesces
+concurrent requests, serving stale data during refresh when available. No
+per-tick or per-player ranking jobs are added. Query-count regression coverage
+uses 5,000 historical attempts; warm reads do not query result history.
 
 Completed adventures remain open to their previous participants. Ordinary
 `enter` selects the owner's or leader's latest active or completed run; former

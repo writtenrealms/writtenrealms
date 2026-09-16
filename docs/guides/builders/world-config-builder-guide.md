@@ -76,6 +76,69 @@ spec:
   decay_glory: false
 ```
 
+## Lobby Leaderboards
+
+Configure an ordered list of panels on the **base world's** Config YAML.
+For example, Phalanx can show Persian Outpost times followed by duel rankings:
+
+```yaml
+kind: world
+spec:
+  leaderboards:
+    - type: instance_clear_time
+      instance: a-persian-outpost
+    - type: dueling
+      minimum_matches: 3
+```
+
+`instance` is the template's stable instance slug, not its name, runtime ID,
+or database ID. It must belong to this base world and have completion criteria.
+Panels keep their list order. Add more instance panels by repeating the first
+entry with another slug. No separate leaderboard editor is required.
+
+| Type | Settings | Ranking |
+| --- | --- | --- |
+| `instance_clear_time` | Required `instance`; optional `timing: current`, `time_control`, or `continuous` | Fastest eligible clear first. Solo templates show one personal best per character; group templates show party runs. |
+| `dueling` | `minimum_matches`, default `3` | Highest win percentage, then most wins. Only completed wins/losses count; exactly three matches qualifies at the default threshold. |
+| `glory_experience` | None required | Highest glory, then experience, then newest character, matching the original ranking. |
+
+Every panel accepts an optional `title` (1–80 characters) and `limit` (1–50,
+default 10). A world can have up to eight panels. For example:
+
+```yaml
+leaderboards:
+  - type: instance_clear_time
+    instance: a-persian-outpost
+    title: Fastest Outpost Clears
+    limit: 5
+    timing: time_control
+  - type: glory_experience
+```
+
+New worlds default to one glory/experience panel. Omitting `leaderboards` from
+a partial update preserves the existing setting; `leaderboards: []` hides all
+panels. Configuration is included in world and family exports. Unknown types,
+settings, slugs, and invalid thresholds produce save errors. Influence is not
+available yet and will become another panel type when that rating exists.
+
+Instance `timing: current` follows the template's current time-control setting.
+Timing and solo/group modes are separate categories. Times measure wall-clock
+duration, including pauses and absences. Exact ties use a stable character ID
+(solo) or the earliest completion (party).
+
+Ranked instance attempts require non-builder participants when the timer starts
+and when the completion is recorded. Builder `/reset` attempts stay in completion history but are not
+ranked. Historical clears recorded before ranking eligibility was captured also
+remain in history without being ranked. These checks are not a certification
+against every possible form of builder assistance. Deleted and builder
+characters are excluded from individual boards. Duel thresholds count lifetime
+completed matches within this base world, across its arenas.
+
+Empty panels remain visible with a short explanation. Results are shared and
+cached for 30 seconds; a concurrent refresh may briefly show the previous
+snapshot. Configuration changes take effect immediately. A leaderboard loading
+failure does not block entering the world or choosing a character.
+
 ## Room References
 
 Use the stable room refs shown in exported YAML:

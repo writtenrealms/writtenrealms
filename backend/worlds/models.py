@@ -8,6 +8,7 @@ from django.conf import settings
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import GinIndex
+from core.leaderboards import default_leaderboards
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models, router, transaction
@@ -1172,11 +1173,21 @@ class InstanceClearRecord(BaseModel):
     time_control = models.BooleanField(default=False)
     goal_spec = models.JSONField(default=dict)
     participants = models.JSONField(default=list)
+    single_player = models.BooleanField(default=False)
+    ranking_eligible = models.BooleanField(default=False)
+    ranking_player = models.ForeignKey(
+        'spawns.Player', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='ranked_instance_clears',
+    )
 
     class Meta(BaseModel.Meta):
         indexes = [
             models.Index(fields=['template_world', 'time_control', 'clear_time_ms'], name='worlds_clear_ranking_idx'),
             GinIndex(fields=['participants'], opclasses=['jsonb_path_ops'], name='worlds_clear_participants_gin'),
+            models.Index(
+                fields=['template_world', 'time_control', 'single_player', 'ranking_player', 'clear_time_ms'],
+                condition=models.Q(ranking_eligible=True), name='worlds_clear_personal_best_idx',
+            ),
         ]
 
 
@@ -1371,6 +1382,7 @@ class WorldConfig(BaseModel):
     instance_single_player = models.BooleanField(default=False)
     instance_time_control = models.BooleanField(default=False)
     instance_goal = models.JSONField(default=dict, blank=True)
+    leaderboards = models.JSONField(default=default_leaderboards, blank=True)
     can_select_faction = models.BooleanField(default=True)
     auto_equip = models.BooleanField(default=True)
     allow_combat = models.BooleanField(default=True)

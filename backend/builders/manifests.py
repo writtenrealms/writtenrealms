@@ -1174,6 +1174,7 @@ def world_config_to_manifest(
     if not is_instance_world:
         spec.update(
             {
+                "leaderboards": copy.deepcopy(config.leaderboards),
                 "default_currency": _serialize_currency_reference(world.default_currency),
                 "starting_balances": {
                     row.currency.code: int(row.amount)
@@ -1303,6 +1304,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
     if not is_instance_world:
         config_payload.update(
             {
+                "leaderboards": copy.deepcopy(config.leaderboards),
                 "default_currency": _serialize_currency_reference(world.default_currency),
                 "starting_balances": {
                     row.currency.code: int(row.amount)
@@ -7567,6 +7569,7 @@ def parse_world_config_manifest(
     allowed_fields.add(_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD)
     allowed_fields.add("initial_state")
     allowed_fields.add("instance_goal")
+    allowed_fields.add("leaderboards")
     allowed_fields.update({
         "default_currency",
         "starting_balances",
@@ -7696,6 +7699,13 @@ def parse_world_config_manifest(
                 field_name=f"spec.{field_name}",
             )
         )
+
+    if "leaderboards" in spec:
+        from core.leaderboards import normalize_leaderboards
+        try:
+            config_updates['leaderboards'] = normalize_leaderboards(spec['leaderboards'], world=world)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
     if "instance_goal" in spec:
         from worlds.instance_goals import normalize_instance_goal

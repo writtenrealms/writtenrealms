@@ -158,6 +158,31 @@ class WorldFamilyBundleTests(APITestCase):
         )
         return imported_instance, imported_gate, imported_arrival
 
+    def test_leaderboards_resolve_instance_goals_after_all_bundle_scopes_are_imported(self):
+        panels = [{'type': 'instance_clear_time', 'instance': 'hades'}, {'type': 'dueling', 'minimum_matches': 3}]
+        self.source_world.config.leaderboards = panels
+        self.source_world.config.save(update_fields=['leaderboards'])
+        self.source_instance.config.instance_goal = {'type': 'clear_initial_mobs', 'where': {'always': True}}
+        self.source_instance.config.save(update_fields=['instance_goal'])
+        _, documents = self._export_bundle()
+        target = self._new_target()
+        response = self._apply_documents(target_world=target, documents=documents)
+        self.assertEqual(response.status_code, 200, response.data)
+        target.config.refresh_from_db()
+        self.assertEqual(target.config.leaderboards, panels)
+        imported = World.objects.get(instance_of=target, instance_slug='hades')
+        self.assertTrue(imported.config.instance_goal)
+
+    def test_invalid_bundle_leaderboard_rolls_back_the_family(self):
+        self.source_world.config.leaderboards = [{'type': 'instance_clear_time', 'instance': 'hades'}]
+        self.source_world.config.save(update_fields=['leaderboards'])
+        _, documents = self._export_bundle()
+        target = self._new_target()
+        response = self._apply_documents(target_world=target, documents=documents)
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('completion criteria', str(response.data))
+        self.assertFalse(World.objects.filter(instance_of=target).exists())
+
     def test_export_has_family_header_scopes_and_all_central_links(self):
         response, documents = self._export_bundle()
 

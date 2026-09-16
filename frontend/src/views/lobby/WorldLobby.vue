@@ -39,23 +39,9 @@
           <UserChars />
         </div>
 
-        <div class="world-leaderboard" v-if="world.allow_combat && !create_character">
-          <template v-if="world.id != 217">
-            <div class="leaderboard-title">
-              <template v-if="world.id == 1">TRAILBLAZERS</template>
-              <template v-else>LEADERBOARD</template>
-            </div>
-            <div class="leaderboard-region">
-              <ul>
-                <li class="world-leader" v-for="leader in leaders" :key="leader.id">
-                  <span class="index">{{ leaders.indexOf(leader) + 1 }}</span>
-                  {{ leader.name }}
-                  <span class='ml-4 color-text-50'>[ {{ capfirst(leader.core_faction) }} {{ capfirst(leader.archetype)
-                    }} ]</span>
-                </li>
-              </ul>
-            </div>
-          </template>
+        <div class="world-leaderboard" v-if="!create_character && (leaderboards.length || leaderboardError || world.id == 1)">
+          <LeaderboardPanels :panels="leaderboards" :error="leaderboardError" :loading="leaderboardsLoading"
+            @retry="store.dispatch('lobby/fetch_leaderboards', route.params.world_id)" />
 
           <div class="mt-6" v-if="world.id == 1">
             <span class='mr-1 color-primary'>&#x2606;</span>
@@ -75,7 +61,7 @@ import { computed, onMounted, ref, watch }  from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useStore } from "vuex";
 import UserChars from "@/components/lobby/UserChars.vue";
-import { capfirst } from "@/core/utils";
+import LeaderboardPanels from "@/components/lobby/LeaderboardPanels.vue";
 
 const store = useStore();
 const router = useRouter();
@@ -84,7 +70,9 @@ const route = useRoute();
 const loaded = ref(false);
 
 const world = computed(() => store.state.lobby.world);
-const leaders = computed(() => store.state.lobby.leaders);
+const leaderboards = computed(() => store.state.lobby.leaderboards);
+const leaderboardError = computed(() => store.state.lobby.leaderboardError);
+const leaderboardsLoading = computed(() => store.state.lobby.leaderboardsLoading);
 const create_character = computed(() => store.state.lobby.create_character);
 
 const backgroundImage = computed(() => {

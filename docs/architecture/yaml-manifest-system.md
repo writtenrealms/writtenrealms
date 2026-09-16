@@ -322,6 +322,12 @@ Current required mappings:
   deterministic lowercase `instance_slug` that is unique within that base
   family, and use `instance.<instance_slug>` as its bundle scope. Do not use a
   WR1 world database id as a bundle ref.
+- Base-world `kind: world` documents support `spec.leaderboards`, an ordered
+  list of typed lobby panels (`instance_clear_time`, `dueling`, and
+  `glory_experience`). Instance references use stable instance slugs. Family
+  imports defer this setting until child goals are applied, then validate it
+  inside the family transaction. The optional WR1 authored-world exporter may
+  emit panel configuration; rankings and result history are not exported.
 - WR2 instance world documents may author `spec.instance_goal` as
   `{type: clear_initial_mobs, where: <shared condition DSL>}` or `{}`. It is local
   template configuration and round-trips in world/family manifests. Cohorts,

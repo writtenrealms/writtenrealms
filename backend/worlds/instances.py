@@ -1756,7 +1756,7 @@ def reset_instance(*, player) -> InstanceResetResult:
 
             run_spawn_plans_for_world(world=spawned_world, initial=True)
             from worlds.instance_goals import start_instance_goal
-            start_instance_goal(run)
+            start_instance_goal(run, ranking_eligible=False)
             _enqueue_instance_events([
                 *cancellation_events,
                 *room_enter_events,

@@ -58,6 +58,12 @@ duel status
 The status output also shows your lifetime duel record: fights fought, won,
 and lost.
 
+Worlds can also show a dueling panel in their lobby. It ranks characters by
+win percentage, breaking ties by total wins. The default minimum is three
+completed matches; the panel shows the world's chosen threshold. Pending,
+cancelled, declined, and expired challenges do not count. Builder characters
+are excluded, and results may take about 30 seconds to update.
+
 ## Fighting
 
 Once the duel begins, use `kill <player>` and supported hostile abilities

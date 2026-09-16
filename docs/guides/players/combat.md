@@ -17,7 +17,10 @@ member of their initial target population has died. The timer starts on first
 entry and stops at the final target's death. You receive an **Instance Complete**
 notice, using the same framed style as Time Control and the Message of the Day,
 with your clear time, and the server saves the timestamps and participant
-history for future records.
+history for records. Worlds may show a fastest-clear panel in their lobby;
+solo boards show your personal best, while group boards show party results.
+Time-controlled and continuous runs are ranked separately. Builder attempts
+and builder resets do not qualify. Results may take about 30 seconds to update.
 
 The timer measures real elapsed time, including pauses and time outside the
 instance. Reentering an unfinished run does not reset it. After completion,

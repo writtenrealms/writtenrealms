@@ -71,7 +71,7 @@ def normalize_instance_goal(value):
     return deepcopy(value)
 
 
-def start_instance_goal(run):
+def start_instance_goal(run, *, ranking_eligible=True):
     """Caller holds the run lock; population and first admission are ready."""
     from spawns.models import Mob
     from worlds.models import InstanceGoalMember
@@ -107,6 +107,7 @@ def start_instance_goal(run):
         'attempt_id': str(uuid.uuid4()),
         'total': len(members),
         'remaining': len(members),
+        'ranking_eligible': ranking_eligible and not run.participants.filter(player__is_builder=True).exists(),
     }
     run.save(update_fields=['started_at', 'progress'])
 
@@ -169,11 +170,17 @@ def process_instance_mob_defeat(data):
         run.save(update_fields=['progress'])
         return
 
+    participant_rows = list(run.participants.select_related('player').order_by('player_id'))
     participants = [{
         'player_id': p.player_id, 'name': p.player.name, 'role': p.role,
+        'is_builder': p.player.is_builder,
         'joined_at': p.joined_at.isoformat(),
         'exited_at': p.exited_at.isoformat() if p.exited_at else None,
-    } for p in run.participants.select_related('player').order_by('player_id')]
+    } for p in participant_rows]
+    ranking_eligible = bool(run.progress.get('ranking_eligible')) and bool(participant_rows) and all(
+        not p.player.is_builder
+        for p in participant_rows
+    )
     delta = completed_at - run.started_at
     clear_time_ms = (delta.days * 86400 + delta.seconds) * 1000 + delta.microseconds // 1000
     record = InstanceClearRecord.objects.create(
@@ -182,6 +189,9 @@ def process_instance_mob_defeat(data):
         attempt_id=progress['attempt_id'], started_at=run.started_at,
         completed_at=completed_at, clear_time_ms=clear_time_ms,
         time_control=run.time_control, goal_spec=deepcopy(run.goal_spec), participants=participants,
+        single_player=run.single_player,
+        ranking_eligible=ranking_eligible,
+        ranking_player_id=participant_rows[0].player_id if run.single_player and len(participant_rows) == 1 else None,
     )
     run.completed_at = completed_at
     run.status = run.STATUS_COMPLETED

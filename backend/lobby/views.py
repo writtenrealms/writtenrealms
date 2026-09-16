@@ -611,6 +611,15 @@ class WorldLeaders(WorldLobbyBase, generics.ListAPIView):
 world_leaders = WorldLeaders.as_view()
 
 
+class WorldLeaderboards(WorldLobbyBase, APIView):
+    def get(self, request, *args, **kwargs):
+        from lobby.leaderboards import LeaderboardsRefreshing, world_leaderboard_panels
+        try:
+            return Response({'panels': world_leaderboard_panels(self.world)})
+        except LeaderboardsRefreshing:
+            return Response({'detail': 'Leaderboards are refreshing. Please retry.'}, status=503, headers={'Retry-After': '1'})
+
+
 class Transfer(APIView):
 
     def post(self, request, world_pk, format=None):

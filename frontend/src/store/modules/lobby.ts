@@ -5,7 +5,10 @@ const set_initial_state = () => {
   return {
     world: null,
     chars: null,
-    leaders: null,
+    leaderboards: [],
+    leaderboardError: false,
+    leaderboardsLoading: false,
+    requestedWorldId: null,
 
     create_character: false,
 
@@ -15,8 +18,9 @@ const set_initial_state = () => {
 };
 
 const actions = {
-  initial_fetch: async ({ commit }, world_id) => {
+  initial_fetch: async ({ commit, dispatch, state }, world_id) => {
     commit('reset_state');
+    commit('requested_world_set', String(world_id));
 
     const worldFetchPromise = axios.get(
       `/lobby/worlds/${world_id}/`
@@ -26,19 +30,29 @@ const actions = {
       `/lobby/worlds/${world_id}/chars/?page_size=30`
     );
 
-    const leaderboardPromise = axios.get(
-      `/lobby/worlds/${world_id}/leaders/`
-    );
+    const leaderboardPromise = dispatch('fetch_leaderboards', world_id);
 
-    const [world_resp, user_chars_resp, leaderboard_resp] = await Promise.all([
+    const [world_resp, user_chars_resp] = await Promise.all([
       worldFetchPromise,
       userCharsPromise,
       leaderboardPromise,
     ]);
 
+    if (state.requestedWorldId !== String(world_id)) return;
     commit('set_chars', user_chars_resp.data.results);
     commit('set_world', world_resp.data);
-    commit('set_leaders', leaderboard_resp.data.results)
+  },
+  fetch_leaderboards: async ({ commit, state }, world_id) => {
+    commit('leaderboards_loading', true);
+    try {
+      const response = await axios.get(`/lobby/worlds/${world_id}/leaderboards/`);
+      if (state.requestedWorldId !== String(world_id)) return;
+      commit('set_leaderboards', response.data.panels);
+    } catch {
+      if (state.requestedWorldId === String(world_id)) commit('leaderboards_error', true);
+    } finally {
+      if (state.requestedWorldId === String(world_id)) commit('leaderboards_loading', false);
+    }
   },
   char_edit: async ({ commit, state }, payload) => {
     const world_id = state.world.id;
@@ -88,9 +102,13 @@ const mutations = {
   set_world: (state, world) => {
     state.world = world;
   },
-  set_leaders: (state, leaders) => {
-    state.leaders = leaders;
-  }
+  requested_world_set: (state, id) => { state.requestedWorldId = id; },
+  leaderboards_loading: (state, loading) => { state.leaderboardsLoading = loading; },
+  leaderboards_error: (state, error) => { state.leaderboardError = error; },
+  set_leaderboards: (state, panels) => {
+    state.leaderboards = panels;
+    state.leaderboardError = false;
+  },
 };
 
 export default {

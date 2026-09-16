@@ -95,6 +95,7 @@ class TestInstanceGoals(WorldTestCase):
         self.assertEqual(record.completed_at, start + timedelta(seconds=20, microseconds=123000))
         self.assertEqual(record.clear_time_ms, 20123)
         self.assertEqual(record.participants[0]['player_id'], self.player.pk)
+        self.assertTrue(record.ranking_eligible)
         self.assertEqual(self.run.completed_at, record.completed_at)
         self.assertEqual(self.run.status, 'completed')
         self.assertEqual(self.run.outcome['time_basis'], 'wall')
@@ -112,6 +113,39 @@ class TestInstanceGoals(WorldTestCase):
         self.assertEqual(InstanceClearRecord.objects.count(), 1)
         self.assertEqual(InstanceClearRecord.objects.get().clear_time_ms, 8000)
         self.assertEqual(self.run.progress['remaining'], 0)
+
+    def test_solo_clear_snapshots_ranking_character_and_mode(self):
+        self.run.single_player = True
+        self.run.owner = self.player
+        self.run.save(update_fields=['single_player', 'owner'])
+        mob = self.mob()
+        self.enter()
+        self.defeat(mob)
+        self.drain()
+        record = InstanceClearRecord.objects.get()
+        self.assertTrue(record.ranking_eligible)
+        self.assertTrue(record.single_player)
+        self.assertEqual(record.ranking_player_id, self.player.pk)
+
+    def test_builder_attempt_stays_unranked_after_builder_flag_is_removed(self):
+        self.player.is_builder = True
+        self.player.save(update_fields=['is_builder'])
+        mob = self.mob()
+        self.enter()
+        self.player.is_builder = False
+        self.player.save(update_fields=['is_builder'])
+        self.defeat(mob)
+        self.drain()
+        self.assertFalse(InstanceClearRecord.objects.get().ranking_eligible)
+
+    def test_builder_at_completion_is_not_ranked(self):
+        mob = self.mob()
+        self.enter()
+        self.player.is_builder = True
+        self.player.save(update_fields=['is_builder'])
+        self.defeat(mob)
+        self.drain()
+        self.assertFalse(InstanceClearRecord.objects.get().ranking_eligible)
 
     def test_empty_cohort_rejects_admission_without_timer_or_participation(self):
         self.mob(faction=self.greek)
@@ -263,6 +297,7 @@ class TestInstanceGoals(WorldTestCase):
         self.defeat(new)
         self.drain()
         first_record = InstanceClearRecord.objects.get()
+        self.assertFalse(first_record.ranking_eligible)
         reset_instance(player=self.player)
         self.run.refresh_from_db()
         self.assertEqual(self.run.status, 'active')

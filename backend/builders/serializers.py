@@ -495,6 +495,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'instance_single_player',
             'instance_time_control',
             'instance_goal',
+            'leaderboards',
             'starting_equipment',
             'starting_level',
             'leveling_curve',
@@ -574,6 +575,14 @@ class WorldConfigSerializer(serializers.ModelSerializer):
         world = self.context.get("world") if isinstance(self.context, dict) else None
         if world is None and config is not None:
             world = config.configured_worlds.filter(instance_of__isnull=False).first()
+            if world is None:
+                world = config.configured_worlds.filter(context_id__isnull=True).first()
+        if 'leaderboards' in attrs:
+            from core.leaderboards import normalize_leaderboards
+            try:
+                attrs['leaderboards'] = normalize_leaderboards(attrs['leaderboards'], world=world)
+            except ValueError as exc:
+                raise serializers.ValidationError({'leaderboards': str(exc)}) from exc
         try:
             validate_instance_control_config(world=world, config=config, updates=attrs)
         except ValueError as exc:

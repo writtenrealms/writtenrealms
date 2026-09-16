@@ -3253,6 +3253,7 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         )
         results = []
         scope_worlds = {}
+        deferred_leaderboards = missing
         try:
             with transaction.atomic():
                 try:
@@ -3368,6 +3369,12 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                             grouped_documents[world_ref],
                             start=1,
                         ):
+                            # Base-world panels can reference goals authored in
+                            # later instance documents. Validate/apply them once
+                            # all scopes are ready, within this same transaction.
+                            if world_ref == 'world@base' and manifest.get('kind') == 'world' and 'leaderboards' in (manifest.get('spec') or {}):
+                                manifest = copy.deepcopy(manifest)
+                                deferred_leaderboards = manifest['spec'].pop('leaderboards')
                             try:
                                 response = self._dispatch_manifest(manifest)
                             except drf_exceptions.PermissionDenied as exc:
@@ -3401,6 +3408,11 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                             ),
                         )
 
+                    if deferred_leaderboards is not missing:
+                        builder_world_export.apply_world_manifest(
+                            world=scope_worlds['world@base'],
+                            manifest={'kind': 'world', 'spec': {'leaderboards': deferred_leaderboards}},
+                        )
                     builder_world_export.apply_world_bundle_links(
                         scope_worlds=scope_worlds,
                         links=links,

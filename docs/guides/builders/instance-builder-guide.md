@@ -49,8 +49,10 @@ The foundation exists now:
 
 Initial-population clear goals and server-timed clear records are implemented
 through `spec.instance_goal` on the instance template’s ordinary `kind: world`
-manifest. General objectives, countdown timers, and leaderboard screens remain
-planned; their examples below are design previews.
+manifest. Lobby leaderboard panels are configured in the base world's
+[World Config YAML](world-config-builder-guide.md#lobby-leaderboards).
+General objectives and countdown timers remain planned; their examples below
+are design previews.
 
 Only the ordinary world, room, zone, path, mob definition, item definition, and
 spawn plan manifests are currently applied by **World > Edit**. `kind:
@@ -812,8 +814,9 @@ The completion timestamp comes from the last actual death, even when events
 are delivered late, retried, or out of order. Leaving and reentering does not
 restart the timer. Wall-clock timing includes pauses, time spent deciding what
 to do, and absences; the time-control flag is retained for future leaderboard
-filtering. These are historical clear records, not a public ranking or a claim
-that a run was free of builder assistance.
+filtering. Completion history includes builder attempts; public leaderboard
+panels apply the eligibility rules described in
+[Lobby Leaderboards](world-config-builder-guide.md#lobby-leaderboards).
 
 Open **World > Players** and select a character to see **Instance Completions**.
 The history lists completed runs the character participated in, newest first,
@@ -837,7 +840,7 @@ Builder/admin run payloads expose `goal_spec`, `progress`, and `outcome`.
 
 ::: warning Planned authoring surface
 The remaining `kind: instance` examples are design previews. General objective
-lists, countdown timers, configurable timer starts, and leaderboard screens are
+lists, countdown timers, and configurable timer starts are
 not implemented. Do not paste these previews into **World > Edit**.
 :::
 
