@@ -5,12 +5,13 @@ import copy
 import json
 import math
 import re
+import uuid
 from typing import Any
 
 import yaml
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils.text import slugify
 from rest_framework import serializers
@@ -87,7 +88,6 @@ from core.equipment_system import (
     get_armor_class_keys,
     get_world_equipment_system,
     has_authored_armor_classes,
-    has_authored_offhand_weapon_policy,
     normalize_equipment_system,
     validate_armor_class_reference,
 )
@@ -252,6 +252,8 @@ _WORLD_CONFIG_CONFIG_TEXT_FIELDS = (
 _WORLD_CONFIG_CONFIG_BOOL_FIELDS = (
     "instance_single_player",
     "instance_time_control",
+    "never_reload",
+    "flee_to_unknown_rooms",
     "can_select_gender",
     "auto_equip",
     "is_narrative",
@@ -270,6 +272,7 @@ _WORLD_CONFIG_CONFIG_INT_FIELDS = (
     "max_level",
     "default_roam_chance",
     "clan_registration_cost",
+    "cross_race_cooldown",
 )
 _WORLD_CONFIG_CONFIG_FLOAT_FIELDS = (
     "combat_resolution_interval",
@@ -303,49 +306,24 @@ _WORLD_FIELDS_PROPAGATED_TO_SPAWNS = {
 }
 
 
-def _has_authored_world_config_map(value: Any) -> bool:
-    return isinstance(value, dict) and bool(value)
-
-
-def _export_stat_system(world: World) -> dict[str, Any] | None:
-    config = world.config
-    if not config or not _has_authored_world_config_map(config.stat_system):
-        return None
+def _export_world_systems(world: World) -> dict[str, Any]:
+    # Omission means "preserve" on import. Export effective defaults explicitly
+    # so a later import can replace systems that the source has cleared.
     try:
-        return get_world_stat_system(world)
-    except StatSystemValidationError:
-        return None
+        return {
+            _WORLD_CONFIG_STATS_FIELD: get_world_stat_system(world),
+            _WORLD_CONFIG_COMBAT_FIELD: get_world_combat_system(world),
+            _WORLD_CONFIG_EQUIPMENT_FIELD: get_world_equipment_system(world),
+        }
+    except (
+        StatSystemValidationError,
+        CombatFormulaValidationError,
+        EquipmentSystemValidationError,
+    ) as exc:
+        raise serializers.ValidationError(
+            f"Cannot export world {world.id} systems: {exc}"
+        ) from exc
 
-
-def _export_combat_system(world: World) -> dict[str, Any] | None:
-    config = world.config
-    if not config or not _has_authored_world_config_map(config.combat_system):
-        return None
-    try:
-        return get_world_combat_system(world)
-    except CombatFormulaValidationError:
-        return None
-
-
-def _export_equipment_system(world: World) -> dict[str, Any] | None:
-    config = world.config
-    if not config or not _has_authored_world_config_map(config.equipment_system):
-        return None
-    raw_equipment_system = (
-        config.equipment_system
-        if isinstance(config.equipment_system, dict)
-        else {}
-    )
-    try:
-        equipment_system = get_world_equipment_system(world)
-    except EquipmentSystemValidationError:
-        return None
-    if (
-        not has_authored_armor_classes(equipment_system)
-        and not has_authored_offhand_weapon_policy(raw_equipment_system)
-    ):
-        return None
-    return equipment_system
 
 _SCOPE_TO_TARGET_TYPE = {
     adv_consts.TRIGGER_SCOPE_ROOM: "room",
@@ -434,6 +412,7 @@ class ParsedTriggerManifest:
     world: World
     trigger: Trigger | None
     trigger_id: int | None
+    uid: uuid.UUID
     name: str
     scope: str
     kind: str
@@ -1159,6 +1138,8 @@ def world_config_to_manifest(
             ),
         ),
         "pvp_mode": config.pvp_mode,
+        "never_reload": bool(config.never_reload),
+        "cross_race_cooldown": int(config.cross_race_cooldown),
         "built_by": config.built_by or "",
         "small_background": config.small_background or "",
         "large_background": config.large_background or "",
@@ -1200,8 +1181,11 @@ def world_config_to_manifest(
                     config.combat_resolution_interval
                 ),
                 "default_roam_chance": int(config.default_roam_chance),
+                "flee_to_unknown_rooms": bool(config.flee_to_unknown_rooms),
                 "is_narrative": bool(config.is_narrative),
                 _WORLD_CONFIG_PLAYER_CREATION_FIELD: config.player_creation or {},
+                "can_select_gender": bool(config.can_select_gender),
+                "default_gender": config.default_gender,
                 "auto_equip": bool(config.auto_equip),
                 "players_can_set_title": bool(config.players_can_set_title),
                 "non_ascii_names": bool(config.non_ascii_names),
@@ -1211,15 +1195,7 @@ def world_config_to_manifest(
                 "name_exclusions": config.name_exclusions or "",
             }
         )
-        stat_system = _export_stat_system(world)
-        if stat_system:
-            spec[_WORLD_CONFIG_STATS_FIELD] = stat_system
-        combat_system = _export_combat_system(world)
-        if combat_system:
-            spec[_WORLD_CONFIG_COMBAT_FIELD] = combat_system
-        equipment_system = _export_equipment_system(world)
-        if equipment_system:
-            spec[_WORLD_CONFIG_EQUIPMENT_FIELD] = equipment_system
+        spec.update(_export_world_systems(world))
 
     manifest = {
         "kind": manifest_kind,
@@ -1292,6 +1268,8 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         "small_background": config.small_background or "",
         "large_background": config.large_background or "",
         "pvp_mode": config.pvp_mode,
+        "never_reload": bool(config.never_reload),
+        "cross_race_cooldown": int(config.cross_race_cooldown),
         "built_by": config.built_by or "",
     }
     if is_instance_world:
@@ -1330,10 +1308,13 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
                     config.combat_resolution_interval
                 ),
                 "default_roam_chance": int(config.default_roam_chance),
+                "flee_to_unknown_rooms": bool(config.flee_to_unknown_rooms),
                 "allow_combat": bool(config.allow_combat),
                 "is_narrative": bool(config.is_narrative),
                 _WORLD_CONFIG_PLAYER_CREATION_FIELD: config.player_creation or {},
                 "can_select_faction": bool(config.can_select_faction),
+                "can_select_gender": bool(config.can_select_gender),
+                "default_gender": config.default_gender,
                 "auto_equip": bool(config.auto_equip),
                 "players_can_set_title": bool(config.players_can_set_title),
                 "non_ascii_names": bool(config.non_ascii_names),
@@ -1341,9 +1322,9 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
                 "decay_glory": bool(config.decay_glory),
                 "name_exclusions": config.name_exclusions or "",
                 "globals_enabled": bool(config.globals_enabled),
-                "stat_system": _export_stat_system(world) or {},
-                "combat_system": _export_combat_system(world) or {},
-                "equipment_system": _export_equipment_system(world) or {},
+                "stat_system": manifest_data["manifest"]["spec"][_WORLD_CONFIG_STATS_FIELD],
+                "combat_system": manifest_data["manifest"]["spec"][_WORLD_CONFIG_COMBAT_FIELD],
+                "equipment_system": manifest_data["manifest"]["spec"][_WORLD_CONFIG_EQUIPMENT_FIELD],
             }
         )
 
@@ -1648,10 +1629,7 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
     for field_name, value in (mob_definition.base_properties or {}).items():
         if field_name == "traits":
             continue
-        if value is None:
-            spec[field_name] = ""
-        else:
-            spec[field_name] = value
+        spec[field_name] = value
     spec["aggression"] = _mob_definition_aggression(mob_definition)
     spec["combat"] = {
         "attackable": bool(mob_definition.attackable),
@@ -2890,6 +2868,7 @@ def trigger_delete_manifest(trigger: Trigger) -> dict[str, Any]:
             "world": _entity_key(_WORLD_KEY_PREFIX, trigger.world_id),
             "id": trigger.id,
             "key": trigger.key,
+            "uid": str(trigger.uid),
             "name": trigger.name or "",
         },
     }
@@ -3529,9 +3508,17 @@ def _resolve_existing_trigger_target(
     return trigger.target_type, resolved_id
 
 
-def _resolve_trigger_reference(*, world: World, metadata: dict[str, Any]) -> tuple[Trigger | None, int | None]:
+def _resolve_trigger_reference(
+    *, world: World, metadata: dict[str, Any],
+) -> tuple[Trigger | None, int | None, uuid.UUID | None]:
     trigger_key = metadata.get("key")
     trigger_id_raw = metadata.get("id")
+    uid = None
+    if "uid" in metadata:
+        try:
+            uid = uuid.UUID(metadata["uid"])
+        except (ValueError, TypeError, AttributeError):
+            raise serializers.ValidationError("metadata.uid must be a UUID string.")
 
     parsed_key_id = None
     parsed_id = None
@@ -3548,14 +3535,20 @@ def _resolve_trigger_reference(*, world: World, metadata: dict[str, Any]) -> tup
 
     trigger_id = parsed_key_id or parsed_id
     if trigger_id is None:
-        return None, None
+        trigger = Trigger.objects.filter(world=world, uid=uid).first() if uid else None
+        return trigger, trigger.pk if trigger else None, uid
 
     trigger = Trigger.objects.filter(world=world, pk=trigger_id).first()
     if not trigger:
         raise serializers.ValidationError(
             "Trigger referenced by manifest was not found. Omit metadata.id/key to create a new trigger."
         )
-    return trigger, trigger_id
+    if uid is not None and trigger.uid != uid:
+        raise serializers.ValidationError(
+            "metadata.uid and metadata.id/key refer to different triggers. "
+            "A trigger's UID cannot be changed."
+        )
+    return trigger, trigger_id, uid
 
 
 def parse_trigger_manifest(
@@ -3586,7 +3579,7 @@ def parse_trigger_manifest(
                 "Manifest world does not match the selected world."
             )
 
-    trigger, trigger_id = _resolve_trigger_reference(world=world, metadata=metadata)
+    trigger, trigger_id, uid = _resolve_trigger_reference(world=world, metadata=metadata)
 
     spec = manifest.get("spec") or {}
     if not isinstance(spec, dict):
@@ -3773,6 +3766,7 @@ def parse_trigger_manifest(
         world=world,
         trigger=trigger,
         trigger_id=trigger_id,
+        uid=trigger.uid if trigger else uid or uuid.uuid4(),
         name=name,
         scope=scope,
         kind=kind,
@@ -3847,10 +3841,12 @@ def parse_trigger_delete_manifest(
                 "Manifest world does not match the selected world."
             )
 
-    trigger, trigger_id = _resolve_trigger_reference(world=world, metadata=metadata)
+    trigger, trigger_id, uid = _resolve_trigger_reference(world=world, metadata=metadata)
     if trigger is None or trigger_id is None:
+        if uid is not None:
+            raise serializers.ValidationError("Trigger referenced by metadata.uid was not found.")
         raise serializers.ValidationError(
-            "metadata.id or metadata.key is required for operation: delete."
+            "metadata.uid, metadata.id or metadata.key is required for operation: delete."
         )
 
     spec = manifest.get("spec")
@@ -4988,6 +4984,9 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         if field_name not in spec_patch:
             continue
         value = spec_patch.get(field_name)
+        if value is None:
+            base_properties.pop(field_name, None)
+            continue
         if field_name == "aggression":
             value = _coerce_mob_aggression(value, "spec.aggression")
         elif field_name == "target_priority":
@@ -5010,8 +5009,11 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         if field_name in {"attackable", "abilities", "assist", "engage_when"}:
             continue
         if field_name == "health":
-            base_properties["health_max"] = value
-        elif field_name in _MOB_DEFINITION_BASE_PROPERTY_FIELDS:
+            field_name = "health_max"
+        if field_name in _MOB_DEFINITION_BASE_PROPERTY_FIELDS:
+            if value is None:
+                base_properties.pop(field_name, None)
+                continue
             if field_name == "aggression":
                 value = _coerce_mob_aggression(value, "spec.combat.aggression")
             elif field_name == "target_priority":
@@ -5032,10 +5034,15 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         )
     merchant_profile = existing.merchant_profile if existing else None
     if "profile" in merchant:
-        merchant_profile = _resolve_profile_ref(
-            world=world,
-            value=merchant.get("profile"),
-            field_name="spec.merchant.profile",
+        profile_ref = merchant.get("profile")
+        merchant_profile = (
+            _resolve_profile_ref(
+                world=world,
+                value=profile_ref,
+                field_name="spec.merchant.profile",
+            )
+            if profile_ref not in (None, "")
+            else None
         )
     merchant_availability = str(
         merchant.get("availability", existing.merchant_availability if existing else "present")
@@ -5375,10 +5382,17 @@ def _coerce_mob_definition_factions(
             expected_type=FACTION_TYPE_REPUTATION,
             field_name=f"spec.factions.reputation.{raw_code}",
         )
-        reputation[faction.id] = _coerce_int(
+        value = _coerce_int(
             raw_value,
             f"spec.factions.reputation.{raw_code}",
         )
+        try:
+            FactionAssignment._meta.get_field("value").run_validators(value)
+        except ValidationError as exc:
+            raise serializers.ValidationError({
+                f"spec.factions.reputation.{raw_code}": exc.messages,
+            }) from exc
+        reputation[faction.id] = value
 
     return {
         "core": core.id if core else None,
@@ -7744,6 +7758,10 @@ def parse_world_config_manifest(
                 raise serializers.ValidationError(
                     "spec.default_roam_chance must be <= 100."
                 )
+            if field_name == "cross_race_cooldown" and value > 2147483647:
+                raise serializers.ValidationError(
+                    "spec.cross_race_cooldown must be <= 2147483647."
+                )
             if (
                 field_name == "clan_registration_cost"
                 and value > 9007199254740991
@@ -7823,15 +7841,16 @@ def parse_world_config_manifest(
             )
         config_updates[field_name] = room
 
-    equipment_system = get_world_equipment_system(world)
-    if _WORLD_CONFIG_EQUIPMENT_FIELD in spec:
-        try:
+    try:
+        if _WORLD_CONFIG_EQUIPMENT_FIELD in spec:
             equipment_system = normalize_equipment_system(
                 spec.get(_WORLD_CONFIG_EQUIPMENT_FIELD)
             )
             config_updates["equipment_system"] = equipment_system
-        except EquipmentSystemValidationError as exc:
-            raise serializers.ValidationError(str(exc))
+        else:
+            equipment_system = get_world_equipment_system(world)
+    except EquipmentSystemValidationError as exc:
+        raise serializers.ValidationError(str(exc)) from exc
 
     if _WORLD_CONFIG_STATS_FIELD in spec:
         try:
@@ -8201,27 +8220,15 @@ def apply_mob_definition_manifest(parsed: ParsedMobDefinitionManifest) -> MobDef
             )
             sync_spawned = True
 
-        _apply_faction_assignments(
-            member=mob_definition,
+        factions_changed = _replace_mob_definition_factions(
+            mob_definition=mob_definition,
             factions=parsed.factions,
-            source=FACTION_ASSIGNMENT_SOURCE_MOB_DEFINITION,
         )
-        if parsed.currency_rewards is not None:
-            from builders.models import MobCurrencyReward
-
-            MobCurrencyReward.objects.filter(mob_definition=mob_definition).delete()
-            MobCurrencyReward.objects.bulk_create([
-                MobCurrencyReward(
-                    mob_definition=mob_definition,
-                    currency=currency,
-                    amount=amount,
-                )
-                for currency, amount in parsed.currency_rewards.items()
-            ])
-        sync_spawned = sync_spawned or (
-            parsed.factions is not None
-            or parsed.currency_rewards is not None
+        rewards_changed = _replace_mob_currency_rewards(
+            mob_definition=mob_definition,
+            currency_rewards=parsed.currency_rewards,
         )
+        sync_spawned = sync_spawned or factions_changed or rewards_changed
         if was_existing and sync_spawned:
             from builders.mob_definitions import sync_spawned_mobs_from_definition
 
@@ -8229,39 +8236,57 @@ def apply_mob_definition_manifest(parsed: ParsedMobDefinitionManifest) -> MobDef
         return mob_definition
 
 
-def _apply_faction_assignments(
+def _replace_mob_currency_rewards(
     *,
-    member,
+    mob_definition: MobDefinition,
+    currency_rewards: dict[Currency, int] | None,
+) -> bool:
+    if currency_rewards is None:
+        return False
+    desired = {currency.pk: amount for currency, amount in currency_rewards.items()}
+    current = dict(mob_definition.currency_rewards.values_list("currency_id", "amount"))
+    if current == desired:
+        return False
+
+    from builders.models import MobCurrencyReward
+
+    mob_definition.currency_rewards.all().delete()
+    MobCurrencyReward.objects.bulk_create([
+        MobCurrencyReward(mob_definition=mob_definition, currency_id=currency_id, amount=amount)
+        for currency_id, amount in desired.items()
+    ])
+    getattr(mob_definition, "_prefetched_objects_cache", {}).pop("currency_rewards", None)
+    return True
+
+
+def _replace_mob_definition_factions(
+    *,
+    mob_definition: MobDefinition,
     factions: dict[str, Any] | None,
-    source: str,
-) -> None:
+) -> bool:
     if factions is None:
-        return
-
-    member.faction_assignments.filter(source=source).delete()
-
+        return False
+    desired = dict(factions.get("reputation") or {})
     core_faction_id = factions.get("core")
     if core_faction_id:
-        has_existing_core = (
-            member.faction_assignments
-            .filter(Q(faction__type=FACTION_TYPE_CORE) | Q(faction__is_core=True))
-            .exists()
-        )
-        if not has_existing_core:
-            member.faction_assignments.create(
-                faction_id=core_faction_id,
-                value=1,
-                source=source,
-            )
+        desired[core_faction_id] = 1
+    current = dict(mob_definition.faction_assignments.values_list("faction_id", "value"))
+    if current == desired:
+        return False
 
-    for faction_id, value in (factions.get("reputation") or {}).items():
-        if member.faction_assignments.filter(faction_id=faction_id).exists():
-            continue
-        member.faction_assignments.create(
-            faction_id=faction_id,
-            value=int(value or 0),
-            source=source,
+    # Every assignment on a definition is authored content, regardless of its
+    # source tag. Sync separately preserves non-definition assignments on live mobs.
+    # The parser has validated faction kinds, standings, and the single core slot.
+    mob_definition.faction_assignments.all().delete()
+    FactionAssignment.objects.bulk_create([
+        FactionAssignment(
+            member=mob_definition, faction_id=faction_id, value=value,
+            source=FACTION_ASSIGNMENT_SOURCE_MOB_DEFINITION,
         )
+        for faction_id, value in desired.items()
+    ])
+    getattr(mob_definition, "_prefetched_objects_cache", {}).pop("faction_assignments", None)
+    return True
 
 
 def apply_faction_manifest(parsed: ParsedFactionManifest) -> Faction:
@@ -8544,8 +8569,9 @@ def delete_social_manifest(parsed: ParsedSocialDeleteManifest) -> Social:
 def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:
     trigger = parsed.trigger
     if trigger is None:
-        return Trigger.objects.create(
+        fields = dict(
             world=parsed.world,
+            uid=parsed.uid,
             name=parsed.name,
             scope=parsed.scope,
             kind=parsed.kind,
@@ -8564,6 +8590,16 @@ def apply_trigger_manifest(parsed: ParsedTriggerManifest) -> Trigger:
             order=parsed.order,
             is_active=parsed.is_active,
         )
+        try:
+            with transaction.atomic():
+                return Trigger.objects.create(**fields)
+        except IntegrityError as exc:
+            if Trigger.objects.filter(world=parsed.world, uid=parsed.uid).exists():
+                raise serializers.ValidationError(
+                    "A trigger with this metadata.uid was created during import. "
+                    "Retry the import."
+                ) from exc
+            raise
 
     trigger.name = parsed.name
     trigger.scope = parsed.scope

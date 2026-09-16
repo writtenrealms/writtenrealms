@@ -88,6 +88,12 @@ combat:
 
 Use `combat.attackable: true` for a killable shopkeeper.
 
+To detach a mob's shop, apply `merchant: {profile: null}` in its manifest.
+Omitting `merchant` or changing only its `availability` preserves the attached
+profile. Full-world exports include this explicit empty profile when a mob no
+longer offers a shop, so reimporting removes the service from its spawned copies
+without deleting the shared Merchant Profile.
+
 Use only one attachment for an ordinary shop. Attaching a profile to the room
 and to a local merchant mob creates multiple providers and requires players to
 name the one they intend.

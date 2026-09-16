@@ -158,6 +158,11 @@ Current required mappings:
   `spec.hit_msg_third`. Preserve non-empty multiword phrases as authored. Emit
   blank legacy values as `""` so applying over an existing WR2 definition
   clears an old customization; omission defaults only when creating a definition.
+  Canonical full WR2 exports use `null` for absent mob base-property overrides;
+  the optional converter can use the same reset contract when emitting a
+  complete definition. Empty `rewards.currencies` and `factions` maps explicitly
+  clear those authored relations on reimport. Omission in partial documents
+  preserves existing values.
 - WR1 `MobTemplate` rows export as `kind: mobdefinition`; WR2 no longer has a
   `MobTemplate` model, manifest kind, API endpoint, or runtime mob FK.
 - WR1 mob `mana_max` and `mana_regen` become `energy_max` and `energy_regen`,
@@ -200,6 +205,11 @@ Current required mappings:
   `mobdefinition.<slug>`, or `itemdefinition.<slug>`. Resolve legacy database
   ids before export and never emit the legacy `{type, ref}`, `{type, key}`, or
   `{type, id}` target mappings as canonical WR2 YAML.
+- The optional WR1 authored-world converter must also emit a stable UUID in
+  each Trigger's `metadata.uid`. Preserve a source-side mapping or derive it
+  from a stable source-world namespace and authored rule identity, so repeated
+  conversions preserve identity. Never derive it from mutable names, matchers,
+  or targets. This is authored-content identity, not runtime-state migration.
 - Map WR1 authored default world facts to `kind: world`
   `spec.initial_state` and authored zone defaults to `kind: zone`
   `spec.initial_state` only when the converter can distinguish authored seed
@@ -617,10 +627,11 @@ the supported-kind catalog and examples rather than duplicating them inline.
   - `kind: questarc`
   - `kind: trigger`
   - `kind` is case-insensitive (`trigger`, `Trigger`, `TRIGGER` all work).
-- Trigger manifests now support both:
-  - **create** (no `metadata.id` / `metadata.key`)
-  - **update** (include `metadata.id` or `metadata.key`)
-  - **delete** (`operation: delete` with `metadata.id` or `metadata.key`)
+- Trigger manifests support **create**, **update**, and **delete** through
+  portable `metadata.uid`. A UID absent from the selected world creates a
+  trigger on apply; an existing UID updates it. Delete requires an existing
+  UID. Local `metadata.id` / `metadata.key` remain accepted and must agree
+  with the UID when supplied together.
 - Zone manifests support **apply** for create/update and **delete**
   (`operation: delete` with `metadata.ref`). Zone manifests no longer include
   legacy `spec.respawn_wait` or `spec.is_warzone`; use the typed
@@ -675,6 +686,48 @@ Mob definition authoring details, including plain mobs, fixed stat mobs, and
 randomized stat mobs, live in:
 
 - [docs/guides/builders/mob-definition-builder-guide.md](../guides/builders/mob-definition-builder-guide.md)
+
+Full-world and family mob-definition exports always include `merchant`,
+`crafting`, and `trainer`, with `profile: null` when unassigned and the stored
+`availability`. Explicit empty profile references clear attachments; omitted
+services or availability-only patches preserve their profiles. Individual mob
+editor YAML retains its compact shape. Reimport uses the existing definition
+sync to retire mob merchant runtimes, while crafting and training discovery
+read the updated attachments in base and instance runtimes. A later import
+failure rolls back the attachment and runtime changes. Export uses preloaded
+profile relations and introduces no additional queries.
+
+Full-world and family mob-definition exports also emit explicit empty values
+for `loot`, `traits`, `initial_state`, `combat.abilities`, and
+`combat.engage_when`. The existing partial-update parser clears these fields
+when present and preserves them when omitted. This distinction keeps removed
+settings from surviving reimport without changing individual editor YAML.
+These values require no additional export queries. Unchanged values do not
+trigger definition resync, and an `initial_state`-only change affects future
+spawns without overwriting any live character state.
+
+Full mob exports explicitly include empty `rewards.currencies` and `factions`
+maps, and `null` for every absent or null base-property override. Mob parsing
+removes a property key on explicit `null`, including nested `combat` properties
+and the `combat.health` alias; omitted properties remain untouched. `0`,
+`false`, and empty strings retain their existing authored meaning. Individual
+editor manifests remain partial and do not gain missing-property reset fields.
+
+Supplied reward and faction sets replace the authored definition relations.
+Every assignment on a definition participates, even if its source tag is empty;
+the existing runtime sync still preserves non-definition assignments on live
+mobs. Apply compares current `(currency, amount)` and `(faction, value)` maps
+before writing. Identical maps preserve relation IDs and do not request a mob
+sync. Changed sets are replaced in batches, with prefetched relation caches
+invalidated before sync. Faction kinds, core-slot cardinality, and integer
+standing bounds are validated before bulk creation. The enclosing import
+transaction rolls back both authored and runtime changes on later failure.
+
+Export uses already prefetched relations and adds no queries. Relation apply
+uses one comparison read per supplied set, independent of its size, and avoids
+per-faction existence/validation queries during writes. Regression coverage
+checks unchanged sets with 1 and 24 reputations, relation identity, skipped
+live-mob sync, and preservation of current health on unchanged imports.
 
 Currency definitions, defaults, starting balances, prices, rewards, policies,
 and conditions are documented in:
@@ -1887,6 +1940,37 @@ stream is validated and applied as one unit:
 
 Any parse, permission, identity, room, content, or link error rolls back the
 whole transaction, including newly created templates and link replacement.
+
+Successful family apply responses return `kind: worldbundle`, `summary`,
+scoped `results`, and a `worlds` list of `{ref, id, name}` entries. Entries use
+destination authored-world IDs and post-import names, ordered base first then
+by instance reference. Every result's `world_ref` resolves against this list;
+it must never be interpreted as a source database ID or defaulted to the
+selected base world. The summary's `documents` includes the bundle header;
+`content_documents` counts the result documents, while `worlds`, `instances`,
+and `links` describe the imported family.
+
+World Edit displays counts and groups entity links by imported world. Missing
+scope mappings leave visible, unlinked results rather than misrouting them.
+The API builds the mapping from already loaded scope objects without queries.
+The UI indexes scopes and groups results in linear time, with no per-entity or
+per-instance fetches; its existing post-apply refresh still targets only the
+selected world.
+
+Before reserving rooms or cloning instance configs, both the ordinary batch
+and bundle import paths may discard the destination's unused Create World
+Gold scaffold. This requires a sole uncustomized `gold` definition, its three
+default/death/clan references on the base config, no other currency uses, no
+existing instance templates, and an untouched starting room (allowing its
+offline builder and editor bookmark). The incoming apply-only stream must
+declare its currencies and starting/death rooms and explicitly provide the
+world's default currency, starting balances, death currency, and clan currency.
+Streams declaring `gold`, partial edits, and occupied or customized targets
+keep their existing catalog. The cleanup holds the economy locks, uses the
+normal currency dependency checks, and shares the enclosing import transaction;
+a later failure restores Gold and its references. These checks run once for
+the base scope, not once per imported entity or instance.
+
 The header is not a partial-update mechanism for family links. Individual
 content documents retain their normal apply/delete semantics, but undeclared
 instance templates are not pruned implicitly.
@@ -2151,6 +2235,15 @@ the current attachment; setting the section, its `profile`, or an empty mapping
 to null/empty clears it. For an instance template, profile references resolve
 against its effective base definition world, matching the profiles inherited
 by its builder UI.
+
+Full-world and family room exports always include all three service sections,
+using explicit `null` for unassigned services. Reimport therefore clears a
+removed attachment through the existing room apply path, including merchant
+runtime invalidation. A later document failure rolls back these clears with
+the enclosing import transaction. Individual room editor payloads retain the
+compact omitted-field shape, so an empty trainer attachment does not turn an
+ordinary lower-rank room edit into a request to alter training. Export uses
+the already preloaded profile relations and adds no database queries.
 
 A room accepts one Trainer Profile. If one location needs separate native and
 cross-training quota boundaries, attach one profile to the room and the other
@@ -2434,18 +2527,36 @@ normalize to an ordered `type: interrupt` component with `target`, `apply`, and
   legacy target mappings and room-reference forms are normalized during
   import.
 
-## `metadata.id` vs `metadata.key`
+## Trigger Identity: `metadata.uid`, `metadata.id`, And `metadata.key`
 
 ### What they are
 
+- `metadata.uid`: permanent UUID, unique within an authored world
 - `metadata.id`: numeric DB identifier (`42`)
 - `metadata.key`: typed string key (`trigger.42`)
 
 ### How they are used today
 
-- Both are accepted as trigger identity for updates.
-- If both are present, they must refer to the same trigger.
-- If neither is present, ingestion creates a new trigger.
+- Canonical exports include `uid`; full-world exports omit local `id`/`key`.
+- A UID lookup is scoped to the selected world and backed by the unique
+  `(world_id, uid)` database constraint. It uses one indexed lookup, with no
+  name/target guessing. Different destination world IDs and mutable trigger
+  fields do not change that identity.
+- Single-trigger editor and delete YAML also retain local `id`/`key`. Every
+  supplied identifier must refer to the same trigger; a UID cannot be changed
+  through an update manifest.
+- Without any identity fields, the legacy import path matches name, scope,
+  kind, resolved target, event, and matcher exactly, treating null stored text
+  as empty. Zero matches creates, one updates, and multiple matches reject.
+  A bounded query reads at most two candidate IDs. If two unidentified stream
+  documents resolve to the same trigger, the entire import rolls back.
+- UID-bearing documents never adopt a different trigger based on its name.
+  Existing destinations populated by older UID-less exports require explicit
+  identity reconciliation before switching to a source's UUIDs.
+- Migration `builders.0262_trigger_uid` assigns separate UUIDs to existing WR2
+  authored triggers in batches of 1,000, then enforces non-null and uniqueness.
+  New triggers get UUIDs automatically. No per-player/tick query or runtime
+  identity changes are introduced.
 
 ### Is `key` WR1 cruft?
 
@@ -2457,16 +2568,15 @@ No, but its role should be narrow and explicit in WR2:
   legacy relational payloads can still contain `room.<database_id>`. Builders
   must copy `manifest_ref`, never infer a room ref from a dotted key.
 - `id` is simpler for update targeting.
-- For WR2 manifests, treat `id` as the primary update identifier and `key` as an interoperability/reference-friendly alias.
+- For Trigger manifests, `uid` is the portable identifier; `id` and `key` are
+  local references retained for existing editor integrations.
 - Room manifests are the deliberate exception: `metadata.ref:
   room@<relative_id>` is their portable update identity, while coordinates
   remain mutable spec data.
 
-For entity types that still use database identity, neither raw `id` nor
-`trigger.<id>` is portable alone; add a stable authored identifier (for
-example `metadata.slug` or `metadata.uid`) and map it at import time. Rooms and
-instance-template scopes now follow that pattern through
-`room@<relative_id>` and `instance.<instance_slug>`.
+Raw `id` and `trigger.<id>` are not portable alone. Triggers use `metadata.uid`,
+rooms use `room@<relative_id>`, and instance-template scopes use
+`instance.<instance_slug>` for portable identity.
 
 ## Is `kind: trigger` redundant with `key: trigger.42`?
 
@@ -2480,16 +2590,19 @@ Keeping both is still useful because:
 - `kind` allows generic ingestion dispatch before touching IDs.
 - `key` keeps typed references consistent with other entity refs.
 
-If we eventually move to `metadata.id` only for updates, `kind` remains required.
+`kind` remains required when a manifest identifies its trigger only by UID.
 
 ## Validation Rules (Current)
 
 - `kind` must resolve to `trigger`, `world`, `currency`, `zone`, `room`, `path`, `itemdefinition`, `itembundle`, `merchantprofile`, `faction`, `mobdefinition`, `spawnplan`, `ability`, `abilities`, `social`, `quest`, or `questarc`.
-- For trigger update: `metadata.id` or `metadata.key` must reference an existing
-  trigger in the selected world.
-- For trigger create: omit both `metadata.id` and `metadata.key`.
-- For trigger delete: set `operation: delete` and include `metadata.id` or
-  `metadata.key`.
+- For trigger update: `metadata.uid`, `metadata.id`, or `metadata.key` must
+  reference an existing trigger in the selected world, and all supplied
+  identifiers must agree. Retargeting requires permission for both the stored
+  target and the requested target.
+- For trigger create: use a new `metadata.uid`, or omit all identity fields
+  and let the legacy exact-match path create when no match exists.
+- For trigger delete: set `operation: delete` and include an existing
+  `metadata.uid`, `metadata.id`, or `metadata.key`.
 - `metadata.world` (if present) must match the selected world.
   - `metadata.world` accepts either integer id (`1`) or key form (`world.1`).
 - `spec.scope`, `spec.kind`, booleans, and integers are validated.
@@ -2595,11 +2708,36 @@ If we eventually move to `metadata.id` only for updates, `kind` remains required
 - For world config manifests:
   - only `operation: apply` is supported
   - `spec` fields are validated against the world schema
+  - `never_reload` and `cross_race_cooldown` are local base/instance rules;
+    `flee_to_unknown_rooms` belongs to the base world and is inherited. All
+    applicable fields are exported even at their defaults. The cooldown is
+    measured in minutes and accepts integers from `0` to `2147483647`.
+    See the [complete settings portability audit](world-settings-portability.md)
+    for derived fields, destination policy, compatibility values, and system
+    reset behavior.
+  - base-world Config YAML and full exports always include normalized `stats`,
+    `combat`, and `equipment`, even when stored as empty maps. This carries
+    source defaults explicitly so reimport clears removed custom systems.
+    Equipment maps containing only armor suggestions are preserved as well.
+    Instance documents omit these inherited systems. Partial edits preserve
+    omitted systems; explicit `{}` or `null` resets a system to its defaults.
+    Invalid stored systems, including invalid armor references in stats, fail
+    export with a validation error instead of silently omitting the section.
+    Supplied equipment is validated before consulting stored equipment so an
+    explicit replacement can repair invalid destination configuration.
   - `initial_state`, when present, must be a mapping and replaces the authored
     seed without mutating an existing runtime world
   - room references (`starting_room`, `death_room`) must resolve to rooms in the selected world
   - `default_currency`, `starting_balances`, `death_currency`, and
     `clan_registration_currency` resolve against the base-world catalog
+  - `clan_registration_cost` and `clan_registration_currency` are base-world
+    policy, exported once and inherited by instance templates and runs;
+    instance creation does not copy them, and clan registration/renaming
+    resolves the base config at runtime rather than reading instance-local values
+  - `can_select_gender` and `default_gender` are included in base-world config
+    payloads and canonical YAML, including their default values. Full-world
+    and family imports preserve this character-creation policy; partial edits
+    preserve omitted settings. Instance documents omit these nonlocal fields.
   - currency amounts reject booleans, fractions, negatives, and values above
     `9,007,199,254,740,991`
   - `pvp_mode` is the canonical PvP field; legacy `allow_pvp` is accepted only
@@ -2711,7 +2849,9 @@ Permission checks are applied when editing via manifest:
 
 1. Open room **Triggers** view.
 2. Copy YAML from an existing trigger if you want a template.
-3. In **Edit World**, paste YAML and remove `metadata.id`/`metadata.key`.
+3. In **Edit World**, paste YAML and remove the original `metadata.uid`,
+   `metadata.id`, and `metadata.key`. To intentionally duplicate an identical
+   trigger, supply a newly generated UUID as `metadata.uid`.
 4. Update `metadata.name`, `spec.target`, `spec.match`, `spec.script`, etc.
 5. Submit manifest.
 6. Verify response indicates `operation: created`.
@@ -2731,7 +2871,7 @@ Permission checks are applied when editing via manifest:
 
 1. Open room **Triggers** view.
 2. Copy YAML for the trigger.
-3. Keep `metadata.id` (and optionally `metadata.key`) intact.
+3. Keep `metadata.uid` and any local `metadata.id`/`metadata.key` intact.
 4. Modify only the fields you want to change in `spec` (partial updates are supported).
 5. Submit manifest.
 6. Verify response indicates `operation: updated`.

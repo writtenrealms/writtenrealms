@@ -66,6 +66,7 @@ Instances should use WR Core definitions from the base world:
 - mob definitions
 - item bundles
 - currencies
+- clan registration fee and currency
 - socials
 - abilities
 - leveling configuration
@@ -353,11 +354,17 @@ Use the base world as the unit of portability:
 3. On the destination installation, create or select the multiplayer authored
    base world that should receive the family. WR2 rejects a family bundle
    applied to a single-player target instead of risking an unsafe conversion
-   of existing runtime state.
+   of existing runtime state. For a new destination, leave the initial currency
+   at its default: the full import automatically replaces unused starter Gold
+   when the source uses a different catalog. See
+   [Importing Into A New World](yaml-manifests.md#importing-into-a-new-world).
 4. As a rank 3+ builder, apply the complete stream through
    **World > Edit World**.
-5. Verify the base and each instance template, then re-export the destination
-   family if you want a canonical comparison.
+5. Review the **World Family Applied** summary and the results grouped by world.
+   Use the world and entity links to verify the imported base and each instance
+   template, then re-export the destination family if you want a canonical
+   comparison. Links use destination IDs; matching relative room numbers in
+   different worlds remain distinct.
 
 The destination's selected base world becomes `world@base`. WR2 matches an
 existing direct template by `instance_slug` or creates a missing one, so no

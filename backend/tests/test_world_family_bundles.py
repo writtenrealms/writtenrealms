@@ -314,6 +314,15 @@ class WorldFamilyBundleTests(APITestCase):
             imported_instance.id,
             self.source_instance.id,
         )
+        expected_worlds = [
+            {"ref": "world@base", "id": target_world.id, "name": "Phalanx"},
+            {"ref": "instance.hades", "id": imported_instance.id, "name": "Hades"},
+        ]
+        self.assertEqual(first_response.data["worlds"], expected_worlds)
+        self.assertEqual(
+            {result["world_ref"] for result in first_response.data["results"]},
+            {world["ref"] for world in expected_worlds},
+        )
         self.assertNotEqual(imported_gate.id, self.source_gate.id)
         self.assertNotEqual(
             imported_arrival.id,
@@ -346,6 +355,7 @@ class WorldFamilyBundleTests(APITestCase):
             200,
             second_response.data,
         )
+        self.assertEqual(second_response.data["worlds"], expected_worlds)
         reimported_instance, reimported_gate, reimported_arrival = (
             self._assert_imported_links(target_world=target_world)
         )

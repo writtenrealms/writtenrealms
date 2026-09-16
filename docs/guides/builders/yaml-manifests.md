@@ -57,6 +57,28 @@ A multi-document request is atomic. If any document fails validation or
 permission checks, changes made by earlier documents in that request are
 rolled back. Error messages identify the failing document number and kind.
 
+## Importing Into A New World
+
+For a complete export from **World > Export**, create the destination world
+with the default Gold currency and apply the whole stream through
+**World > Edit**. You do not need to create the source world's currencies
+first. A family bundle requires a multiplayer destination.
+
+If the new destination still has its untouched starting room and sole unused
+Gold currency, importing a complete stream with a different currency catalog
+removes that starter Gold automatically. This applies to both ordinary world
+exports and family bundles, before instance templates are created. The source
+currency definitions and world configuration then supply the destination's
+currencies and defaults. A failure restores the starter currency along with
+the rest of the import transaction.
+
+This cleanup is limited to unused defaults. Customized currencies, nonzero
+wallets, authored currency references, existing instance templates, and worlds
+with an edited starting room or ordinary players keep their existing catalog.
+Partial manifest edits also keep it. If the export includes Gold, its existing
+definition is updated normally. Imports into populated worlds still apply
+edits; they do not delete every entity absent from an export.
+
 ## Supported Kinds
 
 | Kind | What it authors | Guide |
@@ -128,6 +150,13 @@ instance templates, and cross-scope links. Importing one requires a rank 3 or
 higher builder and an authored base world. See the [Instance Builder
 Guide](instance-builder-guide.md#moving-a-family-from-development-to-production)
 before importing a family bundle.
+
+After a successful family import, **World Family Applied** shows the document,
+world, instance, and cross-world link counts. Results are grouped under the
+imported world names. Each entity link opens in its destination world, so a
+room in an instance opens in that instance even if the base world has the same
+relative room number. World headings and world-config rows open that world's
+configuration. **Apply Another Manifest** returns to an empty editor.
 
 ## Troubleshooting
 

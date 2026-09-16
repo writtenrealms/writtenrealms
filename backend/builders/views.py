@@ -2173,6 +2173,11 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         )
 
     def _apply_trigger_manifest(self, manifest):
+        metadata = manifest.get("metadata") or {}
+        has_identity = isinstance(metadata, dict) and any(
+            metadata.get(field_name) not in (None, "")
+            for field_name in ("uid", "id", "key")
+        )
         operation = builder_manifests.parse_manifest_operation(manifest)
         if operation == builder_manifests.TRIGGER_MANIFEST_OPERATION_DELETE:
             parsed_delete = builder_manifests.parse_trigger_delete_manifest(
@@ -2215,10 +2220,19 @@ class WorldManifestApplyView(BaseWorldBuilderView):
             world=self.world,
             manifest=manifest,
         )
+        if parsed_trigger.trigger is not None:
+            self._assert_can_edit_trigger_target(parsed_trigger.trigger)
         self._assert_can_edit_trigger_target(parsed_trigger)
 
+        applied_ids = self.__dict__.setdefault("_applied_trigger_ids", set())
+        if not has_identity and parsed_trigger.trigger_id in applied_ids:
+            raise serializers.ValidationError(
+                "Ambiguous legacy trigger documents resolve to the same trigger. "
+                "Export fresh YAML with metadata.uid for each trigger."
+            )
         is_create = parsed_trigger.trigger is None
         trigger = builder_manifests.apply_trigger_manifest(parsed_trigger)
+        applied_ids.add(trigger.pk)
 
         if trigger.scope == adv_consts.TRIGGER_SCOPE_ROOM:
             target_model = trigger.target_type.model_class() if trigger.target_type else None
@@ -3256,6 +3270,10 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         deferred_leaderboards = missing
         try:
             with transaction.atomic():
+                builder_world_export.prepare_starter_currency_for_import(
+                    world=original_world,
+                    documents=grouped_documents["world@base"],
+                )
                 try:
                     scope_worlds = (
                         builder_world_export
@@ -3457,6 +3475,14 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                 "kind": builder_world_export.WORLD_BUNDLE_MANIFEST_KIND,
                 "operation": "applied",
                 "summary": summary,
+                "worlds": [
+                    {
+                        "ref": world_ref,
+                        "id": scope_worlds[world_ref].id,
+                        "name": scope_worlds[world_ref].name,
+                    }
+                    for world_ref in ordered_world_refs
+                ],
                 "results": results,
             },
             status=status.HTTP_200_OK,
@@ -3650,6 +3676,11 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         results = []
         with transaction.atomic():
             self._assert_batch_room_permissions_before_reservation(manifests)
+            if self._builder_rank >= 3:
+                builder_world_export.prepare_starter_currency_for_import(
+                    world=self.world,
+                    documents=manifests,
+                )
             self._batch_created_room_relative_ids = (
                 builder_world_export.reserve_room_manifest_references(
                     world=self.world,

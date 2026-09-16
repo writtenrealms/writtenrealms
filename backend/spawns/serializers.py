@@ -369,8 +369,7 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     death_mode = serializers.CharField(source='config.death_mode')
     combat_resolution_interval = serializers.FloatField(
         source='config.combat_resolution_interval')
-    flee_to_unknown_rooms = serializers.BooleanField(
-        source='config.flee_to_unknown_rooms')
+    flee_to_unknown_rooms = serializers.SerializerMethodField()
     players_can_set_title = serializers.BooleanField(
         source='config.players_can_set_title')
     pvp_mode = serializers.CharField(source='config.pvp_mode')
@@ -492,6 +491,10 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     def get_announce_duel_results(self, spawn_world):
         config = inherited_system_config(spawn_world)
         return bool(config and config.announce_duel_results)
+
+    def get_flee_to_unknown_rooms(self, spawn_world):
+        config = inherited_system_config(spawn_world)
+        return bool(config and config.flee_to_unknown_rooms)
 
     def get_economy(self, spawn_world):
         return world_economy_payload(spawn_world)

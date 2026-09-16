@@ -478,7 +478,7 @@ spec:
         self.assertEqual(mob_document["spec"]["hit_msg_first"], "bite")
         self.assertEqual(mob_document["spec"]["hit_msg_third"], "bites")
 
-    def test_null_hit_messages_are_stored_as_blank_runtime_fallbacks(self):
+    def test_null_hit_messages_restore_runtime_defaults(self):
         manifests = f"""
 kind: itemdefinition
 metadata:
@@ -521,9 +521,9 @@ spec:
 
         self.assertEqual(item_definition.base_properties["hit_msg_first"], "")
         self.assertEqual(item_definition.base_properties["hit_msg_third"], "")
-        self.assertEqual(mob_definition.base_properties["hit_msg_first"], "")
-        self.assertEqual(mob_definition.base_properties["hit_msg_third"], "")
+        self.assertNotIn("hit_msg_first", mob_definition.base_properties)
+        self.assertNotIn("hit_msg_third", mob_definition.base_properties)
         self.assertEqual(item.hit_msg_first, "")
         self.assertEqual(item.hit_msg_third, "")
-        self.assertEqual(mob.hit_msg_first, "")
-        self.assertEqual(mob.hit_msg_third, "")
+        self.assertEqual(mob.hit_msg_first, "hit")
+        self.assertEqual(mob.hit_msg_third, "hits")

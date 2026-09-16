@@ -391,6 +391,21 @@ policy shape and counting rules.
 Omitting `merchant`, `crafting`, or `trainer` from a patch preserves the current
 attachment. Set the section to `null` or use an empty mapping to clear it.
 
+Full-world and family exports include all three service fields. An unassigned
+service is exported explicitly as `null`:
+
+```yaml
+spec:
+  merchant: null
+  crafting: null
+  trainer: null
+```
+
+This lets a later import remove services that you cleared in the source world,
+including in instance rooms. Take a fresh full-world export after clearing an
+attachment; older exports that omit the field preserve the destination's
+assignment. Clearing an attachment does not delete the reusable profile.
+
 ## Exits
 
 Exit values use stable `room@<relative_id>` refs. Set a direction to `null`

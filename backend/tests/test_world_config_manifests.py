@@ -12,6 +12,7 @@ from builders.models import (
 )
 from config import constants as adv_consts
 from config import game_settings as adv_config
+from core.combat_formulas import normalize_combat_system
 from core.death_routing import (
     load_compiled_plan,
     resolve_death_destination,
@@ -90,6 +91,8 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
         self.assertEqual(config_resp.data["config"]["combat_resolution_interval"], 0)
         self.assertEqual(config_resp.data["config"]["default_roam_chance"], 10)
         self.assertIs(config_resp.data["config"]["announce_duel_results"], False)
+        self.assertIs(config_resp.data["config"]["can_select_gender"], True)
+        self.assertEqual(config_resp.data["config"]["default_gender"], "male")
         self.assertNotIn("allow_pvp", config_resp.data["config"])
         stat_system = config_resp.data["config"]["stat_system"]
         self.assertEqual(
@@ -100,7 +103,7 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
             stat_system["formulas"]["base_stats"]["stamina_regen"],
             adv_config.PLAYER_STARTING_STAMINA_REGEN,
         )
-        self.assertEqual(config_resp.data["config"]["combat_system"], {})
+        self.assertEqual(config_resp.data["config"]["combat_system"], normalize_combat_system({}))
 
         export_resp = self.client.get(self.export_ep)
         self.assertEqual(export_resp.status_code, 200)
@@ -130,6 +133,8 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
             adv_consts.PVP_MODE_FFA,
         )
         self.assertIs(world_manifest["spec"]["announce_duel_results"], False)
+        self.assertIs(world_manifest["spec"]["can_select_gender"], True)
+        self.assertEqual(world_manifest["spec"]["default_gender"], "male")
         self.assertNotIn("allow_pvp", world_manifest["spec"])
         self.assertIn("player_creation", world_manifest["spec"])
         self.assertNotIn("can_select_faction", world_manifest["spec"])
@@ -142,7 +147,80 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
             world_manifest["spec"]["stats"]["formulas"]["base_stats"]["stamina_regen"],
             adv_config.PLAYER_STARTING_STAMINA_REGEN,
         )
-        self.assertNotIn("combat", world_manifest["spec"])
+        for key, field in (
+            ("stats", "stat_system"), ("combat", "combat_system"), ("equipment", "equipment_system"),
+        ):
+            self.assertEqual(world_manifest["spec"][key], config_resp.data["config"][field])
+
+    def _assert_gender_settings_round_trip(self, *, bundle):
+        if bundle:
+            self._instance_world()
+        response = self.client.post(
+            reverse("builder-world-list"),
+            {"name": "Gender Policy Destination", "is_multiplayer": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        target = World.objects.get(pk=response.data["id"])
+        self.assertNotEqual(target.pk, self.world.pk)
+        self.assertIs(target.config.can_select_gender, True)
+        self.assertEqual(target.config.default_gender, "male")
+
+        for selectable, gender in ((False, "female"), (False, "non_binary"), (True, "male")):
+            with self.subTest(selectable=selectable, gender=gender):
+                self.world.config.can_select_gender = selectable
+                self.world.config.default_gender = gender
+                self.world.config.save(update_fields=["can_select_gender", "default_gender"])
+                exported = self.client.get(self.export_ep)
+                self.assertEqual(exported.status_code, 200, exported.data)
+                for _ in range(2):
+                    response = self.client.post(
+                        reverse("builder-world-manifest-apply", args=[target.pk]),
+                        {"manifest": exported.data["yaml"]}, format="json",
+                    )
+                    self.assertEqual(response.status_code, 200, response.data)
+                    target.refresh_from_db()
+                    self.assertIs(target.config.can_select_gender, selectable)
+                    self.assertEqual(target.config.default_gender, gender)
+                for document in exported.data["documents"]:
+                    if document["kind"] != "world":
+                        continue
+                    is_base = document.get("metadata", {}).get("world_ref", "world@base") == "world@base"
+                    for field, value in (("can_select_gender", selectable), ("default_gender", gender)):
+                        if is_base:
+                            self.assertEqual(document["spec"][field], value)
+                        else:
+                            self.assertNotIn(field, document["spec"])
+                config = self.client.get(reverse("builder-world-config", args=[target.pk]))
+                self.assertEqual(config.status_code, 200, config.data)
+                self.assertIs(config.data["config"]["can_select_gender"], selectable)
+                self.assertEqual(config.data["config"]["default_gender"], gender)
+                self.assertIs(config.data["manifest"]["spec"]["can_select_gender"], selectable)
+                self.assertEqual(config.data["manifest"]["spec"]["default_gender"], gender)
+
+    def test_gender_settings_survive_world_export_import_and_reimport(self):
+        self._assert_gender_settings_round_trip(bundle=False)
+
+    def test_gender_settings_survive_family_export_import_and_reimport(self):
+        self._assert_gender_settings_round_trip(bundle=True)
+
+    def test_gender_settings_preserve_omitted_fields_in_partial_edits(self):
+        self.world.config.can_select_gender = False
+        self.world.config.default_gender = "female"
+        self.world.config.save(update_fields=["can_select_gender", "default_gender"])
+        for spec, selectable, gender in (
+            ({"name": "Renamed World"}, False, "female"),
+            ({"default_gender": "non_binary"}, False, "non_binary"),
+            ({"can_select_gender": True}, True, "non_binary"),
+        ):
+            response = self.client.post(
+                self.apply_ep,
+                {"manifest": yaml.safe_dump({"kind": "world", "spec": spec})}, format="json",
+            )
+            self.assertEqual(response.status_code, 200, response.data)
+            self.world.config.refresh_from_db()
+            self.assertIs(self.world.config.can_select_gender, selectable)
+            self.assertEqual(self.world.config.default_gender, gender)
 
     def test_world_config_yaml_canonicalizes_nested_room_conditions(self):
         legacy_ref = f"room.{self.room.id}"
@@ -1561,6 +1639,10 @@ spec:
             "ability_progression",
             "allow_combat",
             "announce_duel_results",
+            "can_select_gender",
+            "default_gender",
+            "clan_registration_cost",
+            "clan_registration_currency",
             "combat",
             "combat_resolution_interval",
             "decay_glory",
@@ -1593,6 +1675,8 @@ metadata:
 spec:
   death_mode: destroy_eq
   announce_duel_results: true
+  clan_registration_cost: 1000
+  clan_registration_currency: obol
   combat_resolution_interval: 1.5
   default_roam_chance: 25
   leveling_curve: [0, 10, 30]
@@ -1610,6 +1694,8 @@ spec:
         self.assertIn("Instance worlds inherit core systems", text)
         self.assertIn("stats", text)
         self.assertIn("announce_duel_results", text)
+        self.assertIn("clan_registration_cost", text)
+        self.assertIn("clan_registration_currency", text)
         self.assertIn("combat_resolution_interval", text)
 
     def test_instance_world_config_manifest_rejects_nonlocal_world_rules(self):
@@ -1775,6 +1861,8 @@ spec:
             ep,
             {
                 "announce_duel_results": True,
+                "clan_registration_cost": 1000,
+                "clan_registration_currency": self.currency.pk,
                 "combat_system": {"profiles": {}},
                 "leveling_curve": [0, 10, 30],
             },
@@ -1784,6 +1872,8 @@ spec:
         self.assertEqual(resp.status_code, 400)
         self.assertIn("Instance worlds inherit core systems", str(resp.data))
         self.assertIn("announce_duel_results", str(resp.data))
+        self.assertIn("clan_registration_cost", str(resp.data))
+        self.assertIn("clan_registration_currency", str(resp.data))
 
     def test_instance_direct_config_patch_rejects_nonlocal_world_rules(self):
         instance = self._instance_world()
@@ -1792,7 +1882,6 @@ spec:
         resp = self.client.patch(
             ep,
             {
-                "clan_registration_cost": 123,
                 "players_can_set_title": False,
             },
             format="json",
@@ -1801,7 +1890,7 @@ spec:
         self.assertEqual(resp.status_code, 400)
         text = str(resp.data)
         self.assertIn("can only alter local instance config", text)
-        self.assertIn("clan_registration_cost", text)
+        self.assertIn("players_can_set_title", text)
 
     def test_instance_direct_config_patch_updates_death_routing_source(self):
         instance = self._instance_world()

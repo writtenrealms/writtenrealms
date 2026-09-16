@@ -1342,7 +1342,7 @@ class WorldConfig(BaseModel):
         DEATH_ROUTING_SOURCE_BASE_WORLD,
     )
 
-    # Fields not exposed to builders
+    # Operational flags, compatibility fields, and world-level gameplay rules
 
     can_create_chars = models.BooleanField(default=True)
     has_corpse_decay = models.BooleanField(default=True)

@@ -689,7 +689,21 @@ def _room_door_faces_for_export(room: Room) -> list[Door]:
     return sorted(cached_faces, key=lambda door: (door.direction, door.id))
 
 
-def _serialize_room_manifest(room: Room) -> dict[str, Any]:
+def _serialize_room_manifest(
+    room: Room, *, include_empty_services: bool = False,
+) -> dict[str, Any]:
+    services = {}
+    for service, prefix in (
+        ("merchant", _MERCHANT_PROFILE_REF_PREFIX),
+        ("crafting", _CRAFTING_PROFILE_REF_PREFIX),
+        ("trainer", _TRAINER_PROFILE_REF_PREFIX),
+    ):
+        if getattr(room, f"{service}_profile_id"):
+            profile = getattr(room, f"{service}_profile")
+            services[service] = {"profile": f"{prefix}{profile.slug}"}
+        elif include_empty_services:
+            services[service] = None
+
     export_flags = getattr(room, "_export_flags", None)
     if export_flags is None:
         flag_codes = sorted(room.flags.values_list("code", flat=True))
@@ -754,37 +768,7 @@ def _serialize_room_manifest(room: Room) -> dict[str, Any]:
                 }
                 for door in _room_door_faces_for_export(room)
             ],
-            **(
-                {
-                    "merchant": {
-                        "profile": (
-                            f"{_MERCHANT_PROFILE_REF_PREFIX}{room.merchant_profile.slug}"
-                        ),
-                    },
-                }
-                if room.merchant_profile_id else {}
-            ),
-            **(
-                {
-                    "crafting": {
-                        "profile": (
-                            f"{_CRAFTING_PROFILE_REF_PREFIX}{room.crafting_profile.slug}"
-                        ),
-                    },
-                }
-                if room.crafting_profile_id else {}
-            ),
-            **(
-                {
-                    "trainer": {
-                        "profile": (
-                            f"{_TRAINER_PROFILE_REF_PREFIX}"
-                            f"{room.trainer_profile.slug}"
-                        ),
-                    },
-                }
-                if room.trainer_profile_id else {}
-            ),
+            **services,
         },
     }
 
@@ -911,6 +895,24 @@ def _serialize_mob_definition_manifest(mob_definition: MobDefinition) -> dict[st
     manifest["metadata"].pop("world", None)
     manifest["metadata"].pop("id", None)
     manifest["metadata"].pop("key", None)
+    # Full exports must clear removed settings; omission is reserved for partial edits.
+    spec = manifest["spec"]
+    base_properties = mob_definition.base_properties or {}
+    for field_name in builder_manifests._MOB_DEFINITION_BASE_PROPERTY_FIELDS:
+        if base_properties.get(field_name) is None:
+            spec[field_name] = None
+    spec.setdefault("rewards", {"currencies": {}})
+    spec.setdefault("factions", {})
+    spec.setdefault("loot", {})
+    spec.setdefault("traits", [])
+    spec.setdefault("initial_state", {})
+    spec["combat"].setdefault("abilities", [])
+    spec["combat"].setdefault("engage_when", {})
+    for service in ("merchant", "crafting", "trainer"):
+        spec.setdefault(service, {
+            "profile": None,
+            "availability": getattr(mob_definition, f"{service}_availability") or "present",
+        })
     return manifest
 
 
@@ -2261,6 +2263,7 @@ def _serialize_trigger_manifest(
     return {
         "kind": builder_manifests.TRIGGER_MANIFEST_KIND,
         "metadata": {
+            "uid": str(trigger.uid),
             "name": trigger.name or "",
         },
         "spec": {
@@ -2506,7 +2509,7 @@ def serialize_world_documents(world: World) -> list[dict[str, Any]]:
             for zone in zones
         ],
         *[
-            _serialize_room_manifest(room)
+            _serialize_room_manifest(room, include_empty_services=True)
             for room in rooms
         ],
         *[
@@ -3780,6 +3783,123 @@ def _find_placeholder_room(
     ):
         return None
     return room
+
+
+def prepare_starter_currency_for_import(
+    *,
+    world: World,
+    documents: list[dict[str, Any]],
+) -> None:
+    """Discard unused Create World Gold before a complete initial import.
+
+    Call inside the import transaction, before reserving rooms or creating
+    instance configs. Partial edits and existing economies keep their catalog.
+    The normal currency deletion service remains the final dependency guard.
+    """
+    if world.context_id or world.instance_of_id or not world.config_id:
+        return
+
+    currency_codes = set()
+    room_refs = set()
+    world_specs = []
+    for document in documents:
+        if (
+            builder_manifests.parse_manifest_operation(document)
+            != builder_manifests.TRIGGER_MANIFEST_OPERATION_APPLY
+        ):
+            return
+        kind = parse_document_kind(document)
+        if kind == CURRENCY_MANIFEST_KIND:
+            currency_codes.add(
+                str(_manifest_metadata(document).get("code") or "").strip().lower()
+            )
+        elif kind == ROOM_MANIFEST_KIND:
+            room_ref = _manifest_metadata(document).get("ref")
+            if isinstance(room_ref, str):
+                room_refs.add(room_ref)
+        elif kind == WORLD_MANIFEST_KIND:
+            world_specs.append(_manifest_spec(document))
+
+    if len(world_specs) != 1 or not currency_codes or "gold" in currency_codes:
+        return
+    spec = world_specs[0]
+    required_fields = {
+        "default_currency", "starting_balances", "death_currency",
+        "clan_registration_currency", "starting_room", "death_room",
+    }
+    if (
+        not required_fields.issubset(spec)
+        or not all(
+            isinstance(spec[field], str)
+            for field in ("default_currency", "starting_room", "death_room")
+        )
+        or spec["default_currency"] not in currency_codes
+        or spec["starting_room"] not in room_refs
+        or spec["death_room"] not in room_refs
+    ):
+        return
+
+    # Only the untouched, sole default Gold is scaffold. The bounded catalog
+    # lookup also makes repeated imports and custom economies cheap no-ops.
+    currencies = list(world.currencies.order_by("id")[:2])
+    if len(currencies) != 1:
+        return
+    currency = currencies[0]
+    if (
+        currency.code != "gold"
+        or currency.name != "Gold"
+        or currency.plural_name not in {"", "Gold"}
+        or currency.description
+    ):
+        return
+
+    from builders.currencies import (
+        _assert_economy_editable,
+        currency_usage,
+        delete_currency,
+    )
+
+    try:
+        _assert_economy_editable(world)
+        world.refresh_from_db(fields=["default_currency", "config"])
+        config = WorldConfig.objects.select_for_update().get(pk=world.config_id)
+        world.config = config
+        currency.refresh_from_db()
+        if (
+            world.default_currency_id != currency.pk
+            or config.death_currency_id != currency.pk
+            or config.clan_registration_currency_id != currency.pk
+            or config.clan_registration_cost
+            or world.currencies.count() != 1
+            or currency.code != "gold"
+            or currency.name != "Gold"
+            or currency.plural_name not in {"", "Gold"}
+            or currency.description
+            or World.objects.filter(instance_of=world).exists()
+            or _find_placeholder_room(
+                world, allow_import_scaffold_dependents=True,
+            ) is None
+        ):
+            return
+        usage = {
+            entry["type"]: entry["count"]
+            for entry in currency_usage(currency)
+        }
+        if usage != {
+            "default currency": 1,
+            "death policy": 1,
+            "clan registration policy": 1,
+        }:
+            return
+
+        world.default_currency = None
+        world.save(update_fields=["default_currency"])
+        config.death_currency = None
+        config.clan_registration_currency = None
+        config.save(update_fields=["death_currency", "clan_registration_currency"])
+        delete_currency(currency)
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError(exc.messages) from exc
 
 
 def _get_or_create_zone(*, world: World, zone_name: str, zone_ref: Any = None) -> Zone | None:
@@ -6051,18 +6171,25 @@ def _match_existing_trigger(
     event: str,
     match: str,
 ) -> Trigger | None:
-    candidates = Trigger.objects.filter(
+    lookup = Q(
         world=world,
-        name=name,
         scope=scope,
         kind=kind,
         target_type=target_type,
         target_id=target_id,
-    ).order_by("id")
-    if candidates.count() == 1:
-        return candidates.first()
-    narrowed = candidates.filter(event=event, match=match)
-    return narrowed.first()
+    )
+    for field, value in (("name", name), ("event", event), ("match", match)):
+        text_lookup = Q(**{field: value})
+        if not value:
+            text_lookup |= Q(**{f"{field}__isnull": True})
+        lookup &= text_lookup
+    candidates = list(Trigger.objects.filter(lookup).only("id").order_by("id")[:2])
+    if len(candidates) > 1:
+        raise serializers.ValidationError(
+            "Ambiguous legacy trigger identity. Copy fresh YAML with metadata.uid "
+            "or identify the intended local trigger with metadata.id/key."
+        )
+    return candidates[0] if candidates else None
 
 
 def normalize_trigger_manifest_for_import(
@@ -6120,7 +6247,7 @@ def normalize_trigger_manifest_for_import(
     # create-time default.
     if any(
         metadata.get(field_name) not in (None, "")
-        for field_name in ("id", "key")
+        for field_name in ("id", "key", "uid")
     ):
         return normalized
 

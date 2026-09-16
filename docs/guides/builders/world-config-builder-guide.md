@@ -221,6 +221,12 @@ merged with the base world's runtime state.
 | `non_ascii_names` | boolean | `false` | Allows non-ASCII character names. |
 | `name_exclusions` | text | empty | Names or tokens to block during character creation. |
 
+World Config YAML and full-world exports always include `can_select_gender`
+and `default_gender`, even when they use the defaults. Importing into a new
+world or reimporting a later revision preserves both settings. Partial edits
+leave either setting unchanged when omitted. In family exports, these
+character-creation settings appear only on the base world's document.
+
 For progression details, see
 [leveling-builder-guide.md](leveling-builder-guide.md).
 
@@ -286,6 +292,9 @@ receive none of these class-specific entries.
 | --- | --- | --- | --- |
 | `combat_resolution_interval` | number | `0` | `0` resolves combat immediately; `> 0` auto-advances rounds on that cadence; `-1` requires explicit advancement. |
 | `default_roam_chance` | integer 0-100 | `10` | Final fallback percent per heartbeat for mobs with zone/path roaming targets. |
+| `never_reload` | boolean | `false` | Skips scheduled spawn-plan reconciliation; set independently for a base world or instance template. |
+| `flee_to_unknown_rooms` | boolean | `true` | Base-world rule allowing flight into rooms the player has not explored; instances inherit it. |
+| `cross_race_cooldown` | integer 0-2147483647 | `0` | Minutes before a non-builder may log in as a different core faction in the same multiplayer runtime; `0` disables the delay. Local to each base world or instance template. |
 | `is_narrative` | boolean | `false` | Narrative worlds disable combat through the manifest apply path. |
 | `auto_equip` | boolean | `true` | New equipment is equipped automatically when possible. |
 | `players_can_set_title` | boolean | `true` | Allows players to manage their title. |
@@ -295,6 +304,12 @@ receive none of these class-specific entries.
 `allow_combat` is a stored config field, but it is not directly authored through
 `kind: world` manifests. Use `is_narrative: true` for the current manifest path
 when a world should be non-combat.
+
+World Config YAML and full-world/family exports always include the applicable
+reload, flee, and cross-faction cooldown rules, including default values.
+Reimporting preserves them; a partial edit leaves omitted rules unchanged.
+`never_reload` affects scheduled reconciliation, including replenishment after
+gameplay, rather than preventing the initial population load.
 
 Roaming resolves the first applicable value in this order: a positive
 mob-definition `roam_chance`, a non-null spawn-plan `default_roam_chance`, a
@@ -429,6 +444,20 @@ For death-related builder commands, see
 | `combat` | mapping | default combat model | Combat profiles, rating curves, mitigation, variance, and crit rules. |
 | `equipment` | mapping | default equipment model | Armor classes, armor proficiency, and equipment policy. |
 
+Base-world Config YAML and full exports always include all three system maps,
+with their effective defaults filled in. If you reset a custom system locally,
+export again and reimport: the destination receives those defaults instead of
+keeping its previous custom configuration. This also preserves equipment
+settings that only customize armor suggestions. Instance templates inherit
+these systems from the base world and omit the maps from their own documents.
+
+For a partial edit, omitting a system keeps its current value. Supplying
+`stats: {}`, `combat: {}`, or `equipment: {}` resets that system to its defaults;
+`null` has the same effect. Resetting stats removes custom class profiles and
+makes the world classless, subject to the existing reference validation. Invalid
+stored systems produce an export error identifying the invalid configuration;
+they are never silently excluded from the export.
+
 For stats and attributes, see
 [attributes-builder-guide.md](attributes-builder-guide.md).
 
@@ -449,8 +478,11 @@ manifests.
 | `allow_combat` | Stored field not accepted in world manifests. | Use `is_narrative`. |
 | `is_classless` | Legacy compatibility field accepted by import. | Configure `stats.class_profiles`; absence of class profiles means classless. |
 | `death_route` | Legacy authored field retained for compatibility; deterministic routing does not interpret it. | Configure `death_routing`. |
-| `starting_eq` | Stored many-to-many starter equipment. | Not currently authored through `kind: world`. |
+| `starting_eq` | Removed legacy starter-equipment relation. | Configure `starting_equipment` with item-definition references. |
 | `exits_to` | Cross-world instance transfer field; not accepted inside `kind: world`. | Configure it through the family bundle's `world_config.exits_to` link. |
+| `can_create_chars` | Destination character-creation closure switch; import leaves it unchanged. | Manage access on the destination; author starting choices through `player_creation`. |
+| `autoflee`, `has_corpse_decay` | Retained compatibility values with no active gameplay consumer in the current code. | These fields are not part of world manifests. |
+| `death_routing_generation`, `death_routing_source_generation` | Internal destination cache versions. | Import rebuilds routing state; do not copy version numbers. |
 
 ## Instance Templates
 
@@ -460,6 +492,7 @@ manifests:
 - identity text: `name`, `short_description`, `description`, `motd`,
   `is_public`
 - local rooms: `starting_room`, `death_room`
+- local gameplay rules: `never_reload`, `cross_race_cooldown`
 - local death/PvP/presentation fields: `death_mode`, `death_routing`,
   `death_routing_source`, `death_currency`, `death_currency_penalty`,
   `pvp_mode`, `built_by`, `small_background`, `large_background`
@@ -473,8 +506,13 @@ death penalty.
 
 Core systems such as `stats`, `combat`, `equipment`, `ability_progression`,
 `leveling_curve`, `starting_level`, `max_level`, `combat_resolution_interval`,
-`default_roam_chance`, and `announce_duel_results` are inherited from the base
-world.
+`default_roam_chance`, `flee_to_unknown_rooms`, and `announce_duel_results` are
+inherited from the base world.
+
+`clan_registration_cost` and `clan_registration_currency` also belong to the
+base world. Registration and renaming inside an instance use the base world's
+current fee, including after a family export/import. See
+[Death And System Costs](currency-builder-guide.md#death-and-system-costs).
 
 An instance template still owns its zones and spawn plans. Those manifests may
 set local `default_roam_chance` values that take precedence over the inherited

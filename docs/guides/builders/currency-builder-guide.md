@@ -221,6 +221,22 @@ another death mode can still retain a configured death currency for a later
 policy change. `clan_registration_currency` similarly identifies the currency
 for a nonzero `clan_registration_cost`.
 
+Clan registration and clan renaming always use the base world's
+`clan_registration_cost` and `clan_registration_currency`, including while a
+player is inside an instance. Set them on the base world's **World > Edit**:
+
+```yaml
+kind: world
+spec:
+  clan_registration_currency: obol
+  clan_registration_cost: 1000
+```
+
+Instances inherit this policy immediately; they cannot override it. A family
+export includes it once on the base world, so importing into a new world with
+a different ID preserves the same fee throughout the family. A cost of `0`
+makes registration and renaming free.
+
 ## Conditions
 
 Use the existing structured condition framework and a balance path:

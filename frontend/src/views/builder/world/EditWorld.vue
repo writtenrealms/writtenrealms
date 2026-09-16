@@ -37,20 +37,28 @@
       </div>
 
       <div class="manifest-result mt-6" aria-live="polite">
-        <h3>Manifest Applied</h3>
+        <h3>{{ isWorldBundle ? "World Family Applied" : "Manifest Applied" }}</h3>
         <div class="manifest-result-summary color-text-60">{{ appliedSummaryText }}</div>
 
-        <ul v-if="appliedEntities.length" class="manifest-entity-list">
-          <li v-for="entity in appliedEntities" :key="entity.key" class="manifest-entity-row">
-            <span class="manifest-entity-operation">{{ capfirst(entity.operation) }}</span>
-            <span class="manifest-entity-kind">{{ entity.kindLabel }}</span>
-            <router-link v-if="entity.to" :to="entity.to" class="manifest-entity-link">
-              {{ entity.name }}
+        <section v-for="group in appliedEntityGroups" :key="group.ref" class="manifest-world-result">
+          <h4 v-if="isWorldBundle" class="manifest-world-heading">
+            <router-link v-if="group.id" :to="{ name: 'builder_world_config', params: { world_id: group.id } }">
+              {{ group.name }}
             </router-link>
-            <span v-else class="manifest-entity-name">{{ entity.name }}</span>
-          </li>
-        </ul>
-        <div v-else class="color-text-60">No linkable entities were returned.</div>
+            <span v-else>{{ group.name }}</span>
+          </h4>
+          <ul class="manifest-entity-list">
+            <li v-for="entity in group.entities" :key="entity.key" class="manifest-entity-row">
+              <span class="manifest-entity-operation">{{ capfirst(entity.operation) }}</span>
+              <span class="manifest-entity-kind">{{ entity.kindLabel }}</span>
+              <router-link v-if="entity.to" :to="entity.to" class="manifest-entity-link">
+                {{ entity.name }}
+              </router-link>
+              <span v-else class="manifest-entity-name">{{ entity.name }}</span>
+            </li>
+          </ul>
+        </section>
+        <div v-if="!appliedEntities.length" class="color-text-60">No linkable entities were returned.</div>
 
         <div class="manifest-actions mt-4">
           <button class="btn-small" @click="startAnotherManifest">APPLY ANOTHER MANIFEST</button>
@@ -88,20 +96,29 @@ const manifestText = ref("");
 const isSubmitting = ref(false);
 const appliedKind = ref<string>("");
 const appliedBatchSummary = ref<any | null>(null);
+const appliedWorlds = ref<AppliedWorld[]>([]);
 const appliedEntities = ref<AppliedEntity[]>([]);
 const lastOperation = ref<string>("");
+const isWorldBundle = computed(() => appliedKind.value === "worldbundle");
+const isMultiDocumentResult = computed(() => isWorldBundle.value || appliedKind.value === "batch");
 
 const endpoint = computed(() => `/builder/worlds/${route.params.world_id}/manifests/apply/`);
 const hasApplyResult = computed(() => Boolean(appliedKind.value && lastOperation.value));
 const batchSummaryText = computed(() => {
   const kinds = appliedBatchSummary.value?.kinds || {};
   const labels = Object.entries(kinds).map(([kind, count]) => {
-    const suffix = Number(count) === 1 ? "" : "s";
-    return `${count} ${kind}${suffix}`;
+    const label = kind === "abilities" ? "ability set" : kindLabel(kind).toLowerCase();
+    return countLabel(Number(count), label, kind === "currency" ? "currencies" : `${label}s`);
   });
   return labels.join(", ");
 });
 const appliedSummaryText = computed(() => {
+  if (isWorldBundle.value && appliedBatchSummary.value) {
+    const summary = appliedBatchSummary.value;
+    const counts = `${countLabel(summary.documents, "document")} across ${countLabel(summary.worlds, "world")}`;
+    const contents = batchSummaryText.value ? ` Contents: ${batchSummaryText.value}.` : "";
+    return `Applied ${counts} (${countLabel(summary.instances, "instance")}), with ${countLabel(summary.links, "cross-world link")}.${contents}`;
+  }
   if (appliedKind.value === "batch" && appliedBatchSummary.value) {
     const suffix = batchSummaryText.value ? `: ${batchSummaryText.value}` : "";
     return `Applied ${appliedBatchSummary.value.documents} documents${suffix}.`;
@@ -114,14 +131,38 @@ const appliedSummaryText = computed(() => {
   return `${capfirst(lastOperation.value)} ${manifestLabel}.`;
 });
 
+type AppliedWorld = {
+  ref: string;
+  id?: number | string;
+  name: string;
+};
+
 type AppliedEntity = {
   key: string;
   kind: string;
   kindLabel: string;
   operation: string;
   name: string;
+  world: AppliedWorld;
   to?: RouteLocationRaw;
 };
+
+const appliedEntityGroups = computed(() => {
+  const groups = new Map<string, AppliedWorld & { entities: AppliedEntity[] }>(
+    appliedWorlds.value.map(scope => [scope.ref, { ...scope, entities: [] }]),
+  );
+  for (const entity of appliedEntities.value) {
+    if (!groups.has(entity.world.ref)) {
+      groups.set(entity.world.ref, { ...entity.world, entities: [] });
+    }
+    groups.get(entity.world.ref)!.entities.push(entity);
+  }
+  return [...groups.values()];
+});
+
+const countLabel = (count: number, label: string, plural = `${label}s`) => (
+  `${count} ${Number(count) === 1 ? label : plural}`
+);
 
 const payloadKeyByKind: Record<string, string> = {
   ability: "ability",
@@ -139,6 +180,7 @@ const payloadKeyByKind: Record<string, string> = {
   quest: "quest",
   questarc: "quest_arc",
   room: "room",
+  social: "social",
   spawnplan: "spawn_plan",
   trigger: "trigger",
   zone: "zone",
@@ -161,6 +203,7 @@ const kindLabels: Record<string, string> = {
   quest: "Quest template",
   questarc: "Quest arc",
   room: "Room",
+  social: "Social",
   spawnplan: "Spawn plan",
   trigger: "Trigger",
   world: "World config",
@@ -174,6 +217,7 @@ const kindLabel = (kind: string): string => {
 const clearApplyResult = () => {
   appliedKind.value = "";
   appliedBatchSummary.value = null;
+  appliedWorlds.value = [];
   appliedEntities.value = [];
   lastOperation.value = "";
 };
@@ -191,11 +235,12 @@ const parseEntityIdFromKey = (key: any): string | null => {
 const routeForEntity = (
   kind: string,
   payload: any,
-  operation: string
+  operation: string,
+  scope: AppliedWorld,
 ): RouteLocationRaw | undefined => {
-  if (operation === "deleted") return undefined;
+  if (operation === "deleted" || !scope.id) return undefined;
 
-  const worldId = route.params.world_id;
+  const worldId = scope.id;
   const id = payload?.id;
   const target = payload?.target || {};
   const targetId = parseEntityIdFromKey(target.key);
@@ -207,6 +252,9 @@ const routeForEntity = (
   }
   if (kind === "currency") {
     return { name: "builder_world_currency_list", params: { world_id: worldId } };
+  }
+  if (kind === "social") {
+    return { name: "builder_world_social_list", params: { world_id: worldId } };
   }
   if (kind === "faction" && id) {
     return {
@@ -347,10 +395,11 @@ const routeForEntity = (
   return undefined;
 };
 
-const entityName = (kind: string, payload: any): string => {
-  if (kind === "world") return world.value.name;
+const entityName = (kind: string, payload: any, scope: AppliedWorld): string => {
+  if (kind === "world") return scope.name;
   return String(
     payload?.name ||
+      payload?.cmd ||
       payload?.slug ||
       payload?.ref ||
       payload?.code ||
@@ -359,7 +408,7 @@ const entityName = (kind: string, payload: any): string => {
   );
 };
 
-const entityKey = (kind: string, operation: string, payload: any, index: number): string => {
+const entityKey = (kind: string, operation: string, payload: any, index: string): string => {
   const id = payload?.id || payload?.key || payload?.slug || payload?.code || payload?.ref || index;
   return `${kind}:${operation}:${id}:${index}`;
 };
@@ -368,50 +417,58 @@ const appliedEntityFromPayload = (
   kind: string,
   operation: string,
   payload: any,
-  index: number
+  index: string,
+  scope: AppliedWorld,
 ): AppliedEntity => {
   return {
-    key: entityKey(kind, operation, payload, index),
+    key: `${scope.ref}:${entityKey(kind, operation, payload, index)}`,
     kind,
     kindLabel: kindLabel(kind),
     operation,
-    name: entityName(kind, payload),
-    to: routeForEntity(kind, payload, operation),
+    name: entityName(kind, payload, scope),
+    world: scope,
+    to: routeForEntity(kind, payload, operation, scope),
   };
 };
 
-const entitiesForResult = (result: any, startIndex = 0): AppliedEntity[] => {
+const entitiesForResult = (result: any, scope: AppliedWorld, documentIndex: number): AppliedEntity[] => {
   const kind = String(result?.kind || "").toLowerCase();
   const operation = String(result?.operation || "updated");
 
   if (kind === "abilities") {
     return (result?.abilities || []).map((ability, index) =>
-      appliedEntityFromPayload("ability", operation, ability, startIndex + index)
+      appliedEntityFromPayload("ability", operation, ability, `${documentIndex}.${index}`, scope)
     );
   }
 
   if (kind === "world") {
-    return [appliedEntityFromPayload(kind, operation, {}, startIndex)];
+    return [appliedEntityFromPayload(kind, operation, {}, String(documentIndex), scope)];
   }
 
   const payloadKey = payloadKeyByKind[kind];
   const payload = payloadKey ? result?.[payloadKey] : null;
   if (!payload) return [];
-  return [appliedEntityFromPayload(kind, operation, payload, startIndex)];
+  return [appliedEntityFromPayload(kind, operation, payload, String(documentIndex), scope)];
 };
 
 const setAppliedResult = (data: any) => {
   appliedKind.value = String(data.kind || "").toLowerCase();
   lastOperation.value = String(data.operation || "updated");
-  appliedBatchSummary.value = appliedKind.value === "batch" ? data.summary || null : null;
-
-  if (appliedKind.value === "batch") {
-    appliedEntities.value = (data.results || []).flatMap((result, index) =>
-      entitiesForResult(result, index)
-    );
-  } else {
-    appliedEntities.value = entitiesForResult(data);
-  }
+  appliedBatchSummary.value = isMultiDocumentResult.value ? data.summary || null : null;
+  appliedWorlds.value = isWorldBundle.value ? data.worlds || [] : [];
+  const worldsByRef = new Map(appliedWorlds.value.map(scope => [scope.ref, scope]));
+  const selectedWorld: AppliedWorld = {
+    ref: "world@base", id: String(route.params.world_id), name: world.value.name,
+  };
+  const results = isMultiDocumentResult.value ? data.results || [] : [data];
+  appliedEntities.value = results.flatMap((result, index) => {
+    const worldRef = String(result.world_ref || "");
+    // Missing bundle mappings must never send an instance link to the base world.
+    const scope = isWorldBundle.value
+      ? worldsByRef.get(worldRef) || { ref: worldRef, name: worldRef || "Unknown world" }
+      : selectedWorld;
+    return entitiesForResult(result, scope, index);
+  });
 };
 
 const extractError = (error: any): string => {
@@ -1012,7 +1069,10 @@ const submitManifest = async () => {
       store.commit("builder/zone_set", freshWorld.last_viewed_room.zone);
     }
 
-    if (appliedKind.value === "batch" && appliedBatchSummary.value) {
+    if (isWorldBundle.value && appliedBatchSummary.value) {
+      const summary = appliedBatchSummary.value;
+      store.commit("ui/notification_set", `Applied ${countLabel(summary.documents, "document")} across ${countLabel(summary.worlds, "world")}.`);
+    } else if (appliedKind.value === "batch" && appliedBatchSummary.value) {
       store.commit("ui/notification_set", `Applied ${appliedBatchSummary.value.documents} manifests.`);
     } else {
       const manifestLabel = appliedKind.value
@@ -1066,6 +1126,14 @@ const submitManifest = async () => {
     padding: 0;
   }
 
+  .manifest-world-result + .manifest-world-result {
+    margin-top: 1.5rem;
+  }
+
+  .manifest-world-heading {
+    margin-bottom: 0.75rem;
+  }
+
   .manifest-entity-row {
     align-items: baseline;
     display: grid;
@@ -1082,6 +1150,19 @@ const submitManifest = async () => {
   .manifest-entity-name {
     min-width: 0;
     overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 600px) {
+    .manifest-entity-row {
+      column-gap: 0.5rem;
+      grid-template-columns: 4.5rem minmax(0, 1fr);
+      row-gap: 0.15rem;
+    }
+
+    .manifest-entity-link,
+    .manifest-entity-name {
+      grid-column: 2;
+    }
   }
 }
 </style>

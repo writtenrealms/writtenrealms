@@ -59,12 +59,14 @@ For existing triggers:
 
 - use **Copy YAML** to get an updateable manifest
 - use **Copy Delete YAML** to get a delete manifest
-- keep `metadata.key` or `metadata.id` when updating or deleting
+- keep `metadata.uid` when updating or deleting; local `metadata.key` and
+  `metadata.id` references also work
 
 For new triggers:
 
 - start from the room template
-- do not include `metadata.key` or `metadata.id`
+- do not include the original trigger's `metadata.uid`, `metadata.key`, or
+  `metadata.id` when copying an existing trigger to make a new one
 
 ## Room YAML And Trigger YAML Are Separate
 
@@ -131,11 +133,28 @@ What this does:
 
 - `world`: recommended. Must match the world you are editing.
 - `name`: display name shown in builder UI.
+- `uid`: permanent UUID, generated automatically on creation and included in
+  copied YAML and world exports. It identifies the trigger within its world.
 - `id`: optional numeric trigger id for update or delete.
 - `key`: optional `trigger.<id>` key for update or delete.
 
-Use either `metadata.id` or `metadata.key` to target an existing trigger.
-If neither is present, the manifest creates a new trigger.
+Keep `metadata.uid` unchanged when renaming a trigger, changing its matcher or
+target, or exporting it to another server. On import, an existing UID updates
+that trigger in the selected world; a new UID creates it. Separate triggers
+may have identical names, targets, and matchers because their UIDs differ.
+Family imports resolve UIDs separately in each declared world scope.
+
+`metadata.id` and `metadata.key` remain local update/delete references. If you
+include them alongside `uid`, all identifiers must agree. Full-world exports
+omit these database references, so a different destination world ID needs no
+manual trigger edits.
+
+Older manifests without any identity fields use exact matching on name,
+scope, type, target, event, and matcher. No match creates a trigger; one match
+updates it. Multiple matches, or multiple unidentified documents resolving to
+the same trigger in one import, fail and roll back the submission. Copy fresh
+YAML to obtain UIDs before renaming or retargeting existing triggers. To create
+an intentionally identical second trigger, supply a newly generated UUID.
 
 ### `spec`
 
@@ -1651,7 +1670,7 @@ cooldown.
 The safest update path is:
 
 1. copy the existing trigger YAML from **Rooms > Triggers**
-2. keep `metadata.key` or `metadata.id`
+2. keep `metadata.uid` (and any existing local `metadata.key` or `metadata.id`)
 3. change the fields you want
 4. re-apply in **World > Edit World**
 

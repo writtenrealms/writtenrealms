@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import random
+import uuid
 
 from croniter import croniter
 
@@ -904,6 +905,7 @@ class Trigger(AdventBaseModel):
         'worlds.World',
         on_delete=models.CASCADE,
         related_name='triggers')
+    uid = models.UUIDField(default=uuid.uuid4, editable=False)
 
     target_type = models.ForeignKey(
         ContentType,
@@ -944,6 +946,12 @@ class Trigger(AdventBaseModel):
     is_active = models.BooleanField(default=True)
 
     class Meta(AdventBaseModel.Meta):
+        constraints = [
+            models.UniqueConstraint(
+                fields=['world', 'uid'],
+                name='trigger_world_uid_unique',
+            ),
+        ]
         indexes = [
             models.Index(
                 fields=[

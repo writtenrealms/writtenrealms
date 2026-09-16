@@ -11,9 +11,10 @@ from config import constants as api_consts
 from builders.models import HousingLease
 from core.serializers import ref_field, ReferenceField
 from core.economy import format_currency
+from core.world_config import inherited_system_config
 from spawns.models import Item, Player, PlayerEvent, Clan, ClanMembership
 from spawns.serializers import PlayerSerializer
-from spawns.wallet import WalletError, balance_map, mutate_balances
+from spawns.wallet import WalletError, mutate_balances
 from system.models import EdeusUniques, Nexus
 from users import serializers as user_serializers
 from worlds.models import World, Room
@@ -364,7 +365,9 @@ class ClanRegisterDeserializer(serializers.Serializer):
 
     def validate_player(self, value):
         try:
-            player = Player.objects.get(pk=value)
+            player = Player.objects.select_related(
+                "world__context__instance_of",
+            ).get(pk=value)
         except Player.DoesNotExist:
             raise serializers.ValidationError(
                 "Invalid player ID.")
@@ -375,15 +378,19 @@ class ClanRegisterDeserializer(serializers.Serializer):
         player = data['player']
         data['clan'] = None
 
-        config = player.world.context.config
+        config = inherited_system_config(player.world)
         cost = int(config.clan_registration_cost or 0)
         currency = config.clan_registration_currency
         if cost and currency is None:
             raise serializers.ValidationError(
                 "Clan registration currency is not configured.")
-        if cost and cost > balance_map(player).get(currency.code, 0):
-            raise serializers.ValidationError(
-                f"Registering a clan costs {format_currency(cost, currency)}.")
+        if cost:
+            balance = player.currency_balances.filter(currency=currency).values_list(
+                "amount", flat=True,
+            ).first() or 0
+            if cost > balance:
+                raise serializers.ValidationError(
+                    f"Registering a clan costs {format_currency(cost, currency)}.")
         data['cost'] = cost
         data['currency'] = currency
 

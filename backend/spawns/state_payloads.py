@@ -1200,6 +1200,9 @@ def serialize_world(world: World) -> Dict:
     data["announce_duel_results"] = bool(
         inherited_config and inherited_config.announce_duel_results
     )
+    data["flee_to_unknown_rooms"] = bool(
+        inherited_config and inherited_config.flee_to_unknown_rooms
+    )
 
     if not data.get("context"):
         data["context"] = world.context.key if world.context else world.key

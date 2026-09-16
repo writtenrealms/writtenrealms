@@ -546,6 +546,73 @@ World export includes mob definitions as `kind: mobdefinition` documents, so a
 definition authored in one world can be copied into another world through
 **World > Edit**.
 
+Full-world and family exports include empty `loot`, `traits`, `initial_state`,
+`combat.abilities`, and `combat.engage_when` values when those settings have
+been cleared. Reimporting therefore removes the old values at the destination.
+For partial edits, omit a field to preserve it, or use the explicit empty
+value to clear it:
+
+```yaml
+spec:
+  loot: {}
+  traits: []
+  initial_state: {}
+  combat:
+    abilities: []
+    engage_when: {}
+```
+
+Clearing `initial_state` affects future spawns only; existing mobs keep their
+live character state. Unchanged reimports do not resync mobs solely because
+these empty values are present.
+
+Full exports also include `rewards.currencies: {}` and `factions: {}` when
+the definition has none, and `null` for each absent base-property override.
+Reimporting clears the destination's previous rewards, factions, and property
+overrides. In a partial edit, omission still preserves the current value:
+
+```yaml
+spec:
+  rewards:
+    currencies: {}
+  factions: {}
+  health_max: null
+  target_priority: null
+  hit_msg_first: null
+  hit_msg_third: null
+```
+
+`null` removes that property override so the normal mob default applies.
+Explicit `0`, `false`, and empty strings remain authored values. The same
+reset works for properties nested under `combat`, including `combat.health`
+as an alias for `health_max`. Supplying `rewards.currencies` or `factions`
+replaces that definition's corresponding set, so removed entries do not linger.
+All faction assignments on the definition are authored content, regardless of
+their stored source tag. Existing mobs receive the updated definition rewards,
+properties, and factions through the normal synchronization; faction overrides
+added separately to live mobs remain intact. Unchanged reimports keep relation
+rows and skip synchronization, preserving current mob health as well.
+
+Full-world and family exports explicitly include each mob's `merchant`,
+`crafting`, and `trainer` services. An unassigned service has `profile: null`,
+so reimporting clears an attachment removed locally. The service's
+`availability` setting is preserved even when no profile is assigned. Removed
+services stop being offered by existing spawned mobs, including those in
+instances; shared profile catalogs remain available for other providers.
+
+In a partial mob manifest, omit a service to leave it unchanged, or set its
+`profile: null` to remove only that attachment. Updating only `availability`
+keeps the current profile. For example:
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: artisan
+spec:
+  merchant:
+    profile: null
+```
+
 ## Ability Trainers
 
 A mob definition can provide a reusable Trainer Profile when training should
