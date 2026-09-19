@@ -38,6 +38,8 @@ const routes = [
 
 
   // Auth
+  { path: '/auth/wr1/start', name: 'wr1-start', component: () => import('@/views/auth/WR1SignIn.vue') },
+  { path: '/auth/wr1/callback', name: 'wr1-callback', component: () => import('@/views/auth/WR1SignIn.vue') },
   { path: '/login', name: 'login', component: () => import('@/views/auth/Login.vue') },
   { path: '/signup', name: 'signup', component: () => import('@/views/auth/SignUp.vue') },
   { path: '/forgot-password', name: 'forgot-password', component: () => import('@/views/auth/ForgotPassword.vue') },

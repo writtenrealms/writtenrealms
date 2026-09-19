@@ -1,6 +1,7 @@
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.db import models
+from django.db.models.functions import Upper
 from django.utils.translation import gettext_lazy as _
 
 from config import constants as api_consts
@@ -100,6 +101,14 @@ class User(AbstractUser):
 
     objects = UserManager()
 
+    class Meta:
+        verbose_name = _('user')
+        verbose_name_plural = _('users')
+        abstract = False
+        constraints = [
+            models.UniqueConstraint(Upper('email'), name='users_email_ci_unique'),
+        ]
+
     @property
     def key(self):
         return "user.%s" % self.id
@@ -151,3 +160,33 @@ class LoginLinkRequest(BaseModel):
     code_hash = models.CharField(max_length=64, db_index=True)
     used_ts = models.DateTimeField(**optional)
     expires_ts = models.DateTimeField(db_index=True)
+
+
+class ExternalIdentity(BaseModel):
+    issuer = models.CharField(max_length=255)
+    subject = models.CharField(max_length=64)
+    user = models.ForeignKey(User, on_delete=models.CASCADE,
+                             related_name='external_identities')
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['issuer', 'subject'], name='users_external_identity_unique')]
+
+
+class WR1SignIn(models.Model):
+    state_hash = models.CharField(max_length=64, unique=True)
+    browser_hash = models.CharField(max_length=64, db_index=True)
+    verifier = models.CharField(max_length=128)
+    issuer = models.CharField(max_length=255)
+    client_id = models.CharField(max_length=128)
+    redirect_uri = models.CharField(max_length=2048)
+    world = models.ForeignKey('worlds.World', on_delete=models.CASCADE)
+    status = models.CharField(max_length=16, default='pending')
+    expires_ts = models.DateTimeField(db_index=True)
+    subject = models.CharField(max_length=64, blank=True)
+    email = models.EmailField(max_length=255, blank=True)
+    email_verified = models.BooleanField(default=False)
+    email_proved = models.BooleanField(default=False)
+    proof_hash = models.CharField(max_length=64, blank=True)
+    proof_sent_ts = models.DateTimeField(null=True, blank=True)
+    proof_attempts = models.PositiveSmallIntegerField(default=0)

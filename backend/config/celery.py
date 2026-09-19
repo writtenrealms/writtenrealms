@@ -36,6 +36,10 @@ def _spawn_plan_interval_seconds() -> float:
 
 
 app.conf.beat_schedule = {
+    'cleanup-wr1-sign-ins': {
+        'task': 'users.tasks.cleanup_wr1_sign_ins',
+        'schedule': crontab(minute='*/10'),
+    },
     'recover-instance-time': {
         'task': 'spawns.tasks.recover_instance_time',
         'schedule': _heartbeat_interval_seconds(),

@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Start/reuse the two local stacks and seed only named bridge test fixtures."""
+import argparse
+import http.cookiejar
+import json
+import os
+from pathlib import Path
+import secrets
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+ROOT = Path(__file__).resolve().parents[1]
+ALPHA = ROOT.parent / 'Advent'
+ENV_FILE = ROOT / '.env.wr1-bridge.local'
+PASSWORD = 'alpha-bridge-local'
+ORIGIN = 'http://localhost:5200'
+ACCOUNTS = ('player', 'first-visit', 'collision', 'unconfirmed', 'api-check')
+
+
+def run(args, cwd=ROOT, capture=False, **kwargs):
+    result = subprocess.run(args, cwd=cwd, check=True, text=True,
+                            stdout=subprocess.PIPE if capture else None, **kwargs)
+    return result.stdout if capture else None
+
+
+def compose(which, *args):
+    if which == 'alpha':
+        return ['docker', 'compose', '--project-directory', str(ALPHA),
+                '-f', str(ALPHA / 'docker-compose.yml'),
+                '-f', str(ROOT / 'compose/wr1-bridge-alpha.yml'), *args]
+    return ['docker', 'compose', '--project-directory', str(ROOT),
+            '-f', str(ROOT / 'docker-compose.yml'),
+            '-f', str(ROOT / 'docker-compose.mount.yml'),
+            '-f', str(ROOT / 'docker-compose.wr1-bridge.yml'), *args]
+
+
+def configure():
+    if not (ROOT / '.env').exists():
+        raise RuntimeError('Configure Core .env first, following docs/dev/environment-setup.md.')
+    if not (ALPHA / 'docker-compose.yml').exists() or not (ROOT.parent / 'herald').is_dir():
+        raise RuntimeError('Keep Advent, herald, and writtenrealms as sibling checkouts.')
+    if os.environ.get('DOCKER_CONTEXT') or not os.environ.get('DOCKER_HOST'):
+        endpoint = run(['docker', 'context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'], capture=True).strip()
+    else:
+        endpoint = os.environ['DOCKER_HOST']
+    if not endpoint.startswith('unix://'):
+        raise RuntimeError('This helper only operates on a local Unix-socket Docker daemon.')
+    if not ENV_FILE.exists():
+        fd = os.open(ENV_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w') as handle:
+            handle.write('WR_BRIDGE_LOCAL_SECRET=' + secrets.token_urlsafe(48) + '\n')
+    values = dict(line.split('=', 1) for line in ENV_FILE.read_text().splitlines() if line and not line.startswith('#'))
+    os.environ['WR_BRIDGE_LOCAL_SECRET'] = values['WR_BRIDGE_LOCAL_SECRET']
+
+
+def python(which, service, source):
+    bootstrap = 'import django; django.setup()\n'
+    return run(compose(which, 'exec', '-T', service, 'python', '-'), capture=True,
+               input=bootstrap + source).strip()
+
+
+def seed_core():
+    result = python('core', 'backend', '''
+from django.conf import settings
+from django.db import transaction
+from users.models import User
+from worlds.models import World
+import json
+assert settings.DEBUG and not settings.SEND_EMAIL
+assert settings.DATABASES['default']['HOST'] == 'db'
+with transaction.atomic():
+    owner, created = User.objects.get_or_create(email='bridge-owner@example.test', defaults={'username': 'wr_bridge_owner', 'password': '!', 'is_confirmed': True})
+    assert owner.username == 'wr_bridge_owner', 'Local fixture identity collision; no user was overwritten.'
+    user, _ = User.objects.get_or_create(email='bridge-collision@example.test', defaults={'password': '!', 'is_confirmed': True})
+    world = World.objects.filter(author=owner, name='Alpha Bridge Test', context__isnull=True).first()
+    if world is None:
+        world = World.objects.new_world(name='Alpha Bridge Test', author=owner, is_public=True, description='Local Alpha-to-Core sign-in test world.')
+    print(json.dumps({'world': world.pk}))
+''')
+    return json.loads(result)['world']
+
+
+def fixture_world():
+    return int(python('core', 'backend', '''
+from worlds.models import World
+print(World.objects.get(author__email='bridge-owner@example.test', name='Alpha Bridge Test', context__isnull=True).pk)
+'''))
+
+
+def seed_alpha():
+    python('alpha', 'api', '''
+import os
+from django.conf import settings
+from django.db import transaction
+from users.models import User
+assert os.environ.get('WR_ENV') == 'local' and not settings.SEND_EMAIL
+assert settings.DATABASES['default']['HOST'] == 'postgres'
+with transaction.atomic():
+    for suffix in %r:
+        username = 'wr_bridge_' + suffix.replace('-', '_')
+        user, created = User.objects.get_or_create(email='bridge-' + suffix + '@example.test', defaults={'username': username, 'is_confirmed': suffix != 'unconfirmed'})
+        assert user.username == username, 'Local fixture identity collision; no user was overwritten.'
+        if created:
+            user.set_password(%r)
+            user.save(update_fields=['password'])
+''' % (ACCOUNTS, PASSWORD))
+
+
+def set_cards(world):
+    os.environ['WR_BRIDGE_LOCAL_CARDS'] = json.dumps([{'id': str(world), 'name': 'Alpha Bridge Test'}])
+
+
+def wait_http(url):
+    for _ in range(90):
+        try:
+            with urllib.request.urlopen(url, timeout=2) as response:
+                if response.status == 200:
+                    return
+        except (OSError, urllib.error.URLError):
+            pass
+        time.sleep(1)
+    raise RuntimeError('Not ready: ' + url)
+
+
+def up():
+    exists = subprocess.run(['docker', 'network', 'inspect', 'wr1-bridge-local'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    if not exists:
+        run(['docker', 'network', 'create', 'wr1-bridge-local'])
+    run(compose('core', 'up', '-d', '--build'))
+    wait_http('http://localhost:8000/api/v1/lobby/homedata/')
+    world = seed_core()
+    set_cards(world)
+    run(compose('alpha', 'up', '-d', '--build'))
+    run(compose('alpha', 'exec', '-T', 'api', 'python', 'manage.py', 'migrate', '--noinput'))
+    seed_alpha()
+    wait_http('http://localhost/forge/api/v1/lobby/homedata/')
+    wait_http('http://localhost:5173')
+    wait_http(ORIGIN)
+    print_links(world)
+
+
+def print_links(world):
+    print('Alpha login: http://localhost:5173/login')
+    print('Confirmed account: bridge-player@example.test')
+    print('Fresh first visit: bridge-first-visit@example.test')
+    print('Existing Core email: bridge-collision@example.test')
+    print('Unconfirmed Alpha email: bridge-unconfirmed@example.test')
+    print('Local fixture password: ' + PASSWORD)
+    print('Core world: ' + ORIGIN + '/auth/wr1/start?world=' + str(world))
+    print('The Alpha lobby also contains the Core world card.')
+    print('Email codes are printed in Core backend logs; no email is sent.')
+
+
+def smoke():
+    world = fixture_world()
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    def post(url, data, token=None):
+        headers = {'Content-Type': 'application/json', 'Origin': ORIGIN}
+        if token:
+            headers['Authorization'] = token
+        response = opener.open(urllib.request.Request(url, json.dumps(data).encode(), headers), timeout=15)
+        return json.load(response)
+    alpha = 'http://localhost/forge/api/v1/'
+    core = ORIGIN + '/api/v1/auth/wr1/'
+    token = post(alpha + 'auth/login/', {'email': 'bridge-api-check@example.test', 'password': PASSWORD})['token']
+    identities = []
+    for _ in range(2):
+        start = post(core + 'start/', {'world': world})
+        params = {k: values[0] for k, values in urllib.parse.parse_qs(urllib.parse.urlsplit(start['authorization_url']).query).items()}
+        grant = post(alpha + 'auth/core/authorize/', params, 'JWT ' + token)
+        callback = {k: values[0] for k, values in urllib.parse.parse_qs(urllib.parse.urlsplit(grant['redirect_url']).query).items()}
+        outcome = post(core + 'callback/', callback)
+        assert outcome['status'] == 'ready', outcome['status']
+        result = post(core + 'finish/', {'state': callback['state']})
+        assert result['status'] == 'authenticated'
+        assert result['destination'] == '/worlds/' + str(world)
+        req = urllib.request.Request('http://localhost:8000/api/v1/user/', headers={'Authorization': 'Bearer ' + result['access']})
+        user = json.load(opener.open(req, timeout=10))
+        assert user['email'] == 'bridge-api-check@example.test'
+        refreshed = post('http://localhost:8000/api/v1/auth/refresh/', {'refresh': result['refresh']})
+        assert refreshed['access']
+        identities.append(user['id'])
+        try:
+            post(core + 'finish/', {'state': callback['state']})
+        except urllib.error.HTTPError as error:
+            assert error.code == 400
+        else:
+            raise AssertionError('Completed sign-in was replayable')
+    assert identities[0] == identities[1]
+    print('PASS: real local WR1 exchange, Core access/refresh tokens, stable repeat identity, world destination, and replay rejection.')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', choices=['up', 'smoke', 'status', 'stop'])
+    args = parser.parse_args()
+    configure()
+    if args.command == 'up':
+        up()
+    elif args.command == 'smoke':
+        smoke()
+    elif args.command == 'stop':
+        run(compose('alpha', 'stop'))
+        run(compose('core', 'stop'))
+    else:
+        run(compose('core', 'ps'))
+        run(compose('alpha', 'ps'))
+        print_links(fixture_world())
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (RuntimeError, subprocess.CalledProcessError) as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)

@@ -17,11 +17,28 @@ const app = createApp(App)
   .use(router)
   .use(store);
 
-if (GOOGLE_AUTH_ENABLED) {
-  app.use(vue3GoogleLogin, {
-    clientId: GOOGLE_CLIENT_ID,
-  });
-}
+let pageResourcesInitialized = false;
+const initializePageResources = (path: string) => {
+  // Callback parameters must be removed before loading third-party scripts.
+  if (pageResourcesInitialized || path.startsWith('/auth/wr1/')) return;
+  pageResourcesInitialized = true;
+  const font = document.createElement('link');
+  font.rel = 'stylesheet';
+  font.href = 'https://fonts.googleapis.com/css?family=Roboto+Slab:400,300,100|Roboto+Mono';
+  document.head.appendChild(font);
+  const typekit = document.createElement('script');
+  typekit.src = 'https://use.typekit.net/zcm6whn.js';
+  typekit.onload = () => { try { (window as any).Typekit.load({ async: true }); } catch (e) {} };
+  document.head.appendChild(typekit);
+  const tween = document.createElement('script');
+  tween.src = 'https://cdnjs.cloudflare.com/ajax/libs/gsap/2.1.3/TweenLite.min.js';
+  document.head.appendChild(tween);
+  if (GOOGLE_AUTH_ENABLED) {
+    app.use(vue3GoogleLogin, { clientId: GOOGLE_CLIENT_ID });
+  }
+};
+initializePageResources(window.location.pathname);
+router.afterEach(to => initializePageResources(to.path));
 
 app
   .use(FloatingVue)

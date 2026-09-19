@@ -8,11 +8,18 @@ from quests import views as quest_views
 from spawns import views as spawn_views
 from system import views as system_views
 from users import views as user_views
+from users import wr1_sso
 from worlds import views as world_views
 
 
 # /api/v1/ non-router URLs
 api_v1_urls = [
+
+    path('auth/wr1/start/', wr1_sso.Start.as_view(), name='wr1-start'),
+    path('auth/wr1/callback/', wr1_sso.Callback.as_view(), name='wr1-callback'),
+    path('auth/wr1/finish/', wr1_sso.Finish.as_view(), name='wr1-finish'),
+    path('auth/wr1/status/', wr1_sso.Status.as_view(), name='wr1-status'),
+    path('auth/wr1/email/', wr1_sso.SendProof.as_view(), name='wr1-email'),
 
     path('user/', user_views.LoggedInUserDetail.as_view(), name='logged-in-user'),
     path('user/<pk>/', user_views.user_detail, name='user-detail'),

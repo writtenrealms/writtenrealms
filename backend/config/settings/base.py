@@ -155,6 +155,16 @@ SIMPLE_JWT = {
 
 LOGIN_LINK_TTL_SECONDS = 15 * 60
 
+# Alpha and Core retain independent login tokens and signing secrets.
+WR1_SSO_ENABLED = os.environ.get('WR1_SSO_ENABLED', '0') == '1'
+WR1_SSO_ISSUER = os.environ.get('WR1_SSO_ISSUER', '')
+WR1_SSO_AUTHORIZE_URL = os.environ.get('WR1_SSO_AUTHORIZE_URL', '')
+WR1_SSO_EXCHANGE_URL = os.environ.get('WR1_SSO_EXCHANGE_URL', '')
+WR1_SSO_CLIENT_ID = os.environ.get('WR1_SSO_CLIENT_ID', 'wr-core')
+WR1_SSO_CLIENT_SECRET = os.environ.get('WR1_SSO_CLIENT_SECRET', '')
+WR1_SSO_REDIRECT_URI = os.environ.get('WR1_SSO_REDIRECT_URI', '')
+WR1_SSO_ALLOW_INSECURE_LOCAL = os.environ.get('WR1_SSO_ALLOW_INSECURE_LOCAL', '0') == '1'
+
 # Internationalization
 # https://docs.djangoproject.com/en/1.10/topics/i18n/
 

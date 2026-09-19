@@ -1,0 +1,30 @@
+# Used with ../Advent/docker-compose.yml; relative mounts resolve from Advent.
+services:
+  api:
+    environment:
+      ALLOWED_HOSTS: localhost,127.0.0.1,api,wr1-api
+      WR_CORE_SSO_ENABLED: "1"
+      WR_CORE_SSO_ISSUER: http://localhost:5173
+      WR_CORE_SSO_CLIENT_ID: wr-core-local
+      WR_CORE_SSO_CLIENT_SECRET: ${WR_BRIDGE_LOCAL_SECRET:?Run scripts/wr1-bridge-local up}
+      WR_CORE_SSO_REDIRECT_URI: http://localhost:5200/auth/wr1/callback
+      WR_CORE_SSO_FEATURED_WORLDS: ${WR_BRIDGE_LOCAL_CARDS:-[]}
+    networks:
+      default:
+      wr1-bridge:
+        aliases: [wr1-api]
+  bridge-herald:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ../herald:/app
+      - bridge-herald-modules:/app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+    command: sh -c "npm ci && npm run dev-local -- --host 0.0.0.0 --port 5173 --strictPort"
+networks:
+  wr1-bridge:
+    external: true
+    name: wr1-bridge-local
+volumes:
+  bridge-herald-modules:

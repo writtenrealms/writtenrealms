@@ -12,16 +12,13 @@
     <meta name="”description”"
       content="Written Realms is a platform for playing immersive text-based adventure games. It is a modern re-imagining of MUDs (multi-user dungeons)." />
 
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css?family=Roboto+Slab:400,300,100|Roboto+Mono" rel="stylesheet" />
-
-    <!-- Typekit -->
-    <script src="https://use.typekit.net/zcm6whn.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/2.1.3/TweenLite.min.js"></script>
     <script>
-      try {
-        Typekit.load({ async: true });
-      } catch (e) { }
+      if (location.pathname.startsWith('/auth/wr1/')) {
+        const referrer = document.createElement('meta');
+        referrer.name = 'referrer';
+        referrer.content = 'no-referrer';
+        document.head.appendChild(referrer);
+      }
     </script>
   </head>
 

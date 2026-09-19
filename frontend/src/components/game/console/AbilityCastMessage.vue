@@ -1,6 +1,6 @@
 <template>
   <div v-if="parts">
-    <template v-for="(part, index) in parts" :key="index">
+    <template v-for="part in parts" :key="parts.indexOf(part)">
       <strong v-if="part.emphasized" class="color-primary">{{ part.text }}</strong>
       <template v-else>{{ part.text }}</template>
     </template>

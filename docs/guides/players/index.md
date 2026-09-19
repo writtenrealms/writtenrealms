@@ -30,6 +30,23 @@ email and account verification are managed separately from those settings;
 profile edits cannot change them. Email login links establish ownership of the
 address used to sign in. Contact staff if you need help changing that address.
 
+## Signing in from Alpha
+
+When Alpha offers a Core world in **Featured Worlds**, open its card to enter
+Core using your Alpha account. If you are signed out of Alpha, log in there
+first; the handoff then continues to the selected Core world.
+
+A confirmed Alpha email can create your Core account without another email
+step. If you already have a Core account with that address, or your Alpha email
+is unconfirmed, Core asks for a one-time eight-digit email code before connecting
+the accounts. Keep the Core tab open and enter the code there. Later visits use
+the saved connection. If the browser is signed into a different Core account,
+Core asks before switching accounts.
+
+Characters and progress stay separate between Alpha and Core. Signing out of
+one site does not sign you out of the other. If a handoff expires, return to
+Alpha and open the world again; ordinary Core email login also remains available.
+
 ## Client Preferences
 
 Open the game menu, choose **Settings**, and use **Save Changes** to apply

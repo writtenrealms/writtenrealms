@@ -1,0 +1,35 @@
+# Opt-in local bridge. Production never reads these settings.
+x-local-environment: &local-environment
+  DJANGO_SETTINGS_MODULE: backend.config.settings.container
+  CHANNEL_REDIS_HOST: redis
+  CELERY_BROKER_URL: amqp://rabbitmq:5672
+  CELERY_RESULT_BACKEND: redis://redis-celery:6379/0
+
+services:
+  backend:
+    environment:
+      <<: *local-environment
+      WR1_SSO_ENABLED: "1"
+      WR1_SSO_ISSUER: http://localhost:5173
+      WR1_SSO_AUTHORIZE_URL: http://localhost:5173/auth/core/authorize
+      WR1_SSO_EXCHANGE_URL: http://wr1-api:8000/api/v1/auth/core/exchange/
+      WR1_SSO_CLIENT_ID: wr-core-local
+      WR1_SSO_CLIENT_SECRET: ${WR_BRIDGE_LOCAL_SECRET:?Run scripts/wr1-bridge-local up}
+      WR1_SSO_REDIRECT_URI: http://localhost:5200/auth/wr1/callback
+      WR1_SSO_ALLOW_INSECURE_LOCAL: "1"
+    networks: [default, wr1-bridge]
+  celery-worker:
+    environment: *local-environment
+  celery-beat:
+    environment: *local-environment
+  fastapi:
+    environment:
+      CHANNEL_REDIS_HOST: redis
+      CELERY_BROKER_URL: amqp://rabbitmq:5672
+  frontend:
+    environment:
+      WR_CORE_API_PROXY: http://backend:8000
+networks:
+  wr1-bridge:
+    external: true
+    name: wr1-bridge-local
