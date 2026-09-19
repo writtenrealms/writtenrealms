@@ -14,6 +14,7 @@ import datetime
 import os
 
 from corsheaders.defaults import default_headers
+from core.access_policy import environment_allowlist
 
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
@@ -30,6 +31,7 @@ SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
+ACCESS_EMAIL_ALLOWLIST = environment_allowlist()
 
 ALLOWED_HOSTS = []
 
@@ -64,8 +66,8 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
+        'users.access.AllowedEmailJWTAuthentication',
+        'users.access.AllowedEmailSessionAuthentication',
     ],
     'DEFAULT_PAGINATION_CLASS': 'core.pagination.PageNumberPagination',
     'PAGE_SIZE': 10,
@@ -146,6 +148,7 @@ ONE_DAY = 60 * 60 * 24 * 1
 JWT_EXP = ONE_DAY * 7
 JWT_REF = ONE_DAY * 14
 SIMPLE_JWT = {
+    'TOKEN_REFRESH_SERIALIZER': 'users.access.AllowedEmailTokenRefreshSerializer',
     'SIGNING_KEY': os.environ.get('JWT_SECRET'),
     'ALGORITHM': 'HS256',
     'ACCESS_TOKEN_LIFETIME': datetime.timedelta(seconds=JWT_EXP),
@@ -186,6 +189,7 @@ STATIC_URL = '/static/'
 
 # Custom Auth
 AUTH_USER_MODEL = 'users.User'
+AUTHENTICATION_BACKENDS = ['users.access.AllowedEmailModelBackend']
 
 # CORS
 CORS_ORIGIN_ALLOW_ALL = True

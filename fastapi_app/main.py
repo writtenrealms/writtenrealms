@@ -8,6 +8,9 @@ This provides WebSocket connectivity for the Forge, handling:
 """
 import logging
 import os
+from backend.core.access_policy import environment_allowlist, token_is_allowed
+
+ACCESS_EMAIL_ALLOWLIST = environment_allowlist()
 
 from fastapi import FastAPI, WebSocket
 
@@ -76,6 +79,8 @@ def _decode_token(token: str) -> dict | None:
     try:
         # SimpleJWT uses HS256 by default with the Django SECRET_KEY
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if not token_is_allowed(payload, ACCESS_EMAIL_ALLOWLIST):
+            return None
         logger.debug(f"Successfully decoded token for user_id: {payload.get('user_id')}")
         return payload
     except PyJWTError as e:

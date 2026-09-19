@@ -13,6 +13,7 @@ from google.auth.transport import requests as gauth_requests
 from rest_framework import serializers, validators
 
 from core import mail
+from users.access import require_allowed_email
 from users.models import (
     EmailConfirmation,
     LoginLinkRequest)
@@ -72,6 +73,7 @@ def _hash_token(token):
     return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 def _create_login_link_for_user(user):
+    require_allowed_email(user.email)
     # Invalidate any outstanding login links for this user.
     LoginLinkRequest.objects.filter(
         user=user,
@@ -92,6 +94,7 @@ class EmailLoginRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
     def validate_email(self, value):
+        require_allowed_email(value)
         try:
             self.user = User.objects.get(email__iexact=value)
         except User.DoesNotExist:
@@ -132,6 +135,7 @@ class EmailLoginConfirmSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         login_request = self.login_request
+        require_allowed_email(login_request.user.email)
         login_request.used_ts = timezone.now()
         login_request.save(update_fields=['used_ts'])
 
@@ -177,6 +181,7 @@ class SignupSerializer(serializers.Serializer):
         return None if not value else value
 
     def validate_email(self, value):
+        require_allowed_email(value)
         if User.objects.filter(email__iexact=value).exists():
             raise serializers.ValidationError("Email already registered.")
         return value
@@ -218,6 +223,7 @@ class EmailConfirmationSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         user = self.confirm_record.user
+        require_allowed_email(user.email)
         user.is_confirmed = True
         user.save()
         user.email_confirmations.all().delete()
@@ -245,6 +251,7 @@ class GoogleLoginDeserializer(serializers.Serializer):
         except ValueError:
             raise serializers.ValidationError("Invalid credential.")
 
+        require_allowed_email(idinfo.get('email'))
         self.user_info = {
             'email': idinfo.get('email'),
             'google_id': idinfo.get('sub'),

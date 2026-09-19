@@ -16,10 +16,13 @@ import logging
 import os
 import uuid
 
+from backend.core.access_policy import environment_allowlist, token_is_allowed
+
 from fastapi import WebSocket, WebSocketDisconnect
 import redis.asyncio as aioredis
 
 logger = logging.getLogger('game_ws')
+ACCESS_EMAIL_ALLOWLIST = environment_allowlist()
 
 # JWT configuration
 JWT_SECRET = os.getenv("JWT_SECRET", "")
@@ -43,7 +46,7 @@ def get_celery_app():
     if _celery_app is None:
         from celery import Celery
         _celery_app = Celery(broker=CELERY_BROKER_URL)
-        logger.info(f"Celery app initialized with broker: {CELERY_BROKER_URL}")
+        logger.info("Celery app initialized")
     return _celery_app
 
 
@@ -218,6 +221,8 @@ def _verify_token(token: str) -> int | None:
 
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if not token_is_allowed(payload, ACCESS_EMAIL_ALLOWLIST):
+            return None
         return payload.get("user_id")
     except PyJWTError as e:
         logger.error(f"JWT verification failed: {e}")

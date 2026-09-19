@@ -25,6 +25,13 @@ is unavailable.
 
 ## Account Preferences
 
+Some independently hosted servers require an invitation. On those servers,
+use an email address approved by the administrator when signing in or creating
+an account. Email, Google, and Alpha sign-in follow the same admission policy;
+guest play is unavailable. Contact the administrator if your address has not
+been admitted. An invitation grants access to the server; it does not grant
+builder or administrator permissions.
+
 The account menu lets you update your profile name and preferences. Your login
 email and account verification are managed separately from those settings;
 profile edits cannot change them. Email login links establish ownership of the

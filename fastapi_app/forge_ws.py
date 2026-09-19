@@ -49,7 +49,7 @@ def get_celery_app():
     if _celery_app is None:
         from celery import Celery
         _celery_app = Celery(broker=CELERY_BROKER_URL)
-        logger.info(f"Celery app initialized with broker: {CELERY_BROKER_URL}")
+        logger.info("Celery app initialized")
     return _celery_app
 
 

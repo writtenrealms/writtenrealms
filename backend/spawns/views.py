@@ -78,6 +78,10 @@ class PlayGame(APIView):
         except SiteControl.DoesNotExist:
             pass
 
+        # Guest accounts cannot satisfy an invitation-only email policy.
+        from users.access import require_allowed_email
+        require_allowed_email(None)
+
         # Create the intro world for this player
         intro_world = IntroConfig.objects.get().world
 

@@ -138,7 +138,31 @@ The underlying script is `scripts/reset-dev-db`. It stops the stack, deletes `./
 
 ## Production Deployment
 
+Servers may enable email admission restrictions with `WR_ACCESS_RESTRICTED=1`
+and a comma-separated `WR_ALLOWED_EMAILS`. Addresses are matched without case
+sensitivity. An enabled, empty list denies all accounts; the default is public
+registration. Pass both variables to Django, Celery, and the FastAPI gateway.
+Recreate those services after editing the list: this reloads the policy and
+disconnects existing WebSocket sessions. HTTP access is checked against the
+current account email without an additional database query. Gateways check the
+signed email claim when a connection authenticates. Older access tokens without
+that claim require a fresh login or token refresh when restrictions are enabled.
+Guest play is disabled on restricted servers. Keep the actual list and
+provider-specific operations instructions outside the public repository.
+
 For production:
+
+Use `DJANGO_SETTINGS_MODULE=backend.config.settings.production` with an HTTPS
+reverse proxy. In addition to the variables below, provide `ALLOWED_HOSTS`,
+`WR_SITE_BASE`, `POSTGRES_HOST`, `POSTGRES_PORT`, and `POSTGRES_SSLROOTCERT`.
+PostgreSQL connections verify the server certificate against that CA file.
+Provide a credentialed `CELERY_BROKER_URL` and shared `DJANGO_CACHE_URL` to all
+Django processes. Configure `CHANNEL_REDIS_HOST` for the gateway and workers.
+Enable transactional email with `WR_SEND_EMAIL=1`, `WR_AWS_ACCESS_KEY`,
+`WR_AWS_SECRET_KEY`, and `SYSTEM_EMAIL_FROM`. Both signing secrets must be at
+least 50 characters. Build the Vue application with deployment-specific
+`VITE_API_BASE` and `VITE_FORGE_WS_URI`; run the compiled output behind the
+proxy. Keep credentials, private infrastructure state, and backups outside Git.
 
 1. **Create a `.env` file** (or use your hosting provider's environment variable system)
 2. **Set all required variables** with production values

@@ -10,6 +10,7 @@ from system import views as system_views
 from users import views as user_views
 from users import wr1_sso
 from worlds import views as world_views
+from core.health import readiness
 
 
 # /api/v1/ non-router URLs
@@ -261,6 +262,7 @@ api_v1_urls = [
 ]
 
 urlpatterns = [
+    path('health/', readiness, name='readiness'),
     path('api-auth/', include('rest_framework.urls')),
     path('admin/', admin.site.urls),
     path('api/v1/', include(api_v1_urls)),

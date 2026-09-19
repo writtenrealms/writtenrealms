@@ -22,6 +22,7 @@ from core import mail
 from users.models import ExternalIdentity, User, WR1SignIn
 from users.serializers import UserSerializer
 from users.tokens import build_token_response
+from users.access import require_allowed_email
 from worlds.models import World
 
 
@@ -311,6 +312,7 @@ class Finish(BridgeView):
                 return Response(result)
             if not World.objects.filter(pk=attempt.world_id, is_public=True, context__isnull=True).exists():
                 fail('This Core world is no longer available.')
+            require_allowed_email(attempt.email)
             user = identity_user(attempt)
             if user:
                 user = User.objects.select_for_update().get(pk=user.pk)
