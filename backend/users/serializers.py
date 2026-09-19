@@ -25,8 +25,9 @@ class UserSerializer(serializers.ModelSerializer):
 
     is_admin = serializers.BooleanField(source='is_staff', read_only=True)
     num_players = serializers.SerializerMethodField()
-    email = serializers.EmailField(
-        validators=[validators.UniqueValidator(queryset=User.objects.all())])
+    # Account identity changes need their own verification flow. The profile
+    # editor only changes names and preferences, and may echo read-only fields.
+    email = serializers.EmailField(read_only=True)
     name = serializers.CharField(
         source='username',
         required=False,
@@ -48,6 +49,11 @@ class UserSerializer(serializers.ModelSerializer):
             'send_newsletter', 'use_grapevine', 'accessibility_mode',
             # patreon
             'name_recognition', 'multiplayer_worlds',
+        )
+        read_only_fields = (
+            'is_staff', 'is_temporary', 'is_confirmed', 'is_invalid',
+            'cod_accepted', 'date_joined', 'name_recognition',
+            'multiplayer_worlds',
         )
 
     def validate_name(self, value):

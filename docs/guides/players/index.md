@@ -23,6 +23,13 @@ logs are unaffected, and commands already in progress continue to run. The
 command works immediately, including while combat is paused or the connection
 is unavailable.
 
+## Account Preferences
+
+The account menu lets you update your profile name and preferences. Your login
+email and account verification are managed separately from those settings;
+profile edits cannot change them. Email login links establish ownership of the
+address used to sign in. Contact staff if you need help changing that address.
+
 ## Client Preferences
 
 Open the game menu, choose **Settings**, and use **Save Changes** to apply
