@@ -199,11 +199,7 @@ Important caveat:
 
 ## Prerequisites
 
-Run from the repo root:
-
-```bash
-cd /Users/teebes/code/writtenrealms
-```
+Run the following commands from the root of your Core checkout.
 
 Bring up the backend-side stack with bind mounts:
 

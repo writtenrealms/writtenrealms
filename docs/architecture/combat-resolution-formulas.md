@@ -17,11 +17,11 @@ safe for builders to tune.
 
 ## Related Documents
 
-- [combat-encounter-model.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-encounter-model.md)
-- [combat-buffs-and-effects.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-buffs-and-effects.md)
-- [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
-- [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
-- [wr1-archetype-world-reference.md](/Users/teebes/code/writtenrealms/docs/dev/wr1-archetype-world-reference.md)
+- [combat-encounter-model.md](combat-encounter-model.md)
+- [combat-buffs-and-effects.md](combat-buffs-and-effects.md)
+- [stats-formulas-and-classes.md](stats-formulas-and-classes.md)
+- [yaml-manifest-system.md](yaml-manifest-system.md)
+- [wr1-archetype-world-reference.md](../dev/wr1-archetype-world-reference.md)
 
 ## Status
 

@@ -18,10 +18,10 @@ This document specifies the target merchant model for WR2, including:
 Reference docs:
 
 - `.codex/skills/wr-transition/wr2-architecture.md`
-- [guided-random-item-definitions.md](/Users/teebes/code/writtenrealms/docs/architecture/guided-random-item-definitions.md)
-- [combat-encounter-model.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-encounter-model.md)
-- [currency-system.md](/Users/teebes/code/writtenrealms/docs/architecture/currency-system.md)
-- [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [guided-random-item-definitions.md](guided-random-item-definitions.md)
+- [combat-encounter-model.md](combat-encounter-model.md)
+- [currency-system.md](currency-system.md)
+- [yaml-manifest-system.md](yaml-manifest-system.md)
 
 ## Core Recommendation
 

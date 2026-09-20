@@ -26,11 +26,11 @@ The goal is to make abilities:
 
 Related documents:
 
-- [combat-encounter-model.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-encounter-model.md)
-- [combat-buffs-and-effects.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-buffs-and-effects.md)
-- [combat-resolution-formulas.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-resolution-formulas.md)
-- [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
-- [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [combat-encounter-model.md](combat-encounter-model.md)
+- [combat-buffs-and-effects.md](combat-buffs-and-effects.md)
+- [combat-resolution-formulas.md](combat-resolution-formulas.md)
+- [stats-formulas-and-classes.md](stats-formulas-and-classes.md)
+- [yaml-manifest-system.md](yaml-manifest-system.md)
 
 ## Current Status
 
@@ -908,7 +908,7 @@ Effects should be declarative runtime records with known hooks.
 
 The broader target model for buffs, debuffs, resource regeneration, stat
 modifiers, special status effects, and combat procs is covered in
-[combat-buffs-and-effects.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-buffs-and-effects.md).
+[combat-buffs-and-effects.md](combat-buffs-and-effects.md).
 This section keeps the ability-facing summary.
 
 Useful hook phases:

@@ -62,14 +62,14 @@ defines the target shape those pieces should move toward.
 ## Related Docs
 
 - `.codex/skills/wr-transition/wr2-architecture.md`
-- [spawn-plan-system.md](/Users/teebes/code/writtenrealms/docs/architecture/spawn-plan-system.md)
-- [scoped-state-system.md](/Users/teebes/code/writtenrealms/docs/architecture/scoped-state-system.md)
-- [quest-system-endstate.md](/Users/teebes/code/writtenrealms/docs/architecture/quest-system-endstate.md)
+- [spawn-plan-system.md](spawn-plan-system.md)
+- [scoped-state-system.md](scoped-state-system.md)
+- [quest-system-endstate.md](quest-system-endstate.md)
 - [condition-builder-guide.md](../guides/builders/condition-builder-guide.md)
 - [instance-builder-guide.md](../guides/builders/instance-builder-guide.md)
 - [duels.md](../guides/players/duels.md)
-- [currency-system.md](/Users/teebes/code/writtenrealms/docs/architecture/currency-system.md)
-- [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [currency-system.md](currency-system.md)
+- [yaml-manifest-system.md](yaml-manifest-system.md)
 - [deterministic-death-routing.md](deterministic-death-routing.md)
 
 ## Goals

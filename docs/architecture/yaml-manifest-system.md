@@ -744,18 +744,18 @@ Instance architecture, including inherited base-world content, instance-local
 layout/config overrides, goals, timers, leaderboards, and cleanup policy, lives
 in:
 
-- [docs/architecture/instance-system.md](/Users/teebes/code/writtenrealms/docs/architecture/instance-system.md)
+- [docs/architecture/instance-system.md](instance-system.md)
 - [docs/guides/builders/instance-builder-guide.md](../guides/builders/instance-builder-guide.md)
 
 Mob trait architecture, including the rename from the earlier draft term
 `affixes` to `traits`, lives in:
 
-- [docs/architecture/mob-traits.md](/Users/teebes/code/writtenrealms/docs/architecture/mob-traits.md)
+- [docs/architecture/mob-traits.md](mob-traits.md)
 
 Attack routine and dual-wielding architecture, including proposed manifest
 ownership for extra attacks and offhand weapon permissions, lives in:
 
-- [docs/architecture/attack-routines-and-dual-wielding.md](/Users/teebes/code/writtenrealms/docs/architecture/attack-routines-and-dual-wielding.md)
+- [docs/architecture/attack-routines-and-dual-wielding.md](attack-routines-and-dual-wielding.md)
 
 Builder-facing attack routine and dual-wielding authoring guidance lives in:
 
@@ -2483,9 +2483,9 @@ are defined, the world has no classes.
 
 For details and examples, see:
 
-- [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
+- [stats-formulas-and-classes.md](stats-formulas-and-classes.md)
 - [attributes-builder-guide.md](../guides/builders/attributes-builder-guide.md)
-- [wr1-archetype-world-reference.md](/Users/teebes/code/writtenrealms/docs/dev/wr1-archetype-world-reference.md)
+- [wr1-archetype-world-reference.md](../dev/wr1-archetype-world-reference.md)
 
 World manifests also support `spec.combat`, which holds the authored WR2
 combat formula system:
@@ -2499,7 +2499,7 @@ combat formula system:
 
 For details, see:
 
-- [combat-resolution-formulas.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-resolution-formulas.md)
+- [combat-resolution-formulas.md](combat-resolution-formulas.md)
 - [combat-formula-builder-guide.md](../guides/builders/combat-formula-builder-guide.md)
 
 Ability manifests do not have an `action_type` field. Targeting, out-of-combat

@@ -444,4 +444,4 @@ Project placement should follow current conventions:
 - Should item suggestions also choose default resilience, dodge, or health for
   armor pieces, or only direct `armor`?
 
-[mob-power]: /Users/teebes/code/writtenrealms/docs/architecture/mob-suggestions-and-power-budgeting.md
+[mob-power]: mob-suggestions-and-power-budgeting.md

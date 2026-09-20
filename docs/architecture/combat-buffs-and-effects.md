@@ -22,11 +22,11 @@ character is rooted.
 
 Related documents:
 
-- [combat-abilities-model.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-abilities-model.md)
-- [combat-encounter-model.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-encounter-model.md)
-- [combat-resolution-formulas.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-resolution-formulas.md)
-- [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
-- [scoped-state-system.md](/Users/teebes/code/writtenrealms/docs/architecture/scoped-state-system.md)
+- [combat-abilities-model.md](combat-abilities-model.md)
+- [combat-encounter-model.md](combat-encounter-model.md)
+- [combat-resolution-formulas.md](combat-resolution-formulas.md)
+- [stats-formulas-and-classes.md](stats-formulas-and-classes.md)
+- [scoped-state-system.md](scoped-state-system.md)
 
 ## Terminology
 

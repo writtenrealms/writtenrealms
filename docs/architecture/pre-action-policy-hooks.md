@@ -386,7 +386,7 @@ mobdefinition.guard}`.
 The WR1 exporter should emit policy triggers only where it can preserve the
 predicate exactly and should report unsupported rows for author review. The
 authoritative field-by-field mappings and unsupported condition list live in
-[yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md).
+[yaml-manifest-system.md](yaml-manifest-system.md).
 
 `RoomCommandCheck` is not equivalent to an ordinary `kind: command` trigger.
 The former vetoed already resolved commands, while the latter handles an

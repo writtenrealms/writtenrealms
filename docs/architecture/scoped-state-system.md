@@ -12,10 +12,10 @@ spawn plans, and instance resets.
 
 Related docs:
 
-- [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
-- [instance-system.md](/Users/teebes/code/writtenrealms/docs/architecture/instance-system.md)
+- [yaml-manifest-system.md](yaml-manifest-system.md)
+- [instance-system.md](instance-system.md)
 - [state-builder-guide.md](../guides/builders/state-builder-guide.md)
-- [ambient-command-issuers-plan.md](/Users/teebes/code/writtenrealms/docs/architecture/ambient-command-issuers-plan.md)
+- [ambient-command-issuers-plan.md](ambient-command-issuers-plan.md)
 - [deterministic-death-routing.md](deterministic-death-routing.md)
 
 ## Core Model

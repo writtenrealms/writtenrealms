@@ -326,7 +326,7 @@ Movement replacement is implemented through room-scoped policy triggers:
   policy path.
 
 Detailed movement behavior lives in
-[pre-action-policy-hooks.md](/Users/teebes/code/writtenrealms/docs/architecture/pre-action-policy-hooks.md).
+[pre-action-policy-hooks.md](pre-action-policy-hooks.md).
 
 Command gating remains a distinct future capability. An ordinary WR2
 `kind: command` trigger is not a replacement for `RoomCommandCheck`: command
@@ -342,7 +342,7 @@ WR1 conversion is an exporter concern, not a WR2 database migration:
 - WR2 imports only canonical room and trigger manifests into a fresh world
 
 The field-level mappings and unsupported cases are tracked in
-[yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md).
+[yaml-manifest-system.md](yaml-manifest-system.md).
 Do not reintroduce a compatibility model, predicate vocabulary, or state table
 to make export easier.
 

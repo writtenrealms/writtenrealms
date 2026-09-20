@@ -7,7 +7,7 @@ modifiers that make a spawned mob behave differently, such as `exploder`,
 
 Related combat-routine behavior, including dual-wielding mobs and multiattack
 traits, is covered in
-[attack-routines-and-dual-wielding.md](/Users/teebes/code/writtenrealms/docs/architecture/attack-routines-and-dual-wielding.md).
+[attack-routines-and-dual-wielding.md](attack-routines-and-dual-wielding.md).
 
 ## Decision Summary
 

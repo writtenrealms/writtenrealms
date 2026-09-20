@@ -18,7 +18,7 @@ The immediate goals are:
 Reference docs:
 
 - `.codex/skills/wr-transition/wr2-architecture.md`
-- [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [yaml-manifest-system.md](yaml-manifest-system.md)
 - [deterministic-death-routing.md](deterministic-death-routing.md)
 - [mob-definition-builder-guide.md](../guides/builders/mob-definition-builder-guide.md)
 - [instance-builder-guide.md](../guides/builders/instance-builder-guide.md)

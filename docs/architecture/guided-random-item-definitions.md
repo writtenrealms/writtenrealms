@@ -59,8 +59,8 @@ First-pass non-goals:
 
 Reference docs:
 
-- [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
-- [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [stats-formulas-and-classes.md](stats-formulas-and-classes.md)
+- [yaml-manifest-system.md](yaml-manifest-system.md)
 - [attributes-builder-guide.md](../guides/builders/attributes-builder-guide.md)
 - [item-definition-builder-guide.md](../guides/builders/item-definition-builder-guide.md)
 - `.codex/skills/wr-transition/wr2-architecture.md`
@@ -86,7 +86,7 @@ The repository now has the first guided-random implementation slice:
 - `/load item <slug-or-id>` spawns `ItemDefinition` rows.
 - Merchant stock uses `MerchantProfile` stock slots with item definitions or
   item bundles, as described in
-  [merchant-system.md](/Users/teebes/code/writtenrealms/docs/architecture/merchant-system.md).
+  [merchant-system.md](merchant-system.md).
 
 Remaining gaps before this is builder-complete:
 
@@ -478,7 +478,7 @@ model. Avoid a generic "target can be anything" field for the first pass unless
 the surrounding builder code already strongly prefers it.
 
 Merchant-specific authoring and restock behavior is specified in
-[merchant-system.md](/Users/teebes/code/writtenrealms/docs/architecture/merchant-system.md).
+[merchant-system.md](merchant-system.md).
 New merchant work should target `MerchantProfile` stock slots, not WR1-era
 merchant inventory tables.
 
@@ -659,6 +659,6 @@ procedural content engine.
 - Should bundle entries support "choose N distinct entries" immediately, or
   only one weighted roll per entry?
 - Merchant restock timing is specified in
-  [merchant-system.md](/Users/teebes/code/writtenrealms/docs/architecture/merchant-system.md).
+  [merchant-system.md](merchant-system.md).
 - Should player-facing item inspection show rolled attributes directly,
   or only the effective stats after formulas apply?

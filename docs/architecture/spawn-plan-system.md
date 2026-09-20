@@ -195,4 +195,4 @@ WR1 loader/rule export remains a one-way translation concern:
   they can be expressed in the WR2 condition DSL.
 
 The canonical WR1 export checklist lives in
-[yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md).
+[yaml-manifest-system.md](yaml-manifest-system.md).

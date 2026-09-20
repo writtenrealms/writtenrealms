@@ -13,16 +13,17 @@ flags and are not part of the default authored-world export contract.
 
 ## Exporter Location
 
-The exporter script lives in the Advent checkout:
+The exporter script lives in the sibling Advent checkout, relative to the Core
+repository root:
 
 ```text
-/Users/teebes/code/Advent/api/scripts/wr2_manifest_export.py
+../Advent/api/scripts/wr2_manifest_export.py
 ```
 
-Run it from the Advent API directory:
+Starting from the Core repository root, switch to the Advent API directory:
 
 ```bash
-cd /Users/teebes/code/Advent/api
+cd ../Advent/api
 python scripts/wr2_manifest_export.py <world_id> > /tmp/world.yaml
 ```
 
@@ -194,11 +195,11 @@ When ability schema or combat formula behavior changes in WR2, update the
 mapping in `serialize_skill_ability()` and the small helpers near it in the
 Advent exporter.
 
-Validate exporter changes at minimum with:
+From the Advent API directory, validate exporter changes at minimum with:
 
 ```bash
-python -m py_compile /Users/teebes/code/Advent/api/scripts/wr2_manifest_export.py
-python /Users/teebes/code/Advent/api/scripts/wr2_manifest_export.py --help
+python -m py_compile scripts/wr2_manifest_export.py
+python scripts/wr2_manifest_export.py --help
 ```
 
 For behavioral validation, export a known WR1 world, import the resulting YAML

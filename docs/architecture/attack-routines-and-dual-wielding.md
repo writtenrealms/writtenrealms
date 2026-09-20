@@ -10,13 +10,13 @@ world/class-controlled offhand weapon permission and offhand strike resolution.
 
 Related documents:
 
-- [combat-encounter-model.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-encounter-model.md)
-- [combat-resolution-formulas.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-resolution-formulas.md)
-- [combat-abilities-model.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-abilities-model.md)
-- [combat-buffs-and-effects.md](/Users/teebes/code/writtenrealms/docs/architecture/combat-buffs-and-effects.md)
-- [mob-traits.md](/Users/teebes/code/writtenrealms/docs/architecture/mob-traits.md)
-- [stats-formulas-and-classes.md](/Users/teebes/code/writtenrealms/docs/architecture/stats-formulas-and-classes.md)
-- [yaml-manifest-system.md](/Users/teebes/code/writtenrealms/docs/architecture/yaml-manifest-system.md)
+- [combat-encounter-model.md](combat-encounter-model.md)
+- [combat-resolution-formulas.md](combat-resolution-formulas.md)
+- [combat-abilities-model.md](combat-abilities-model.md)
+- [combat-buffs-and-effects.md](combat-buffs-and-effects.md)
+- [mob-traits.md](mob-traits.md)
+- [stats-formulas-and-classes.md](stats-formulas-and-classes.md)
+- [yaml-manifest-system.md](yaml-manifest-system.md)
 
 ## Decision Summary
 
@@ -418,7 +418,7 @@ traits:
 ```
 
 Numeric stat changes should continue to use `modifiers`, as described in
-[mob-traits.md](/Users/teebes/code/writtenrealms/docs/architecture/mob-traits.md).
+[mob-traits.md](mob-traits.md).
 
 ## Formula Interaction
 
