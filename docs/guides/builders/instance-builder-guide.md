@@ -345,26 +345,68 @@ For the full header and link examples, see
 
 ## Moving A Family From Development To Production
 
-Use the base world as the unit of portability:
+Use **World > Export** on the source base world, then **World > Edit World**
+on the destination base world. This moves authored content through YAML; it
+does not copy the source database or its players. You need builder rank 3 or
+higher in both worlds, or owner access.
 
-1. In development, export the authored base world, not an individual linked
-   instance template.
-2. Keep the complete YAML stream together. The first document is the
-   `worldbundle` header, followed by the base and template content documents.
-3. On the destination installation, create or select the multiplayer authored
-   base world that should receive the family. WR2 rejects a family bundle
-   applied to a single-player target instead of risking an unsafe conversion
-   of existing runtime state. For a new destination, leave the initial currency
-   at its default: the full import automatically replaces unused starter Gold
-   when the source uses a different catalog. See
+### Export The Source Family
+
+1. Finish and save your source edits. Open the authored **base world** in the
+   builder, rather than its spawn world or an individual instance template.
+2. Choose **World > Export**. Wait for the YAML and document counts to load.
+   Use **REFRESH** if you have made further edits since opening the page.
+3. Choose **COPY YAML** and save a copy in a local text file. Keep the entire
+   stream, including all `---` document separators. A base with instances begins
+   with `kind: worldbundle`; its `spec.worlds` lists the base and every included
+   template. Later documents carry `metadata.world_ref` to select their scope.
+
+Even though an individual entity manifest can be applied on its own, a family
+export must be kept together. Do not split the bundle into separate imports,
+remove its header, or replace its portable references with database IDs.
+
+### Apply It To The Destination
+
+1. On the destination installation, create or select the **multiplayer base
+   world** that should receive the content. Check the selected world's name and
+   ID before proceeding. The destination base may have a different ID from the
+   source; no editing of the exported YAML is needed for that difference.
+2. For a first import, use an empty destination. Leave a newly created world's
+   initial Gold currency at its default: a complete import removes unused
+   starter Gold when the source uses a different catalog. Its untouched starter
+   room is also handled by the importer. See
    [Importing Into A New World](yaml-manifests.md#importing-into-a-new-world).
-4. As a rank 3+ builder, apply the complete stream through
-   **World > Edit World**.
-5. Review the **World Family Applied** summary and the results grouped by world.
-   Use the world and entity links to verify the imported base and each instance
-   template, then re-export the destination family if you want a canonical
-   comparison. Links use destination IDs; matching relative room numbers in
-   different worlds remain distinct.
+   If the destination already has authored content, save its own export first
+   and review how the incoming references will update it.
+3. Choose **World > Edit World**, replace the editor contents with the complete
+   copied YAML stream, and choose **APPLY MANIFEST** once.
+4. Wait for **World Family Applied**. Review the counts and the results grouped
+   by world. The importer creates missing instance templates automatically;
+   you do not need to create or import them separately.
+5. Follow the returned world and entity links to check each imported scope.
+   Verify starting/death rooms, instance entrances and exits, and any shared
+   definitions used by the templates. Links use the destination's IDs.
+
+A family bundle is rejected if the destination is singleplayer. Import does
+not convert that world to multiplayer or start gameplay. An existing spawn
+world remains attached to the destination base. Imported instance templates
+are authored definitions; playable instance runs receive their own IDs when
+created later.
+
+### Check The Result And Later Updates
+
+Open **World > Export** on the destination base and copy its complete YAML.
+For an initially empty destination, compare this with the saved source export:
+the manifest content, family scopes, counts, and central links should match.
+Compare parsed YAML content if formatting differs. Numeric database IDs are
+not the comparison keys; room refs are local to their world scope, and instance
+slugs identify templates within the family. Then playtest the imported world
+and its instance entrances and exits through the normal gameplay workflow.
+
+Keep the source export and the destination's apply results so you can identify
+which revision was moved and which destination IDs were assigned. New template
+IDs are allocated by the destination; the source's numeric world IDs are not
+preserved or reserved by the YAML.
 
 The destination's selected base world becomes `world@base`. WR2 matches an
 existing direct template by `instance_slug` or creates a missing one, so no
@@ -385,6 +427,13 @@ runtime `instance_ref` values, runs, participants, live room/world state,
 players, and inventory are never exported. A base with no templates keeps the
 ordinary single-world format. An instance template cannot be exported safely
 by itself; export its base family instead.
+
+Ownership, builder membership, multiplayer mode, automatic starting,
+maintenance, and character-admission controls remain destination settings.
+Authored names, descriptions, visibility, gameplay configuration, and initial
+state seeds travel in the manifests. Background images travel as URLs, not
+copied image files. Importing again updates matching content; it does not
+delete every destination entity absent from the source export.
 
 ## Configuring Death Routing
 
