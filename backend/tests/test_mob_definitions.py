@@ -32,6 +32,7 @@ class TestMobDefinitions(WorldTestCase):
             name="a bandit",
             mob_type=adv_consts.MOB_TYPE_HUMANOID,
             room_description="A bandit watches the road.",
+            rip_message="The bandit falls to the ground.",
             base_properties={
                 "level": 4,
                 "aggression": "aggressive",
@@ -72,6 +73,7 @@ class TestMobDefinitions(WorldTestCase):
 
         self.assertEqual(mob.definition_slug_snapshot, "bandit")
         self.assertEqual(mob.room_description, "A bandit watches the road.")
+        self.assertEqual(mob.rip_message, "The bandit falls to the ground.")
 
     def test_stable_definition_edits_sync_existing_unmodified_mobs(self):
         definition = MobDefinition.objects.create(
@@ -88,6 +90,7 @@ class TestMobDefinitions(WorldTestCase):
         mob = definition.spawn(self.room, self.spawn_world)
 
         definition.name = "a reinforced training dummy"
+        definition.rip_message = "The dummy collapses into splinters."
         definition.base_properties = {
             "health_max": 35,
             "attack_power": 3,
@@ -103,6 +106,12 @@ class TestMobDefinitions(WorldTestCase):
         self.assertEqual(mob.attack_power, 7)
         self.assertEqual(mob.attributes, {"brawn": 4})
         self.assertEqual(mob.roll_metadata["randomized"], False)
+        self.assertEqual(mob.rip_message, "The dummy collapses into splinters.")
+
+        definition.rip_message = ""
+        definition.save(update_fields=["rip_message"])
+        mob.refresh_from_db()
+        self.assertEqual(mob.rip_message, "")
 
     def test_load_definition_serializer_resolves_mob_definition(self):
         definition = MobDefinition.objects.create(
@@ -133,6 +142,38 @@ class TestMobDefinitionManifests(WorldTestCase):
         apply_basic_stat_system(self.world)
         self.apply_ep = reverse("builder-world-manifest-apply", args=[self.world.pk])
         self.export_ep = reverse("builder-world-export", args=[self.world.pk])
+
+    def test_rip_message_round_trips_and_null_clears_spawned_copies(self):
+        from builders.serializers import MobDefinitionSerializer
+
+        message = "The shade dissolves into mist.\nA chill lingers."
+        manifest = {
+            "kind": "mobdefinition",
+            "metadata": {"slug": "shade", "name": "a shade"},
+            "spec": {"rip_message": message},
+        }
+        response = self.client.post(
+            self.apply_ep, {"manifest": yaml.safe_dump(manifest)}, format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        payload = response.data["mob_definition"]
+        self.assertEqual(payload["rip_message"], message)
+        self.assertEqual(yaml.safe_load(payload["yaml"])["spec"]["rip_message"], message)
+        definition = MobDefinition.objects.get(pk=payload["id"])
+        self.assertEqual(MobDefinitionSerializer(definition).data["rip_message"], message)
+        mob = definition.spawn(self.room, self.spawn_world)
+        self.assertEqual(mob.rip_message, message)
+
+        manifest["spec"] = {"rip_message": None}
+        response = self.client.post(
+            self.apply_ep, {"manifest": yaml.safe_dump(manifest)}, format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["mob_definition"]["rip_message"], "")
+        definition.refresh_from_db()
+        mob.refresh_from_db()
+        self.assertEqual(definition.rip_message, "")
+        self.assertEqual(mob.rip_message, "")
 
     def test_apply_mob_definition_manifest_can_create_definition(self):
         manifest = f"""

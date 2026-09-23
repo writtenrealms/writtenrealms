@@ -66,6 +66,30 @@ stands at attention.` See the [`/set` command reference](builder-command-referen
 The override does not edit this definition; fresh spawns retain the authored
 text, and a later definition resync can replace the runtime value.
 
+## RIP Messages
+
+Set `spec.rip_message` to replace the message shown to the room when the mob
+dies. Write the complete message, including the mob's name if desired:
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: village-rat
+spec:
+  rip_message: The village rat lets out a final squeak and goes still.
+```
+
+The text is displayed as written, without placeholder substitution, to the
+killer and room observers through the usual death notifications. It also applies
+when no player receives credit for the kill. Definition edits update existing
+spawned copies as well as future spawns.
+
+If no RIP message is set, or it contains only whitespace, the fallback remains
+`<Mob name> is dead! R.I.P.`. Omit `rip_message` from a partial YAML edit to keep
+its current value. Set `rip_message: ''` or `rip_message: null` to clear it.
+Exports include the field even when empty, so copying or reimporting a definition
+preserves this choice.
+
 ## Currency Rewards
 
 Use a code-to-amount mapping under `rewards.currencies`; mobs do not have a

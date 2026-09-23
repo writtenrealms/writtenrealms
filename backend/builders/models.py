@@ -559,6 +559,7 @@ class MobDefinition(AdventBaseModel):
     name = models.TextField(default='Unnamed Mob')
     description = models.TextField(**optional)
     room_description = models.TextField(**optional)
+    rip_message = models.TextField(default='', blank=True)
     keywords = models.TextField(**optional)
     notes = models.TextField(**optional)
     mob_type = models.TextField(

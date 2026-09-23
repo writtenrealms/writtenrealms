@@ -109,6 +109,7 @@ def _mob_fields_from_definition(definition, attributes: dict[str, float]) -> dic
     fields["name"] = definition.name or fields.get("name") or "Unnamed Mob"
     fields["description"] = definition.description or ""
     fields["room_description"] = definition.room_description or None
+    fields["rip_message"] = definition.rip_message or ""
     fields["keywords"] = definition.keywords or None
     fields["type"] = definition.mob_type or fields.get("type")
 

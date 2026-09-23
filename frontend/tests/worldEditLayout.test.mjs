@@ -40,3 +40,9 @@ test("World Edit preserves the post-apply result workflow", () => {
   assert.match(editWorldSource, /APPLY ANOTHER MANIFEST/);
   assert.match(editWorldSource, /aria-live="polite"/);
 });
+
+test("new mob YAML exposes an optional RIP message", () => {
+  const template = editWorldSource.match(/const newMobDefinitionYaml = \(\) => `([^`]+)`/);
+  assert.ok(template);
+  assert.match(template[1], /\n  rip_message: ''\n/);
+});

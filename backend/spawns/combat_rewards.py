@@ -86,5 +86,5 @@ def defeat_mob(context, encounter, participant, mob, killer):
     death = {'deceased': snapshot, '_combat_awards': projections, 'killer': combat._death_killer_payload(killer),
              'corpse': combat._serialize_corpse(corpse.pk) if corpse else combat._empty_corpse_payload()}
     events.insert(0, GameEvent('notification.death', death, room_recipients(context, encounter),
-                               combat._mob_death_text(snapshot.get('name'))))
+                               combat._mob_death_text(mob)))
     return events

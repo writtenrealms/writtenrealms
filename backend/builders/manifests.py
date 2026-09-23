@@ -375,6 +375,7 @@ _HIT_MESSAGE_FIELDS = {"hit_msg_first", "hit_msg_third"}
 _MOB_DEFINITION_SPEC_FIELDS = (
     "description",
     "room_description",
+    "rip_message",
     "notes",
     "keywords",
     "type",
@@ -1621,6 +1622,7 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
     spec = {
         "description": mob_definition.description or "",
         "room_description": mob_definition.room_description or "",
+        "rip_message": mob_definition.rip_message or "",
         "notes": mob_definition.notes or "",
         "keywords": mob_definition.keywords or "",
         "type": mob_definition.mob_type or adv_consts.MOB_TYPE_BEAST,
@@ -1730,6 +1732,7 @@ def serialize_mob_definition_payload(
         "name": mob_definition.name or "",
         "description": mob_definition.description or "",
         "room_description": mob_definition.room_description or "",
+        "rip_message": mob_definition.rip_message or "",
         "keywords": mob_definition.keywords or "",
         "notes": mob_definition.notes or "",
         "type": mob_definition.mob_type,
@@ -5180,6 +5183,12 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
             spec_patch.get(
                 "keywords",
                 existing.keywords if existing else "",
+            )
+        ),
+        "rip_message": _coerce_text(
+            spec_patch.get(
+                "rip_message",
+                existing.rip_message if existing else "",
             )
         ),
         "mob_type": mob_type,

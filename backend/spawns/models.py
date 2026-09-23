@@ -1651,6 +1651,7 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
     definition_slug_snapshot = models.SlugField(max_length=120, blank=True)
     roll_metadata = models.JSONField(default=dict, blank=True)
     currency_reward_snapshot = models.JSONField(default=dict, blank=True)
+    rip_message = models.TextField(default='', blank=True)
     trait_instances = models.JSONField(default=list, blank=True)
     loot = models.JSONField(default=dict, blank=True)
     ability_cooldowns = models.JSONField(default=dict, blank=True)

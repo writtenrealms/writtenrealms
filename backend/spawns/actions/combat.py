@@ -720,8 +720,10 @@ def _effect_application_text(
     return f"{actor_name} applies {label} on {target_name}."
 
 
-def _mob_death_text(mob_name: str | None) -> str:
-    name = str(mob_name or "").strip() or "Something"
+def _mob_death_text(mob: Mob) -> str:
+    if mob.rip_message and mob.rip_message.strip():
+        return mob.rip_message
+    name = str(mob.name or "").strip() or "Something"
     return f"{safe_capitalize(name)} is dead! R.I.P."
 
 
@@ -2588,7 +2590,7 @@ def _append_mob_defeat_events(
         death_data["room"] = room_payload
     else:
         death_data["remote"] = True
-    death_text = _mob_death_text(deceased_payload.get("name"))
+    death_text = _mob_death_text(target_mob)
     events.append(
         GameEvent(
             type="notification.death",
@@ -2712,7 +2714,7 @@ def _append_uncredited_mob_defeat_events(
             type="notification.death",
             recipients=recipients,
             data=data,
-            text=_mob_death_text(deceased_payload.get("name")),
+            text=_mob_death_text(target_mob),
         )
     )
 

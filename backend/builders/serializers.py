@@ -2302,7 +2302,7 @@ class MobDefinitionSerializer(serializers.ModelSerializer):
         model = MobDefinition
         fields = [
             'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
-            'description', 'room_description', 'notes', 'keywords',
+            'description', 'room_description', 'rip_message', 'notes', 'keywords',
             'type', 'assists', 'base_properties', 'attributes',
             'randomization', 'randomized', 'initial_state', 'traits', 'loot',
             'combat_abilities',

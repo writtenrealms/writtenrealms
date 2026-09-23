@@ -9,9 +9,14 @@ from core.computations import compute_stats
 from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 from builders.currencies import create_currency
-from builders.models import Faction, Trigger
+from builders.models import Faction, MobDefinition, Trigger
 from config import constants as adv_consts
-from spawns.actions.combat import apply_player_death, mob_should_aggro_player
+from spawns.actions.combat import (
+    _append_uncredited_mob_defeat_events,
+    _mob_death_text,
+    apply_player_death,
+    mob_should_aggro_player,
+)
 from spawns.events import publish_events
 from spawns.models import (
     CombatEncounter,
@@ -615,6 +620,59 @@ class TestKillCommand(WorldTestCase):
         self.assertIsNone(
             self._message_by_type(messages, "notification.reward", watcher.key)
         )
+
+    def test_custom_rip_message_reaches_killer_and_room_observer(self):
+        message = "The rat lets out a final squeak and goes still."
+        definition = MobDefinition.objects.create(
+            world=self.world, slug="rat", name="Rat", keywords="rat",
+            rip_message=message, base_properties={"health_max": 1},
+        )
+        mob = definition.spawn(self.room, self.spawn_world)
+        watcher = self.create_player("Watcher", room=self.room)
+        watcher.in_game = True
+        watcher.save(update_fields=["in_game"])
+
+        with capture_game_messages() as messages:
+            dispatch_and_drain_combat(self.player.id, "kill rat")
+
+        self.assertFalse(Mob.objects.filter(pk=mob.pk).exists())
+        for recipient in (self.player, watcher):
+            deaths = self._messages_by_type(messages, "notification.death", recipient.key)
+            self.assertEqual(len(deaths), 1)
+            self.assertEqual(deaths[0]["text"], message)
+
+    def test_uncredited_mob_death_uses_rip_message_or_fallback(self):
+        for rip_message, expected in (
+            ("The shade fades away.", "The shade fades away."),
+            ("", "Shade is dead! R.I.P."),
+            (" \n\t", "Shade is dead! R.I.P."),
+        ):
+            with self.subTest(rip_message=rip_message):
+                mob = Mob.objects.create(
+                    world=self.spawn_world, room=self.room, name="shade",
+                    rip_message=rip_message,
+                )
+                events = []
+                _append_uncredited_mob_defeat_events(
+                    target_mob=mob, room=self.room, killer=None, events=events,
+                )
+                death = self._death_event_by_type(events, "notification.death")
+                self.assertIsNotNone(death)
+                self.assertIn(self.player.key, death.recipients)
+                self.assertEqual(death.text, expected)
+
+    def test_rip_message_formatting_does_not_query_definition(self):
+        definition = MobDefinition.objects.create(
+            world=self.world, slug="shade", name="a shade",
+            rip_message="The shade fades away.",
+        )
+        mob = definition.spawn(self.room, self.spawn_world)
+        mob = Mob.objects.get(pk=mob.pk)
+        with self.assertNumQueries(0):
+            self.assertEqual(_mob_death_text(mob), "The shade fades away.")
+            for empty in ("", " \n\t"):
+                mob.rip_message = empty
+                self.assertEqual(_mob_death_text(mob), "A shade is dead! R.I.P.")
 
     def test_kill_cancels_pending_door_action_in_combat_transaction(self):
         destination = self.room.create_at(adv_consts.DIRECTION_EAST)

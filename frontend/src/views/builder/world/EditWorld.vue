@@ -571,6 +571,7 @@ metadata:
 spec:
   description: ''
   room_description: ''
+  rip_message: ''
   notes: ''
   keywords: ''
   type: beast

@@ -18,10 +18,12 @@ from worlds.models import World
 
 class MobOptionalExportTests(APITestCase):
     empty_fields = {
+        'rip_message': '',
         'loot': {}, 'traits': [], 'initial_state': {},
         'combat_abilities': [], 'combat_engage_when': {},
     }
     empty_spec = {
+        'rip_message': '',
         'loot': {}, 'traits': [], 'initial_state': {},
         'combat': {'abilities': [], 'engage_when': {}},
     }
@@ -41,6 +43,7 @@ class MobOptionalExportTests(APITestCase):
             cooldown={'rounds': 0}, components=[{'type': 'damage', 'profile': 'basic_physical'}],
         )
         self.full_spec = {
+            'rip_message': 'The guard drops to the ground.',
             'health_max': 20,
             'loot': {'entries': [{
                 'slug': 'sword-drop', 'source': 'itemdefinition.sword', 'probability': 100,
@@ -105,6 +108,7 @@ class MobOptionalExportTests(APITestCase):
             runtime = world.spawned_worlds.filter(is_multiplayer=True).first()
             runtime = runtime or world.create_spawn_world()
             mob = imported.spawn(world.config.starting_room, runtime)
+            self.assertEqual(mob.rip_message, self.full_spec['rip_message'])
             self.assertEqual(mob.health_max, 40)
             self.assertEqual(get_state_snapshot(STATE_SCOPE_CHARACTER, mob), {'captive': True})
             set_state_value(STATE_SCOPE_CHARACTER, mob, 'captive', False)
@@ -124,6 +128,7 @@ class MobOptionalExportTests(APITestCase):
             self._assert_fields(imported, self.empty_fields)
             for mob in mobs:
                 mob.refresh_from_db()
+                self.assertEqual(mob.rip_message, '')
                 self.assertEqual(mob.trait_instances, [])
                 self.assertEqual(mob.health_max, 20)
                 self.assertEqual(get_state_snapshot(STATE_SCOPE_CHARACTER, mob), {'captive': False})
@@ -209,7 +214,7 @@ class MobOptionalExportTests(APITestCase):
         )
         with self.assertNumQueries(0):
             spec = _serialize_mob_definition_manifest(definition)['spec']
-        for field in ('loot', 'traits', 'initial_state'):
+        for field in ('loot', 'traits', 'initial_state', 'rip_message'):
             self.assertEqual(spec[field], self.empty_fields[field])
         self.assertEqual(spec['combat']['abilities'], [])
         self.assertEqual(spec['combat']['engage_when'], {})
