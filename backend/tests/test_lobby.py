@@ -145,8 +145,8 @@ class TestCreatePlayerCharacter(WorldTestCase):
     def test_create_mpw_char_while_in_instance(self):
         """
         Regression test for the scenario where a player enters an instance
-        and then tries to create a character in the base world with the same
-        name, which should result in an error.
+        and then tries to create another character in the base world,
+        which should result in an error even when its name is available.
         """
         self.world.is_multiplayer = True
         self.world.save()
@@ -166,7 +166,7 @@ class TestCreatePlayerCharacter(WorldTestCase):
         john.in_game = True
         john.save(update_fields=['world', 'in_game'])
 
-        resp = self.client.post(self.endpoint, {'name': 'John'})
+        resp = self.client.post(self.endpoint, {'name': 'Jack'})
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.data[0],
                          "Cannot create a character while in an instance.")

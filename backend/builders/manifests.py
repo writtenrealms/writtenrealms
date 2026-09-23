@@ -454,6 +454,7 @@ class ParsedWorldConfigManifest:
     death_routing_policy: Any = None
     update_death_routing_source: bool = False
     death_routing_source: str | None = None
+    player_creation_patch: Any = None
 
 
 @dataclass
@@ -7908,10 +7909,10 @@ def parse_world_config_manifest(
             existing=config.player_creation or {},
         )
         core_policy = config_updates[_WORLD_CONFIG_PLAYER_CREATION_FIELD].get("core_faction") or {}
-        config_updates["can_select_faction"] = core_policy.get("mode") in {
-            "choose_required",
-            "choose_optional",
-        }
+        if core_policy or spec.get(_WORLD_CONFIG_PLAYER_CREATION_FIELD) in (None, ""):
+            config_updates["can_select_faction"] = core_policy.get("mode") in {
+                "choose_required", "choose_optional",
+            }
 
     try:
         validate_leveling_config(
@@ -7998,6 +7999,7 @@ def parse_world_config_manifest(
         death_routing_policy=routing_policy,
         update_death_routing_source=update_death_routing_source,
         death_routing_source=death_routing_source,
+        player_creation_patch=copy.deepcopy(spec.get(_WORLD_CONFIG_PLAYER_CREATION_FIELD)),
     )
 
 
@@ -8016,6 +8018,15 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
             shared=False,
         )
         config = WorldConfig.objects.select_for_update().get(pk=config.pk)
+        if 'player_creation' in parsed.config_updates:
+            parsed.config_updates['player_creation'] = normalize_player_creation_config(
+                parsed.player_creation_patch, world=world, existing=config.player_creation,
+            )
+            core_policy = parsed.config_updates['player_creation'].get('core_faction') or {}
+            if core_policy or parsed.player_creation_patch in (None, ''):
+                parsed.config_updates['can_select_faction'] = core_policy.get('mode') in {
+                    'choose_required', 'choose_optional',
+                }
         try:
             validate_instance_control_config(
                 world=world, config=config, updates=parsed.config_updates,

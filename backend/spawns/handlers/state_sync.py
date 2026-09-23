@@ -39,3 +39,6 @@ class StateSyncHandler(CommandHandler):
             actor_key=player.key,
             connection_id=ctx.connection_id,
         )
+        from worlds.instances import emit_pending_initial_instance_entry
+
+        emit_pending_initial_instance_entry(player)

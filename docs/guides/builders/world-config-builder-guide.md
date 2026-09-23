@@ -214,7 +214,7 @@ merged with the base world's runtime state.
 | `starting_level` | integer >= 1 | `1` | Initial player level. |
 | `max_level` | integer >= 1 | `20` | Maximum automatic level. |
 | `leveling_curve` | list | WR2 default curve | Cumulative XP thresholds; first entry must be `0`. |
-| `player_creation` | mapping | `{}` | Player creation policy, including core faction choices. |
+| `player_creation` | mapping | `{}` | Player creation policy, including core faction choices and initial instance routes. |
 | `ability_progression` | mapping | `max_known: 8` | Known ability cap and starting abilities. |
 | `can_select_gender` | boolean | `true` | If false, new characters use `default_gender`. |
 | `default_gender` | choice | `male` | `male`, `female`, or `non_binary`. |
@@ -542,3 +542,60 @@ For instance authoring, see
 - `pvp_mode` must be `free_for_all`, `disabled`, `zone`, or `match`.
 - `leveling_curve` must be long enough for `max_level`, and its first entry must
   be `0`.
+
+## Initial Character Instances
+
+Configure `player_creation.instance_routes` in the **base world's** World YAML
+to start new characters in private introductions. Each destination must be a
+single-player instance template in this base world. Use its stable instance
+slug, as shown in world-family exports:
+
+```yaml
+kind: world
+spec:
+  player_creation:
+    instance_routes:
+      - when:
+          eq: [player.core_faction, elves]
+        instance: elven-introduction
+      - when:
+          eq: [player.core_faction, orcs]
+        instance: orc-introduction
+      - when:
+          always: true
+        instance: common-introduction
+```
+
+The first matching route wins. A final `when: {always: true}` supplies a default;
+a single such route sends everyone to one introduction. Without a match, the
+character starts in their normal base-world room, including any faction-specific
+starting room. Routes run only when a character is created.
+
+`when` uses the shared condition DSL. Conditions can read `player.core_faction`
+(the faction code, or `null`), `player.archetype`, `player.gender`, and
+`player.level` after the base world's character creation choices and starting
+level have been applied. Use `eq`, `ne`, and `in` for comparisons, `gte` and `lte`
+for level comparisons, and `all`, `any`, and `not` to combine conditions.
+`always` accepts a boolean; a bare boolean condition is also supported. Each
+condition mapping has one operator. Values must be literals; live room, mob,
+quest, and Trigger state are not available during character creation.
+
+There may be at most 32 routes. Each `in` list accepts 1–64 values, and the
+shared condition DSL's size and nesting limits apply. Faction codes must refer
+to playable core factions in the base world. Every destination is validated at
+save time, including routes that follow a default rule: it must be unarchived,
+have a starting room in its template, and have `instance_single_player: true`.
+Referenced templates cannot be changed to shared access until their routes are
+removed. Instance templates cannot author their own routes.
+
+Set `instance_routes: []` to disable routing. Omitting `instance_routes` in a
+partial `player_creation` update preserves existing routes; editing routes
+preserves the existing `core_faction` policy. Setting `player_creation: null`
+clears both policies. World-family import resolves routes after importing all
+templates, and world-family export preserves the slug references.
+
+Each routed character gets a fresh private run. Population and any clear-goal
+timer start on first login, and entry-room RP waits for the game connection.
+Changing routes affects future characters only. See the
+[initial-instance guide](instance-builder-guide.md#start-new-characters-in-a-private-introduction)
+for entry triggers, return rooms, and cleanup behavior.

@@ -259,6 +259,89 @@ def _create_run(template_world, *, leader, member_ids=None, **spawn_kwargs):
     )
 
 
+def route_new_character_to_initial_instance(player):
+    """Reserve a fresh private run inside the character-creation transaction.
+
+    The character is not yet visible to other transactions. No shared template
+    lock or run discovery is needed; population and entry triggers wait for the
+    normal asynchronous login, avoiding synchronous world startup in the API.
+    """
+    base_world = player.world.context
+    if not base_world.is_multiplayer:
+        return
+    from core.player_creation import select_initial_instance_slug, validate_initial_instance_destination
+
+    slug = select_initial_instance_slug(
+        player, routes=(base_world.config.player_creation or {}).get('instance_routes', []),
+    )
+    if slug is None:
+        return
+    template = World.objects.filter(
+        instance_of=base_world, context__isnull=True, instance_slug=slug,
+    ).select_related('config', 'config__starting_room').first()
+    validate_initial_instance_destination(template, slug=slug)
+    entry_room = template.config.starting_room
+    return_world_id = player.world_id
+    return_room = player.room
+    run = _create_run(template, leader=player)
+    run.started_at = None
+    run.progress = {'initial_entry_pending': True}
+    run.save(update_fields=['started_at', 'progress'])
+    _upsert_assignment(run=run, player=player, transfer_from=return_room)
+    _upsert_participant(
+        run=run, player=player, transfer_from=return_room,
+        return_runtime_world_id=return_world_id,
+    )
+    player.world = run.spawned_world
+    player.room = entry_room
+    update_fields = ['world', 'room']
+    _increment_location_sequence(player, update_fields)
+    player.save(update_fields=update_fields)
+    move_player_carried_items_to_world(player, run.spawned_world)
+    move_player_character_effects_to_world(player, run.spawned_world)
+
+
+def start_pending_initial_instance_entry(player):
+    """Called after startup/preflight, before the login's Player lock."""
+    if not player.world.context.instance_of_id:
+        return
+    run = InstanceRun.objects.select_for_update().filter(
+        spawned_world_id=player.world_id,
+        owner_id=player.pk,
+        progress__initial_entry_pending=True,
+    ).first()
+    if run is None:
+        return
+    from worlds.instance_goals import start_instance_goal
+
+    start_instance_goal(run)
+    if not run.goal_spec:
+        run.started_at = timezone.now()
+        run.progress = {}
+    run.progress['initial_room_enter_pending'] = True
+    run.save(update_fields=['started_at', 'progress'])
+
+
+@transaction.atomic
+def emit_pending_initial_instance_entry(player):
+    """Emit opening RP only after state.sync has reached the game connection."""
+    if not player.world.context.instance_of_id:
+        return
+    run = InstanceRun.objects.select_for_update().filter(
+        spawned_world_id=player.world_id,
+        owner_id=player.pk,
+        progress__initial_room_enter_pending=True,
+    ).first()
+    if run is None:
+        return
+    del run.progress['initial_room_enter_pending']
+    run.save(update_fields=['progress'])
+    _enqueue_instance_events(_instance_entry_events(
+        run=run, player=player, origin_room_id=None,
+        destination_room_id=player.room_id,
+    ))
+
+
 def create_fresh_instance_run(
         template_world,
         *,

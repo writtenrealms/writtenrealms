@@ -2,6 +2,7 @@ from config import constants as adv_consts
 from core.utils import is_ascii
 
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import serializers
 
 from config import constants as api_consts
@@ -97,11 +98,11 @@ class LobbyWorldSerializer(WorldSerializer):
 
             if user.is_authenticated:
                 return Player.objects.filter(
-                    world__context_id=world.pk,
+                    Q(world__context_id=world.pk) | Q(world__context__instance_of_id=world.pk),
                     user=user).count()
 
         return Player.objects.filter(
-            world__context_id=world.pk,
+            Q(world__context_id=world.pk) | Q(world__context__instance_of_id=world.pk),
             user__is_temporary=False,
         ).count()
 
@@ -115,12 +116,14 @@ class LobbyWorldSerializer(WorldSerializer):
 
         if user.is_authenticated:
             return Player.objects.filter(
-                world__context_id=world.pk,
+                Q(world__context_id=world.pk) | Q(world__context__instance_of_id=world.pk),
                 user=user).count()
         return 0
 
     def get_num_world_player_characters(self, world):
-        return Player.objects.filter(world__context_id=world.pk).count()
+        return Player.objects.filter(
+            Q(world__context_id=world.pk) | Q(world__context__instance_of_id=world.pk),
+        ).count()
 
     def get_can_edit(self, world):
         if self.context.get('request'):

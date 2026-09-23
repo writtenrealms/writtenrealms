@@ -13,7 +13,7 @@ from rest_framework.test import APITestCase
 from builders import world_export as builder_world_export
 from builders.currencies import create_currency
 from builders.instance_templates import create_instance_template
-from builders.models import RoomGetTrigger, Trigger, WorldBuilder
+from builders.models import Faction, RoomGetTrigger, Trigger, WorldBuilder
 from config import constants as adv_consts
 from worlds.models import Room, World, WorldConfig
 
@@ -84,6 +84,62 @@ class WorldFamilyBundleTests(APITestCase):
         self.source_arrival.save(update_fields=["exits_to"])
         self.source_instance.config.exits_to = self.source_gate
         self.source_instance.config.save(update_fields=["exits_to"])
+
+    def test_initial_instance_setting_survives_family_export_and_import(self):
+        self.source_instance.config.instance_single_player = True
+        self.source_instance.config.save(update_fields=['instance_single_player'])
+        Faction.objects.create(world=self.source_world, code='elves', name='Elves', type='core', playable=True)
+        routes = [{'when': {'eq': ['player.core_faction', 'elves']}, 'instance': self.source_instance.instance_slug}]
+        creation = {'core_faction': {'mode': 'fixed_default', 'default': 'elves'}, 'instance_routes': routes}
+        self.source_world.config.player_creation = creation
+        self.source_world.config.save(update_fields=['player_creation'])
+        _, documents = self._export_bundle()
+        target = self._new_target()
+        response = self._apply_documents(target_world=target, documents=documents)
+        self.assertEqual(response.status_code, 200, response.data)
+        imported = World.objects.get(instance_of=target, instance_slug='hades')
+        target.config.refresh_from_db()
+        self.assertEqual(target.config.player_creation, creation)
+        self.assertTrue(imported.config.instance_single_player)
+
+    def test_replacing_bundle_can_clear_routes_and_make_old_destination_shared(self):
+        self.source_instance.config.instance_single_player = True
+        self.source_instance.config.save(update_fields=['instance_single_player'])
+        self.source_world.config.player_creation = {
+            'instance_routes': [{'when': True, 'instance': 'hades'}],
+        }
+        self.source_world.config.save(update_fields=['player_creation'])
+        _, documents = self._export_bundle()
+        target = self._new_target()
+        response = self._apply_documents(target_world=target, documents=documents)
+        self.assertEqual(response.status_code, 200, response.data)
+
+        for document in documents:
+            if document.get('kind') == 'world':
+                spec = document['spec']
+                if 'player_creation' in spec:
+                    spec['player_creation']['instance_routes'] = []
+                if 'instance_single_player' in spec:
+                    spec['instance_single_player'] = False
+        response = self._apply_documents(target_world=target, documents=documents)
+        self.assertEqual(response.status_code, 200, response.data)
+        target.config.refresh_from_db()
+        self.assertEqual(target.config.player_creation['instance_routes'], [])
+        self.assertFalse(World.objects.get(instance_of=target, instance_slug='hades').config.instance_single_player)
+
+    def test_invalid_initial_route_rolls_back_the_family(self):
+        self.source_world.config.player_creation = {
+            'instance_routes': [{'when': True, 'instance': 'hades'}],
+        }
+        self.source_world.config.save(update_fields=['player_creation'])
+        _, documents = self._export_bundle()
+        target = self._new_target()
+        response = self._apply_documents(target_world=target, documents=documents)
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('single-player', str(response.data))
+        self.assertFalse(World.objects.filter(instance_of=target).exists())
+        target.config.refresh_from_db()
+        self.assertEqual(target.config.player_creation, {})
 
     def _export_bundle(self):
         response = self.client.get(

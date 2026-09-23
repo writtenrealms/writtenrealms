@@ -12,6 +12,7 @@ from core.utils import is_ascii
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import transaction
 
 from rest_framework import serializers
 from rest_framework.fields import Field
@@ -178,8 +179,7 @@ class PlayerSerializer(serializers.ModelSerializer):
                                               required=False)
     world_key = serializers.CharField(source='world.key', read_only=True)
     world_id = serializers.IntegerField(source='world.id', read_only=True)
-    root_world_id = serializers.IntegerField(
-        source='world.context.id', read_only=True)
+    root_world_id = serializers.SerializerMethodField()
     user_id = serializers.IntegerField(source='user.id', read_only=True)
     title = serializers.SerializerMethodField()
     is_staff = serializers.BooleanField(source='user.is_staff', read_only=True)
@@ -275,6 +275,7 @@ class PlayerSerializer(serializers.ModelSerializer):
 
         return validated_data
 
+    @transaction.atomic
     def create(self, validated_data):
         runtime = validated_data['world']
         template = runtime.context or runtime
@@ -292,8 +293,20 @@ class PlayerSerializer(serializers.ModelSerializer):
 
         player = super().create(validated_data)
 
-        # Initialize player and return it
-        return player.initialize()
+        player.initialize()
+        player.room = player.get_starting_room()
+        player.save(update_fields=['room'])
+        from worlds.instances import route_new_character_to_initial_instance
+
+        try:
+            route_new_character_to_initial_instance(player)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        return player
+
+    def get_root_world_id(self, player):
+        template = player.world.context
+        return (template.instance_of_id or template.pk) if template else None
 
     def get_can_transfer(self, player):
         return player.world.lifecycle == api_consts.WORLD_STATE_COMPLETE

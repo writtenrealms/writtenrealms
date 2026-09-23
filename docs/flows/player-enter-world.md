@@ -19,6 +19,14 @@ This document describes the current WR2 flow for getting a player from lobby to 
    - `POST /api/v1/lobby/worlds/<world_id>/chars/`
    - MPW: reuse existing multiplayer spawn world if present; otherwise create one.
    - SPW: create a new spawn world.
+   - Evaluate the base world's `player_creation.instance_routes` in order using
+     the new character's faction, archetype, gender, and level. For the first
+     matching route, atomically reserve a fresh owner-only run in the selected
+     single-player template and move the character and starting items there.
+     No match keeps the normal base-world starting room.
+     Record the base runtime and normal (including faction-specific) starting
+     room as the return destination. The character remains visible in the base
+     world lobby. Population loading waits for the normal asynchronous login.
 3. If the user deletes an existing character from the world lobby, the client opens a confirmation dialog and only enables deletion after the user types the character name; matching is case-insensitive. The confirmed `DELETE /api/v1/lobby/worlds/<world_id>/chars/<player_id>/` request marks the player pending deletion when the player is not in-game and has no live instances.
 4. User clicks `PLAY AS`, which dispatches `game/request_enter_world` with `player_id` and `world_id`.
 
@@ -48,6 +56,8 @@ This document describes the current WR2 flow for getting a player from lobby to 
      - World must be `running`
      - IP ban
      - Character currently being saved
+   - For a pending initial instance, start its goal under the run lock in the
+     login transaction and mark its first room-entry event ready for state sync.
    - Marks player `in_game = true`, updates connection/action timestamps.
    - Updates root world `last_entered_ts`.
    - Creates `PlayerEvent(login)`.
@@ -64,7 +74,10 @@ This document describes the current WR2 flow for getting a player from lobby to 
 13. On game WS open, client sends:
    - `{ "type": "system.connect", "data": { "player_key": "player.<id>" }, "token": "<access>" }`
 14. Game WS authenticates, replies `system.connect.success`, then queues initial state sync.
-15. On `cmd.state.sync.success`, frontend loads map/room/player/world state and routes to `/game`.
+15. After publishing the first state sync for an initial instance, durably
+    enqueue its opening room-entry event once. The game connection is now ready
+    to receive the introduction text.
+16. On `cmd.state.sync.success`, frontend loads map/room/player/world state and routes to `/game`.
 
 ## Room key contract (WR2)
 

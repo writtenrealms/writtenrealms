@@ -58,6 +58,61 @@ Only the ordinary world, room, zone, path, mob definition, item definition, and
 spawn plan manifests are currently applied by **World > Edit**. `kind:
 instance` goal manifests are not ingested yet.
 
+## Start New Characters In A Private Introduction
+
+Enable **Single-player instance** on each introduction template's **World >
+Config** page. Then choose the destinations in the **base world's** World YAML:
+
+```yaml
+kind: world
+spec:
+  player_creation:
+    instance_routes:
+      - when:
+          eq: [player.core_faction, elves]
+        instance: elven-introduction
+      - when:
+          always: true
+        instance: common-introduction
+```
+
+Routes are evaluated in order against the newly created character. The first
+matching route selects a template by its stable instance slug. This example
+sends elves to one introduction and everyone else to another. A single
+`always: true` route sends everyone to the same introduction. If no rule matches,
+the character starts in their normal base-world starting room.
+
+Every selected destination must be an unarchived single-player template belonging
+to this base world, with a valid starting room. The configuration prevents
+turning off single-player access while a route references the template. Routes
+and their templates travel together in world-family exports and imports. See
+[initial character instances](world-config-builder-guide.md#initial-character-instances)
+for supported conditions and editing rules.
+
+Each routed character starts in their own owner-only run. Other characters
+cannot join, even with the run reference. The character keeps the base world's
+class, faction, starting equipment, and currency. Existing characters are
+unaffected.
+
+The private run is reserved during character creation. Its population starts
+when the player first chooses **Play As**, and any clear-goal timer begins on
+that first login. Entry-room triggers wait until the game connection receives
+its first state sync, so opening RP text reaches the player. Reconnecting while
+the run is retained resumes it without repeating the initial entry triggers. The usual single-player instance cleanup rules still apply.
+Characters remain listed in the base world's lobby throughout the introduction.
+
+Provide an exit into the base world using the usual instance exit rooms or
+`/exitinstance`. The `leave` command returns the character to the base-world
+starting room recorded at character creation: their core faction's starting
+room if configured, otherwise the base world's default starting room. It does
+not use the instance's `exits_to` setting. This setting controls where characters
+begin; it does not require them to complete a quest before leaving.
+
+Changing or clearing `instance_routes` affects future characters only. Existing
+runs retain their owner and return destination. Remove routes before archiving
+their templates; matching a route to an archived template blocks character
+creation until the configuration is corrected.
+
 ## What Instances Inherit
 
 Instances should use WR Core definitions from the base world:

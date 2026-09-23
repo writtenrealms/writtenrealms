@@ -267,7 +267,8 @@ class Player(CharMixin, AdventBaseModel):
                         "No numbers allowed in player names.")
 
             if Player.objects.filter(
-                world__context=world,
+                models.Q(world__context=world)
+                | models.Q(world__context__instance_of=world),
                 name__iexact=name).exists():
                 raise serializers.ValidationError(
                     "This name is already taken.")

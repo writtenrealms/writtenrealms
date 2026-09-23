@@ -100,6 +100,12 @@ INSTANCE_LOCAL_MANIFEST_FIELDS = {
 
 def validate_instance_control_config(*, world, config, updates):
     """Validate partial authoring updates against the effective local policy."""
+    from core.player_creation import normalize_instance_routes
+
+    if 'player_creation' in updates:
+        normalize_instance_routes(
+            (updates['player_creation'] or {}).get('instance_routes', []), world=world,
+        )
     single_player = updates.get(
         "instance_single_player", getattr(config, "instance_single_player", False)
     )
@@ -115,6 +121,14 @@ def validate_instance_control_config(*, world, config, updates):
         )
     if time_control and not single_player:
         raise ValueError("Instance time control requires a single-player instance.")
+    if 'instance_single_player' in updates and not single_player and world.instance_of_id:
+        from worlds.models import WorldConfig
+
+        creation = WorldConfig.objects.values_list('player_creation', flat=True).get(
+            configured_worlds__pk=world.instance_of_id,
+        )
+        if any(route['instance'] == world.instance_slug for route in (creation or {}).get('instance_routes', [])):
+            raise ValueError('This instance is used by player_creation.instance_routes and must remain single-player.')
     from worlds.instance_goals import normalize_instance_goal
     goal = normalize_instance_goal(updates.get('instance_goal', getattr(config, 'instance_goal', {})))
     if goal and (not getattr(world, 'instance_of_id', None) or getattr(world, 'context_id', None)):

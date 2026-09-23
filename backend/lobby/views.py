@@ -1,6 +1,6 @@
 from django.core.cache import cache
-from django.db import connection
-from django.db.models import F, Q, Count, Subquery, OuterRef, IntegerField
+from django.db.models import F, Q, Count, Max, Subquery, OuterRef, IntegerField
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 
@@ -44,7 +44,8 @@ from worlds.models import World
 def exclude_archived_player_worlds(qs):
     return qs.exclude(
         Q(world__lifecycle=api_consts.WORLD_STATE_ARCHIVED) |
-        Q(world__context__lifecycle=api_consts.WORLD_STATE_ARCHIVED)
+        Q(world__context__lifecycle=api_consts.WORLD_STATE_ARCHIVED) |
+        Q(world__context__instance_of__lifecycle=api_consts.WORLD_STATE_ARCHIVED)
     )
 
 
@@ -54,13 +55,16 @@ class WorldCardListView(generics.ListAPIView):
 
     @classmethod
     def get_annotated_queryset(self, world_ids):
-        # Subquery to count players associated with each world by context_id
+        # Count characters throughout the base world and its instance family.
         players_count_subquery = Player.objects.filter(
-            world__context_id=OuterRef('pk'),
+            Q(world__context_id=OuterRef('pk'))
+            | Q(world__context__instance_of_id=OuterRef('pk')),
             user__is_temporary=False
         ).exclude(
             world__lifecycle=api_consts.WORLD_STATE_ARCHIVED,
-        ).values('world__context_id').annotate(
+        ).annotate(
+            base_world_id=Coalesce('world__context__instance_of_id', 'world__context_id'),
+        ).values('base_world_id').annotate(
             cnt=Count('id')
         ).values('cnt')
 
@@ -88,7 +92,7 @@ class RecentChars(generics.ListAPIView):
                 user=self.request.user,
                 pending_deletion_ts__isnull=True,
             )
-            .select_related('core_faction')
+            .select_related('core_faction', 'world__context')
             .prefetch_related('faction_assignments__faction')
         ).order_by('-last_connection_ts')[0:4]
 
@@ -174,14 +178,14 @@ class UserWorlds(generics.ListAPIView):
                 user=self.request.user
             ).values_list('world_id', flat=True))
 
-        # Worlds where the user has a player
-        world_ids.extend(
-            Player.objects.filter(
-                user=self.request.user,
-                world__context_id__isnull=False,
-            ).order_by(
-                '-last_connection_ts'
-            ).values_list('world__context_id', flat=True))
+        # Group played characters by base world, including private introductions.
+        played_world_ids = list(
+            Player.objects.filter(user=self.request.user, world__context_id__isnull=False)
+            .annotate(base_world_id=Coalesce('world__context__instance_of_id', 'world__context_id'))
+            .values('base_world_id').annotate(last_played=Max('last_connection_ts'))
+            .order_by('-last_played').values_list('base_world_id', flat=True)
+        )
+        world_ids.extend(played_world_ids)
 
         world_ids = distinct_list(world_ids)
 
@@ -202,19 +206,7 @@ class UserWorlds(generics.ListAPIView):
                 i for i in world_ids if i != 83
             ]
 
-        # Sort the world ids by last played worlds
-        with connection.cursor() as cursor:
-            cursor.execute("""
-                select distinct W.context_id, max(P.last_connection_ts)
-                from spawns_player P, worlds_world W
-                where P.user_id = %s and P.world_id = W.id
-                group by P.world_id, W.context_id
-                order by max(P.last_connection_ts) desc
-                limit 20;
-                """, [self.request.user.id])
-            world_order = [
-                int(row[0]) for row in cursor.fetchall()
-            ]
+        world_order = played_world_ids[:20]
 
         # Exclude archived worlds from world order
         world_order = [ i for i in world_order if i not in archived_ids ]
@@ -239,45 +231,17 @@ class PlayingWorlds(WorldCardListView):
         }
 
     def get_queryset(self):
-        world_ids = []
         user = self.request.user
-
-        # Worlds where the user has a player
-        world_ids.extend(
+        world_order = list(
             exclude_archived_player_worlds(Player.objects.filter(
-                user=user,
-                world__context_id__isnull=False,
-            )).order_by(
-                '-last_connection_ts'
-            ).values_list('world__context_id', flat=True))
-
-        world_ids = distinct_list(world_ids)
-
-        # Hack, don't show the wot world unless the user is staff
+                user=user, world__context_id__isnull=False,
+            ))
+            .annotate(base_world_id=Coalesce('world__context__instance_of_id', 'world__context_id'))
+            .values('base_world_id').annotate(last_played=Max('last_connection_ts'))
+            .order_by('-last_played').values_list('base_world_id', flat=True)
+        )
         if not user.is_staff:
-            world_ids = [
-                i for i in world_ids if i != 83
-            ]
-
-        # Sort the world ids by last played worlds
-        with connection.cursor() as cursor:
-            cursor.execute("""
-                select distinct W.context_id, max(P.last_connection_ts)
-                from spawns_player P, worlds_world W
-                where P.user_id = %s and P.world_id = W.id
-                group by P.world_id, W.context_id
-                order by max(P.last_connection_ts) desc
-                limit 20;
-                """, [user.id])
-            world_order = [
-                int(row[0]) for row in cursor.fetchall()
-            ]
-
-        # Make sure to add the worlds that did not emerge just from
-        # the last 20 played analysis
-        world_order = world_order + [
-            i for i in world_ids if i not in world_order
-        ]
+            world_order = [world_id for world_id in world_order if world_id != 83]
 
         return self.get_annotated_queryset(world_order)
 
@@ -438,9 +402,11 @@ class SearchWorlds(generics.ListAPIView):
             exclude_archived_player_worlds(Player.objects.filter(
                 user=self.request.user,
                 world__context_id__isnull=False,
-            )).order_by(
+            )).annotate(
+                base_world_id=Coalesce('world__context__instance_of_id', 'world__context_id'),
+            ).order_by(
                 '-last_connection_ts'
-            ).values_list('world__context_id', flat=True))
+            ).values_list('base_world_id', flat=True))
         # Public Worlds
         world_ids.extend(
             World.objects.filter(
@@ -504,9 +470,11 @@ class WorldCharacters(WorldLobbyBase,
             Player.objects.filter(
                 user=self.request.user,
                 pending_deletion_ts__isnull=True,
-                world__context_id=self.world.pk,
+            ).filter(
+                Q(world__context_id=self.world.pk)
+                | Q(world__context__instance_of_id=self.world.pk)
             )
-            .select_related('core_faction')
+            .select_related('core_faction', 'world__context')
             .prefetch_related('faction_assignments__faction')
             .order_by(
                 F('last_connection_ts').desc(nulls_last=True),
@@ -552,9 +520,6 @@ class WorldCharacters(WorldLobbyBase,
             world=spawn_world,
             core_faction=core_faction,
             last_connection_ts=timezone.now())
-
-        player.room = player.get_starting_room()
-        player.save()
 
         return player
 
@@ -767,7 +732,7 @@ class Lobby(APIView):
                 user=request.user,
                 pending_deletion_ts__isnull=True,
             )
-            .select_related('core_faction')
+            .select_related('core_faction', 'world__context')
             .prefetch_related('faction_assignments__faction')
         ).order_by('-last_connection_ts')[0:4]
         recent_characters_data = PlayerSerializer(
@@ -777,9 +742,11 @@ class Lobby(APIView):
         playing_world_ids = list(exclude_archived_player_worlds(Player.objects.filter(
             user=request.user,
             world__context_id__isnull=False,
-        )).order_by(
+        )).annotate(
+            base_world_id=Coalesce('world__context__instance_of_id', 'world__context_id'),
+        ).order_by(
             '-last_connection_ts'
-        ).values_list('world__context_id', flat=True)[0:20])
+        ).values_list('base_world_id', flat=True)[0:20])
 
         # Apply distinct_list and then slice to get first 3 distinct IDs
         playing_world_ids = distinct_list(playing_world_ids)[0:3]

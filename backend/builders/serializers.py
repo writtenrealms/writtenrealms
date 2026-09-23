@@ -484,6 +484,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
 
     death_room = ReferenceField(required=True, allow_null=False)
     starting_room = ReferenceField(required=True, allow_null=False)
+    player_creation = serializers.JSONField(required=False, allow_null=True)
     death_routing = serializers.JSONField(
         required=False,
         allow_null=True,
@@ -492,6 +493,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = WorldConfig
         fields = [
+            'player_creation',
             'instance_single_player',
             'instance_time_control',
             'instance_goal',
@@ -577,6 +579,12 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             world = config.configured_worlds.filter(instance_of__isnull=False).first()
             if world is None:
                 world = config.configured_worlds.filter(context_id__isnull=True).first()
+        if 'player_creation' in attrs:
+            from core.factions import normalize_player_creation_config
+
+            attrs['player_creation'] = normalize_player_creation_config(
+                attrs['player_creation'], world=world, existing=config.player_creation if config else {},
+            )
         if 'leaderboards' in attrs:
             from core.leaderboards import normalize_leaderboards
             try:
@@ -750,6 +758,16 @@ class WorldConfigSerializer(serializers.ModelSerializer):
                 shared=False,
             )
             instance = WorldConfig.objects.select_for_update().get(pk=instance.pk)
+            if 'player_creation' in validated_data:
+                from core.factions import normalize_player_creation_config
+
+                # Merge the original partial request against the locked config.
+                validated_data['player_creation'] = normalize_player_creation_config(
+                    self.initial_data['player_creation'], world=world, existing=instance.player_creation,
+                )
+                policy = validated_data['player_creation'].get('core_faction') or {}
+                if policy or self.initial_data['player_creation'] in (None, ''):
+                    validated_data['can_select_faction'] = policy.get('mode') in {'choose_required', 'choose_optional'}
             try:
                 validate_instance_control_config(
                     world=world, config=instance, updates=validated_data,

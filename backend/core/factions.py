@@ -130,7 +130,7 @@ def normalize_player_creation_config(
     if not isinstance(value, dict):
         raise serializers.ValidationError("spec.player_creation must be a mapping.")
 
-    unknown_top = sorted(set(value.keys()) - {"core_faction"})
+    unknown_top = sorted(set(value.keys()) - {"core_faction", "instance_routes"})
     if unknown_top:
         raise serializers.ValidationError(
             f"Unsupported spec.player_creation field(s): {', '.join(unknown_top)}."
@@ -138,6 +138,13 @@ def normalize_player_creation_config(
 
     existing = existing or {}
     normalized = dict(existing)
+    if "instance_routes" in value:
+        from core.player_creation import normalize_instance_routes
+
+        try:
+            normalized["instance_routes"] = normalize_instance_routes(value["instance_routes"], world=world)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
     if "core_faction" not in value:
         return normalized
 

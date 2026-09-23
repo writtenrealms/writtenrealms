@@ -3268,6 +3268,7 @@ class WorldManifestApplyView(BaseWorldBuilderView):
         results = []
         scope_worlds = {}
         deferred_leaderboards = missing
+        deferred_instance_routes = missing
         try:
             with transaction.atomic():
                 builder_world_export.prepare_starter_currency_for_import(
@@ -3393,6 +3394,21 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                             if world_ref == 'world@base' and manifest.get('kind') == 'world' and 'leaderboards' in (manifest.get('spec') or {}):
                                 manifest = copy.deepcopy(manifest)
                                 deferred_leaderboards = manifest['spec'].pop('leaderboards')
+                            if world_ref == 'world@base' and manifest.get('kind') == 'world':
+                                creation = (manifest.get('spec') or {}).get('player_creation')
+                                if isinstance(creation, dict) and 'instance_routes' in creation:
+                                    manifest = copy.deepcopy(manifest)
+                                    deferred_instance_routes = manifest['spec']['player_creation'].pop('instance_routes')
+                                    # Routes refer to later template configs. Clear the old
+                                    # selection inside this transaction so a replacement
+                                    # bundle can also make formerly selected templates shared.
+                                    builder_world_export.apply_world_manifest(
+                                        world=self.world,
+                                        manifest={'kind': 'world', 'spec': {
+                                            'player_creation': {'instance_routes': []},
+                                        }},
+                                    )
+                                    self.world.config.refresh_from_db(fields=['player_creation'])
                             try:
                                 response = self._dispatch_manifest(manifest)
                             except drf_exceptions.PermissionDenied as exc:
@@ -3426,6 +3442,13 @@ class WorldManifestApplyView(BaseWorldBuilderView):
                             ),
                         )
 
+                    if deferred_instance_routes is not missing:
+                        builder_world_export.apply_world_manifest(
+                            world=scope_worlds['world@base'],
+                            manifest={'kind': 'world', 'spec': {
+                                'player_creation': {'instance_routes': deferred_instance_routes},
+                            }},
+                        )
                     if deferred_leaderboards is not missing:
                         builder_world_export.apply_world_manifest(
                             world=scope_worlds['world@base'],

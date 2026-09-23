@@ -1573,3 +1573,38 @@ But also:
 - server-owned outcome records
 
 This split is the core of the architecture.
+
+## Initial character admission
+
+`WorldConfig.player_creation.instance_routes` on the base world holds ordered
+`{when, instance}` rules. The shared condition DSL evaluates a bounded snapshot
+of the newly initialized character (core faction code, archetype, gender, and
+level); the first matching rule selects an owner-only template by its stable
+instance slug. No match preserves ordinary base-world admission. This uses the
+existing JSON field and requires no schema migration.
+
+Config API and YAML writes validate condition shapes, faction codes, and all
+destinations in batches under the existing config-family publication locks.
+Routes and template access changes share the base config lock, preventing a
+referenced template from becoming shared. World-family imports temporarily
+clear explicitly replaced routes within the bundle transaction and apply the
+new routes after all template scopes exist. Invalid destinations roll back the
+whole import. Exports preserve the base-world rules and stable slug references.
+
+Character creation initializes shared systems, records the normal base return
+room/runtime, then reserves a fresh run and transfers starting items in one
+transaction. This path does not discover/reuse runs or exclusively lock the
+shared template. Condition evaluation performs no database queries and is
+bounded to 32 routes with the shared DSL's node/depth limits. It uses a plain
+data snapshot to avoid ORM traversal per rule. A match adds one template lookup
+through the indexed `(instance_of, instance_slug)` relationship; no match or
+disabled routing adds no destination query. Runtime state seeding and
+carried-item transfers use the existing batched implementations.
+
+The run's `progress.initial_entry_pending` marker defers population/goal startup
+to asynchronous login. Login locks Run before Player, clears the startup marker,
+and sets `initial_room_enter_pending`. The first `state.sync` publishes the
+initial screen before durably enqueueing the entry event and consuming that
+marker under the run lock. This keeps opening RP text from firing before the
+game socket is connected. Reconnect does not repeat admission. Existing runs snapshot owner and
+policy; changing the authored routes affects only later character creations.

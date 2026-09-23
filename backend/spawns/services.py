@@ -58,31 +58,38 @@ class WorldGate:
 
         self.preflight()
 
-        from spawns.combat_encounters import locked_combat
-        with locked_combat(keys=[player.key]):
-            player = (
-                Player.objects.select_for_update(of=('self',))
-                .select_related('world')
-                .get(pk=player.pk)
-            )
-            if player.world_id != world.id:
-                raise ServiceError("Character changed worlds while entering.")
-            player.in_game = True
-            player.last_connection_ts = timezone.now()
-            player.last_action_ts = timezone.now()
-            player.save(update_fields=[
-                'in_game', 'last_connection_ts', 'last_action_ts'])
+        with transaction.atomic():
+            from worlds.instances import start_pending_initial_instance_entry
 
-            # Reconnect keeps a valid same-place fight, but repairs impossible
-            # cross-world/room state and re-arms a lost scheduled resolution.
-            from spawns.actions.combat import reconcile_locked_player_pve_combat
+            try:
+                start_pending_initial_instance_entry(player)
+            except ValueError as exc:
+                raise ServiceError(str(exc)) from exc
+            from spawns.combat_encounters import locked_combat
+            with locked_combat(keys=[player.key]):
+                player = (
+                    Player.objects.select_for_update(of=('self',))
+                    .select_related('world')
+                    .get(pk=player.pk)
+                )
+                if player.world_id != world.id:
+                    raise ServiceError("Character changed worlds while entering.")
+                player.in_game = True
+                player.last_connection_ts = timezone.now()
+                player.last_action_ts = timezone.now()
+                player.save(update_fields=[
+                    'in_game', 'last_connection_ts', 'last_action_ts'])
 
-            reconcile_locked_player_pve_combat(player=player, resume=True)
+                # Reconnect keeps a valid same-place fight, but repairs impossible
+                # cross-world/room state and re-arms a lost scheduled resolution.
+                from spawns.actions.combat import reconcile_locked_player_pve_combat
 
-            PlayerEvent.objects.create(
-                player=player,
-                event=constants.PLAYER_EVENT_LOGIN,
-                ip=ip)
+                reconcile_locked_player_pve_combat(player=player, resume=True)
+
+                PlayerEvent.objects.create(
+                    player=player,
+                    event=constants.PLAYER_EVENT_LOGIN,
+                    ip=ip)
 
         # Keep the context write outside the Player/combat lock transaction.
         # Instance run creation owns the inverse World -> Player aggregate
