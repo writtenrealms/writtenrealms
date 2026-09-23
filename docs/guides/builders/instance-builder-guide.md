@@ -223,6 +223,14 @@ The owner can leave and return through the ordinary instance lifecycle. NPCs
 and companions remain part of the instance. This does not change the base
 world's multiplayer setting.
 
+If the owner logs out or disconnects while their character is still inside,
+the run is kept for three hours of real time from that disconnect. Reconnecting
+returns them to the same run and location; a later logout starts a new
+three-hour grace period. After the grace period, normal cleanup can return the
+character to the base world and delete the run. Leaving the instance itself
+uses the ordinary five-minute idle cleanup. This retention applies with or
+without Time Control and does not pause gameplay by itself.
+
 Characters are created in the base world and enter an instance through its
 entry points. Creating characters directly inside an instance template or
 using a completed-world character transfer to target an instance is rejected.

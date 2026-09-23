@@ -182,6 +182,7 @@ class Player(CharMixin, AdventBaseModel):
         related_name='visited_by')
 
     last_connection_ts = models.DateTimeField(db_index=True, **optional)
+    last_disconnection_ts = models.DateTimeField(**optional)
     last_action_ts = models.DateTimeField(**optional)
 
     in_game = models.BooleanField(default=False)
@@ -239,8 +240,9 @@ class Player(CharMixin, AdventBaseModel):
             with transaction.atomic():
                 player = Player.objects.select_for_update().get(pk=self.pk)
                 player.save_start_ts = None
-                if exiting:
+                if exiting and player.in_game:
                     player.in_game = False
+                    player.last_disconnection_ts = timezone.now()
                 player.save()
 
         return player

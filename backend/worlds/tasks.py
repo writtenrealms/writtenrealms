@@ -1,6 +1,7 @@
 import logging
 
 from django.db import transaction
+from django.db.models import Exists, F, OuterRef
 from django.utils import timezone
 from django.core.cache import cache
 
@@ -21,6 +22,7 @@ from worlds.services import WorldSmith
 logger = logging.getLogger('lifecycle')
 SPAWN_PLANS_TASK_LOCK_KEY = 'run_world_spawn_plans_lock'
 MAX_WORLD_IDLE_SECONDS = 5 * 60
+SINGLE_PLAYER_INSTANCE_OFFLINE_GRACE_SECONDS = 3 * 60 * 60
 
 
 def _spawn_plan_interval_seconds() -> float:
@@ -213,16 +215,30 @@ def kill_world(world_id, client_id=None):
 
 @shared_task
 def monitor_worlds():
+    # Admission is snapshotted on the run. Retain it only while its offline
+    # owner is still inside, counting wall time from the actual disconnect.
+    # Filter in SQL so retained runs add no per-world queries to the monitor.
+    offline_owner_runs = InstanceRun.objects.filter(
+        single_player=True,
+        owner__world_id=F('spawned_world_id'),
+        owner__in_game=False,
+        owner__last_disconnection_ts__gt=timezone.now() - timezone.timedelta(
+            seconds=SINGLE_PLAYER_INSTANCE_OFFLINE_GRACE_SECONDS,
+        ),
+    )
+    has_offline_owner_grace = Exists(offline_owner_runs.filter(
+        spawned_world_id=OuterRef('pk'),
+    ))
+
     # Go through each world marked as running in the Forge and verify
     # that they still are, and that everything is in order in the game
     # data.
     running_worlds = World.objects.filter(
         context__isnull=False,
         lifecycle=constants.WORLD_LIFECYCLE_RUNNING,
-        lifecycle_change_ts__isnull=False,)
+        lifecycle_change_ts__isnull=False,
+    ).exclude(has_offline_owner_grace)
 
-    from django.db.models import Exists, OuterRef
-    from worlds.models import InstanceRun
     running_worlds = running_worlds.exclude(Exists(InstanceRun.objects.filter(
         spawned_world_id=OuterRef('pk'), time_control=True, time_paused=True,
         owner__in_game=True, owner__world_id=OuterRef('pk'),
@@ -257,6 +273,11 @@ def monitor_worlds():
 
         delta = _world_idle_seconds(spawn_world, now=timezone.now())
         if delta > MAX_WORLD_IDLE_SECONDS:
+            # An idle logout or concurrent disconnect after the initial query
+            # starts the same grace period. Recheck only cleanup candidates.
+            if (spawn_world.context.instance_of_id
+                    and offline_owner_runs.filter(spawned_world=spawn_world).exists()):
+                continue
             logger.info("World is idle for %s seconds, stopping..." % delta)
             # Start the stopping process
             WorldSmith(spawn_world).stop()
@@ -286,7 +307,8 @@ def monitor_worlds():
         context__isnull=False,
         context__instance_of__isnull=False,
         lifecycle=constants.WORLD_LIFECYCLE_STOPPED,
-        lifecycle_change_ts__lt=five_min_ago)
+        lifecycle_change_ts__lt=five_min_ago,
+    ).exclude(has_offline_owner_grace)
     for instance in stored_instances:
         logger.info("Deleting idle instance %s..." % instance.id)
         for player in instance.players.all():

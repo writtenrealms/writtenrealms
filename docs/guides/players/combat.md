@@ -30,6 +30,18 @@ you return or reconnect. Previous group participants can return with
 `enter <instance_ref>`. Combat remains disabled in a completed run; builder
 `/reset` starts a new attempt.
 
+## Disconnecting In Single-Player Instances
+
+Logging out or disconnecting while your character is inside a single-player
+instance keeps that run available for three hours. Reconnect during that time
+to continue in the same instance and location. Each later logout starts a new
+three-hour grace period. After three hours offline, normal cleanup can return
+your character to the base world and remove the instance.
+
+This applies whether or not the instance offers Time Control. It does not
+pause gameplay by itself. Leaving the instance to return to the base world
+uses the ordinary five-minute idle cleanup instead.
+
 ## Turn-Based Instances
 
 Some builders offer single-player instances with **Time Control**. Each run
@@ -101,9 +113,9 @@ before each round.** or **Normal world timing is enabled.** Repeating `pause`
 or `resume` confirms the same setting without toggling it.
 
 While combat is paused, disconnecting does not advance it, and thinking does
-not trigger idle logout. Normal cleanup rules still apply to abandoned or
-offline instances. With combat pausing off, ordinary connection and idle rules
-apply.
+not trigger idle logout. The three-hour offline grace period still uses real
+time, even while combat is paused. With combat pausing off, ordinary connection
+and idle logout rules apply.
 
 Combat abilities can be granted at character creation or learned during play.
 See [Abilities and Training](abilities.md) for `learn`, `unlearn`, requirements,

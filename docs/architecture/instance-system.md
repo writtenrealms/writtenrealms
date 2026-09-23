@@ -992,8 +992,24 @@ use the `InstanceRun.last_active_at` timestamp as their idle reference and are
 stopped/deleted after roughly five minutes of inactivity, plus monitor cadence.
 This is intentionally hardcoded until the fuller policy below is implemented.
 
+Single-player runs are exempt from automatic cleanup for three hours after
+their owner disconnects, as long as that character remains in the runtime.
+`Player.last_disconnection_ts` is recorded in the existing multiplayer logout
+write; duplicate saves of an already-offline character do not move it. The
+grace uses wall time and the run's immutable `single_player` policy, regardless
+of time-control permission or pause state. Reconnecting and later logging out
+starts a new grace period. Leaving the instance removes the exemption. After
+three hours, the existing inactivity checks apply again.
+
+The monitor excludes retained runs in SQL using the unique spawned-world run
+relationship and the owner's primary key. Retained runs add no per-instance
+queries, timers, or logout-history scans; no timestamp index is needed for
+these keyed lookups. An idle logout during a monitor pass is rechecked before
+cleanup. Retention does not pause gameplay or change gameplay scheduling.
+
 The monitor also retries deletion of spawned instances that have remained
-stopped for five minutes. Combat actor deletion first deactivates referencing
+stopped for five minutes, honoring the same offline-owner grace. Combat actor
+deletion first deactivates referencing
 participants, then clears their actor foreign key in the same deletion
 transaction. These updates are batched by Django's deletion collector, so
 active mob combat cannot violate the participant actor constraint during world
