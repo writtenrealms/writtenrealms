@@ -494,6 +494,8 @@ class World(BaseModel):
     This is the 'game' representation from WorldResource +
     additional config from AnimateWorldSerializer.
     """
+    entry_message: str = ""
+    entry_message_mode: Literal["all", "reveal", "replace"] = "all"
     id: int
     key: str
     name: str

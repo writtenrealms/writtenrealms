@@ -239,6 +239,9 @@ ability progression. Instance config manifests and direct config API updates
 reject those fields for instance worlds, even if a builder manually navigates to
 the underlying editor URL.
 
+Each instance can also have its own optional [full-screen entry message](world-config-builder-guide.md#full-screen-entry-messages),
+with all-at-once, cumulative reveal, or paragraph replacement presentation.
+
 The instance template owns instance-local content and policy instead: starting
 room, death room, zones, rooms, paths, spawn plans, goals, timer settings,
 cleanup policy, presentation fields, and supported local rules such as death

@@ -170,6 +170,48 @@ rejected rather than interpreted as database room ids. This applies to
 | `built_by` | text | empty | Builder or team credit. |
 | `small_background` | URL/text | empty | Small frontend background image. |
 | `large_background` | URL/text | empty | Large frontend background image. |
+| `entry_message` | text | empty | Optional full-screen introduction shown when entering this world. Empty or whitespace-only text disables it. |
+| `entry_message_mode` | `all`, `reveal`, `replace` | `all` | Show all paragraphs immediately, reveal one more every three seconds, or replace the current paragraph every three seconds. |
+
+### Full-Screen Entry Messages
+
+Set these fields in **World > Config > World YAML** for either a base world or
+an instance template, then save. Each template owns its own message; instances
+do not inherit the base world's introduction. Newly created instances start
+with no message. World and world-family exports preserve both settings.
+
+```yaml
+kind: world
+spec:
+  entry_message: |
+    You step into the cave. The air is cool and still.
+
+    Somewhere ahead, a faint light flickers.
+
+    Your journey begins here.
+  entry_message_mode: reveal
+```
+
+Separate paragraphs with blank lines. Text is displayed literally, without HTML
+or Markdown formatting. `all` displays the complete message immediately.
+`reveal` shows the first paragraph immediately and adds another every three
+seconds, keeping earlier paragraphs visible. `replace` uses the same timing but
+shows only the current paragraph. The final text stays visible until dismissed;
+a single paragraph appears immediately in every mode.
+
+The presentation matches the Alpha cave introduction: an opaque black screen,
+centered text, and a click/tap-anywhere prompt. Players can dismiss it at any
+time, including during a timed sequence. Enter, Space, and Escape also dismiss
+it. Long messages can be scrolled.
+
+The message appears on a fresh game entry and when moving into a different
+runtime world, including entering an instance and returning to the base world.
+Ordinary state refreshes and automatic socket reconnects in the same game
+session do not replay it. Entering again from the lobby or reloading the page
+starts a new session. This is a presentation overlay; it does not pause the world.
+
+To disable a message, save `entry_message: ''`. Omitting the field in a partial
+manifest preserves the existing message.
 
 ### Entry And Rooms
 
@@ -495,7 +537,8 @@ manifests:
 - local gameplay rules: `never_reload`, `cross_race_cooldown`
 - local death/PvP/presentation fields: `death_mode`, `death_routing`,
   `death_routing_source`, `death_currency`, `death_currency_penalty`,
-  `pvp_mode`, `built_by`, `small_background`, `large_background`
+  `pvp_mode`, `built_by`, `small_background`, `large_background`,
+  `entry_message`, `entry_message_mode`
 
 `death_routing_source` is instance-only. `local` is the default and uses the
 instance template's complete routing policy. `base_world` uses the base

@@ -23,6 +23,7 @@ import {
   prepareEditRoomTab,
 } from "@/core/editRoomCommand";
 import { builderRoomIndexRoute } from "@/core/builderRoutes";
+import { applyWorldEntry, initialWorldEntryState } from "@/core/worldEntryMessage";
 import { playerRoundEffectSnapshot } from "@/core/roundEffects";
 import { applyCombatSnapshot, currentCombatTarget, initialCombatState } from "@/core/combatState";
 import { applyInstanceTimeControl, pendingTurnCommandState, simulationTimeMs } from "@/core/instanceTimeControl";
@@ -236,6 +237,7 @@ const set_initial_state = () => {
 
     // objects
     world: null,
+    world_entry: initialWorldEntryState(),
 
     /*
        Player data, a lot of which we break out into its own state because if
@@ -605,6 +607,10 @@ const receiveMessage = async ({
       ...message_data.data.world,
     };
     commit("world_set", world_data);
+  }
+
+  if (message_data.data?.world) {
+    commit("world_entry_set", message_data.data.world);
   }
 
   if (
@@ -2125,6 +2131,13 @@ const mutations = {
     }
     state.world = world;
     state.factions = world.factions;
+  },
+
+  world_entry_set: (state, world) => {
+    state.world_entry = applyWorldEntry(state.world_entry, world);
+  },
+  world_entry_dismiss: (state) => {
+    state.world_entry.message = null;
   },
 
   width_set: (state, width) => {

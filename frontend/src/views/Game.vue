@@ -1,4 +1,10 @@
 <template>
+  <Intro
+    v-if="entryMessage && loaded && isConnected && !full_screen_message"
+    :key="store.state.game.world_entry.worldId"
+    :message="entryMessage"
+    @close="store.commit('game/world_entry_dismiss')"
+  />
   <div id="full-screen-message" v-if="full_screen_message">{{ full_screen_message }}</div>
   <div id="transition-screen"
        v-else-if="transfer_to.world_name">
@@ -17,7 +23,7 @@
       :is="gameComponent"
       :width="width"
       class="grow"
-      v-if="store.state.game.is_connected"
+      v-if="store.state.game.is_connected && !entryMessage"
     ></component>
   </div>
   <div v-else>Loading...</div>
@@ -29,6 +35,7 @@ import { useStore } from 'vuex';
 import { useRouter } from 'vue-router';
 import AccessibleGame from "@/components/game/AccessibleGame.vue";
 import AugmentedGame from "@/components/game/AugmentedGame.vue";
+import Intro from "@/components/game/Intro.vue";
 import _ from "lodash";
 
 const store = useStore();
@@ -39,6 +46,7 @@ const width = ref(window.innerWidth);
 
 const messages = computed(() => store.state.game.messages);
 const isConnected = computed(() => store.state.game.is_connected);
+const entryMessage = computed(() => store.state.game.world_entry.message);
 const full_screen_message = computed(() => store.state.game.full_screen_message);
 const transfer_to = computed(() => store.state.game.transfer_to);
 const accessibility_mode = computed(() => store.state.auth.user.accessibility_mode);

@@ -15,6 +15,8 @@ _INSTANCE_CONFIG_LOCAL_ROOM_FIELDS = {
     "exits_to",
 }
 _WORLD_CONFIG_CLONE_SKIP_FIELDS = {
+    "entry_message",
+    "entry_message_mode",
     "instance_single_player",
     "instance_time_control",
     "instance_goal",

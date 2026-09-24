@@ -1189,6 +1189,8 @@ def serialize_world(world: World) -> Dict:
     # Normalize world-config room references to the same room key contract used
     # across WR2 room/map payloads.
     config = world.config
+    data["entry_message"] = config.entry_message if config else ""
+    data["entry_message_mode"] = config.entry_message_mode if config else "all"
     if config:
         data["starting_room"] = room_payload_key_from_id(config.starting_room_id)
         data["death_room"] = room_payload_key_from_id(config.death_room_id)

@@ -15,6 +15,14 @@ Realms Core.
 - [Crafting](crafting-player-guide.md)
 - [Socials](socials.md)
 
+## World Introductions
+
+Some worlds and instances show a full-screen introduction when you enter.
+It may appear all at once, reveal another paragraph every three seconds, or
+replace each paragraph with the next every three seconds. Click or tap anywhere
+to dismiss it at any time; Enter, Space, and Escape work too. Long messages can
+be scrolled. The world continues running while the introduction is visible.
+
 ## Clearing the Console
 
 Type `clear` on its own to empty the game console on desktop or mobile. New

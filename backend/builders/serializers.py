@@ -493,6 +493,8 @@ class WorldConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = WorldConfig
         fields = [
+            'entry_message',
+            'entry_message_mode',
             'player_creation',
             'instance_single_player',
             'instance_time_control',

@@ -244,6 +244,7 @@ _WORLD_CONFIG_WORLD_BOOL_FIELDS = (
     "is_public",
 )
 _WORLD_CONFIG_CONFIG_TEXT_FIELDS = (
+    "entry_message",
     "built_by",
     "small_background",
     "large_background",
@@ -279,6 +280,7 @@ _WORLD_CONFIG_CONFIG_FLOAT_FIELDS = (
     "death_currency_penalty",
 )
 _WORLD_CONFIG_CONFIG_CHOICE_FIELDS = {
+    "entry_message_mode": WorldConfig.ENTRY_MESSAGE_MODES,
     "death_mode": adv_consts.DEATH_MODES,
     "death_route": adv_consts.DEATH_ROUTES,
     "pvp_mode": adv_consts.PVP_MODES,
@@ -1113,6 +1115,8 @@ def world_config_to_manifest(
         "short_description": world.short_description or "",
         "description": world.description or "",
         "motd": world.motd or "",
+        "entry_message": config.entry_message or "",
+        "entry_message_mode": config.entry_message_mode,
         "is_public": bool(world.is_public),
         "starting_room": _serialize_world_room_reference(
             room=config.starting_room,
@@ -1252,6 +1256,8 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         room_reference_mode="manifest",
     )
     config_payload = {
+        "entry_message": config.entry_message or "",
+        "entry_message_mode": config.entry_message_mode,
         "starting_room": _serialize_room_reference(config.starting_room),
         "death_room": _serialize_room_reference(config.death_room),
         "death_mode": config.death_mode,

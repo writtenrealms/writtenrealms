@@ -1335,6 +1335,14 @@ class WorldState(BaseModel):
 
 class WorldConfig(BaseModel):
 
+    ENTRY_MESSAGE_MODES = ('all', 'reveal', 'replace')
+
+    entry_message = models.TextField(blank=True, default='')
+    entry_message_mode = models.CharField(
+        max_length=10, default='all',
+        choices=[(mode, mode) for mode in ENTRY_MESSAGE_MODES],
+    )
+
     DEATH_ROUTING_SOURCE_LOCAL = 'local'
     DEATH_ROUTING_SOURCE_BASE_WORLD = 'base_world'
     DEATH_ROUTING_SOURCES = (
