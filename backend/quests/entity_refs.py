@@ -80,7 +80,13 @@ def resolve_entity_ref_id(
     if not world:
         return None
     model_cls = _ENTITY_MODELS[expected]
-    return model_cls.objects.filter(world=world, slug=text).values_list("id", flat=True).first()
+    world_id = world.pk
+    if expected in {"itemdefinition", "mobdefinition"}:
+        # Definitions are shared by the family; quests remain template-local.
+        # Use the parent id without fetching the parent World on every lookup.
+        template_world = world.context or world
+        world_id = template_world.instance_of_id or template_world.pk
+    return model_cls.objects.filter(world_id=world_id, slug=text).values_list("id", flat=True).first()
 
 
 def resolve_room_ref_id(

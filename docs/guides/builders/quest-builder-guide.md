@@ -227,6 +227,12 @@ content against legacy item or mob templates. WR1 export tooling must convert
 old item and mob template references into `itemdefinition` and `mobdefinition`
 refs before importing into WR2.
 
+For quests authored in an instance template, mob and item definition slugs
+resolve in the base world's shared library. Author those definitions on the
+base world first. Room references and quest prerequisite slugs still resolve
+inside the instance template, so sibling instances can use the same quest
+slug without sharing quest identity.
+
 ### Condition DSL
 
 Quests use the shared WR2 condition DSL documented in
