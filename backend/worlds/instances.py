@@ -44,6 +44,14 @@ class InstanceResetResult:
 
 
 @dataclass(frozen=True)
+class InstanceDestroyResult:
+    run_id: int
+    instance_ref: str
+    spawned_world_id: int
+    player_ids: list[int]
+
+
+@dataclass(frozen=True)
 class InstanceParticipantTransferResult:
     player: object
     participant_id: int
@@ -573,7 +581,9 @@ def enter_players_into_run(
             'base_world',
             'spawned_world',
             'template_world',
-        ).get(pk=run.pk)
+        ).filter(pk=run.pk).first()
+        if run is None:
+            raise RuntimeError("This instance is no longer available.")
         for player, _transfer_from in player_pairs:
             _assert_run_entry_allowed(run=run, player=player)
 
@@ -1417,8 +1427,10 @@ def enter_instance(
                 'spawned_world',
                 'template_world',
             )
-            .get(pk=run.pk)
+            .filter(pk=run.pk).first()
         )
+        if run is None:
+            raise RuntimeError("This instance is no longer available.")
         _assert_run_entry_allowed(run=run, player=player)
         _assert_single_player_run_entry_allowed(run=run, player=player)
         _assert_match_run_entry_allowed(
@@ -1619,6 +1631,52 @@ def leave_instance(*, player, force_active_duel=False):
 def _assert_spawned_instance(spawned_world):
     if not spawned_world.context or not spawned_world.context.instance_of_id:
         raise ValueError("You are not in an instance.")
+
+
+def destroy_instance(*, player) -> InstanceDestroyResult:
+    """Return participants, then immediately perform the idle-stop cleanup.
+
+    The run lock serializes entry, exits, and combat with this teardown. All
+    reads and deletion cascades are confined to this runtime; authored content
+    and other runs remain available for the next entry.
+    """
+    from spawns.models import Player
+    from worlds.services import WorldSmith
+
+    expected_world_id = player.world_id
+    with transaction.atomic():
+        player = Player.objects.select_related('world__context').get(pk=player.pk)
+        if player.world_id != expected_world_id:
+            raise ValueError("You are no longer in that instance.")
+        spawned_world = player.world
+        _assert_spawned_instance(spawned_world)
+        try:
+            run = InstanceRun.objects.select_for_update(of=('self',)).get(
+                spawned_world=spawned_world,
+            )
+        except InstanceRun.DoesNotExist as exc:
+            raise ValueError("This instance no longer exists.") from exc
+
+        players = list(Player.objects.filter(world=spawned_world).order_by('pk'))
+        player_ids = [participant.pk for participant in players]
+        if player.pk not in player_ids:
+            raise ValueError("You are no longer in that instance.")
+        result = InstanceDestroyResult(
+            run_id=run.pk,
+            instance_ref=run.ref,
+            spawned_world_id=spawned_world.pk,
+            player_ids=player_ids,
+        )
+        # Move carried items and effects before any runtime objects are removed,
+        # and use the normal exit path to finish combat and cancel pending work.
+        for participant in players:
+            participant.world = spawned_world
+            leave_instance(player=participant, force_active_duel=True)
+        if Player.objects.filter(world=spawned_world).exists():
+            raise ValueError("The instance still has players and cannot be destroyed.")
+        WorldSmith(spawned_world).stop()
+
+    return result
 
 
 def _active_participant_players(run):

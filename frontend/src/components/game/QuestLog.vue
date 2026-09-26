@@ -84,7 +84,7 @@
                 <div v-if="quest.current_step.recap" class="my-2">
                   {{ quest.current_step.recap }}
                 </div>
-                <div v-if="quest.current_step.text.body" class="my-2">
+                <div v-if="quest.current_step.text.body" class="quest-body my-2">
                   {{ quest.current_step.text.body }}
                 </div>
 
@@ -471,6 +471,10 @@ onBeforeUnmount(() => {
   .quest-section-label {
     font-size: 0.85rem;
     text-transform: uppercase;
+  }
+
+  .quest-body {
+    white-space: pre-line;
   }
 
   .quest-objective {

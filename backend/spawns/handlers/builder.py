@@ -46,7 +46,7 @@ from spawns.handlers.permissions import (
 from spawns.handlers.registry import register_handler
 from spawns.state_payloads import build_state_sync, get_player_with_related
 from spawns.text_output import render_event_text
-from worlds.instances import reset_instance
+from worlds.instances import destroy_instance, reset_instance
 from worlds.room_refs import parse_base_world_room_reference, parse_room_reference
 
 SCOPED_ECHO_ALIASES = {
@@ -2178,6 +2178,65 @@ class InvisibleHandler(CommandHandler):
             actor_key=ctx.player.key,
             connection_id=ctx.connection_id,
         )
+
+
+@register_handler
+class DestroyInstanceHandler(CommandHandler):
+    command_type = "/destroy"
+    text_commands = ("/destroy",)
+    builder_only = True
+    help = {
+        "name": "Destroy Instance",
+        "format": "/destroy",
+        "description": "Leave and immediately clean up the current instance run.",
+        "details": [
+            "Only builder characters inside an instance can use this command.",
+            "All participants return to their recorded base-world entrances, keeping carried items and equipment.",
+            "Removes the run and its runtime data using the normal idle cleanup.",
+            "Use enter afterward to create a fresh run with a new Instance ID.",
+            "Runs immediately, including while instance time is paused.",
+        ],
+        "examples": ["/destroy", "enter"],
+    }
+
+    def handle(self, ctx: CommandContext) -> None:
+        if not can_execute_builder_command(ctx, self):
+            ctx.publish(builder_permission_error(self.command_type))
+            return
+        if ctx.payload.get("args"):
+            ctx.publish_error(self.command_type, "Usage: /destroy")
+            return
+        try:
+            result = destroy_instance(player=ctx.player)
+        except (ValueError, RuntimeError) as err:
+            ctx.publish({
+                "type": "cmd./destroy.error",
+                "text": str(err),
+                "data": {"error": str(err), "code": "invalid_instance"},
+            })
+            return
+
+        events = [GameEvent(
+            type="cmd./destroy.success",
+            recipients=[f"player.{player_id}" for player_id in result.player_ids],
+            data={
+                "run_id": result.run_id,
+                "instance_ref": result.instance_ref,
+                "world_id": result.spawned_world_id,
+                "players_returned": len(result.player_ids),
+            },
+            text="Instance destroyed. You return to the entrance. Use enter to start a fresh run.",
+        )]
+        for player_id in result.player_ids:
+            player = get_player_with_related(player_id)
+            payload = build_state_sync(player).model_dump()
+            events.append(GameEvent(
+                type="cmd.state.sync.success",
+                recipients=[player.key],
+                data=payload,
+                text=render_event_text("cmd.state.sync.success", payload, viewer=player),
+            ))
+        publish_events(events, actor_key=ctx.actor_key, connection_id=ctx.connection_id)
 
 
 @register_handler

@@ -329,6 +329,20 @@ Common step fields:
 | `room_items` | list of room item mappings         | Viewer-specific quest pickups for the active step. They render in the room with `[ * ]` and are claimed with normal `get <item>`. |
 | `effects` | list of effect mappings               | Applied when the step is entered, including resolution steps.                                |
 
+Use a YAML literal block (`body: |`) with blank lines between paragraphs in
+`text.body`. Quest cards and the Quest Log preserve those line breaks and blank
+lines while wrapping text to fit the available width:
+
+```yaml
+text:
+  body: |
+    "The company commander needs defenders," the watchman says through the bars.
+
+    Accept this quest with quest accept a-debt-to-athens.
+
+    Once you have accepted, type rattle bars to signal that you are ready.
+```
+
 
 Fields commonly used on specific step kinds:
 

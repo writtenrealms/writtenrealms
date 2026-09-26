@@ -24,6 +24,8 @@ FREE_COMMANDS = frozenset({
     'currencies', 'list', 'shop', 'offer', 'socials', 'say', 'yell', 'emote',
     'social', 'roll', 'alias', 'unalias', 'ability.hotkey',
     'advance', 'time_control', 'cancel_turn', 'pause', 'resume',
+    # Builder teardown must work even if a paused run cannot advance.
+    '/destroy',
 })
 
 

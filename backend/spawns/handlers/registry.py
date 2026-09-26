@@ -12,7 +12,7 @@ from spawns.events import (
 )
 from spawns.handlers.base import CommandActor, CommandHandler, CommandContext
 from spawns.models import Mob, Player
-from worlds.models import Room, World, Zone
+from worlds.models import InstanceRun, Room, World, Zone
 
 
 class HandlerNotFoundError(Exception):
@@ -527,7 +527,11 @@ def execute_handler(handler, ctx):
             if not prepare_command(ctx, handler.command_type):
                 handler.handle(ctx)
             if run and not in_simulation(run.spawned_world_id):
-                run.refresh_from_db()
+                try:
+                    run.refresh_from_db()
+                except InstanceRun.DoesNotExist:
+                    # /destroy removes the clock authority with its runtime.
+                    return
                 synchronize_combat_pause(run)
     except ActionError as exc:
         ctx.publish({'type': f'cmd.{handler.command_type}.error', 'text': exc.message,

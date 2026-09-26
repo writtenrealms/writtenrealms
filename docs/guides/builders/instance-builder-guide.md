@@ -765,6 +765,7 @@ game commands from the linked base room.
 | `/exitinstance <player> world@base/room@N` | Builder/trusted-script: exit a player to one explicitly chosen authored room in their recorded base runtime. |
 | `/repop [--doors]` | Builder-only: refill missing spawn-plan placements in the current instance zone, optionally resetting its runtime doorways, without rebuilding the run. |
 | `/reset` | Builder-only: reset the current instance run to its initial spawned state. |
+| `/destroy` | Builder-only: return participants to their entrances and immediately remove the current run using idle cleanup. |
 | `duel <player>` | Challenge a player at the same match-arena entrance. |
 | `duel accept [player]` | Accept a pending challenge and enter a fresh private match run. |
 | `duel decline [player]` | Decline a pending challenge. |
@@ -791,6 +792,14 @@ room, world/zone/room state is reseeded from the template's `initial_state`,
 and the instance reruns its initial spawn plans. Player character state is
 preserved. The reset affects only that run; other active runs of the same
 template keep their state.
+
+To retest creation from scratch, use `/destroy` followed by `enter`. `/destroy`
+returns every participant (including offline characters) to their recorded
+base-world entrance, preserves their carried items and equipment, and removes
+the runtime and its run record immediately. It works while time is paused and
+does not require an advance. The next entry creates a new Instance ID from the
+current template. Authored content and other runs remain unchanged; match arenas
+still require a new duel challenge to create their next run.
 
 Use `/repop` for the narrower testing operation: it reconciles only the active
 spawn plans in the builder's current zone, bypassing their normal wait times

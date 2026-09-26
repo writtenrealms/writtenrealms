@@ -80,9 +80,7 @@
 
         </div>
 
-        <div v-if="card.bodyLines.length" class="quest-body">
-          <div v-for="(line, index) in card.bodyLines" :key="index">{{ line }}</div>
-        </div>
+        <div v-if="card.body" class="quest-body">{{ card.body }}</div>
 
         <div v-if="card.recapLines.length" class="quest-recap">
           <div v-for="(line, index) in card.recapLines" :key="index">{{ line }}</div>
@@ -336,7 +334,7 @@ const cards = computed(() => {
       title: opportunity.name || opportunity.slug || "Quest Opportunity",
       slug: opportunity.slug || "",
       badges: buildBadges(opportunity.quest_type || null, null),
-      bodyLines: splitLines(opportunity?.text?.body),
+      body: String(opportunity?.text?.body || "").trim(),
       recapLines: splitLines(opportunity.recap),
       objectives: [],
       choiceRows: [],
@@ -358,7 +356,7 @@ const cards = computed(() => {
         title: template.name || template.slug || "Quest",
         slug: template.slug || "",
         badges: buildBadges(template.quest_type || null, quest.status || null),
-        bodyLines: splitLines(currentStep?.text?.body),
+        body: String(currentStep?.text?.body || "").trim(),
         recapLines: splitLines(currentStep.recap),
         objectives: buildObjectives(currentStep.objectives),
         choiceRows: (currentStep.choices || []).map((choice: any) => ({
@@ -384,7 +382,7 @@ const cards = computed(() => {
         title: template.name || template.slug || "Quest",
         slug: template.slug || "",
         badges: buildBadges(template.quest_type || null, quest.status || null),
-        bodyLines: [],
+        body: "",
         recapLines: splitLines(currentStep.recap),
         objectives: buildObjectives(currentStep.objectives),
         choiceRows: [],
@@ -405,7 +403,7 @@ const cards = computed(() => {
         title: targetName,
         slug: "",
         badges: [],
-        bodyLines: splitLines(props.message?.data?.hint || props.message.text),
+        body: String(props.message?.data?.hint || props.message.text || "").trim(),
         recapLines: [],
         objectives: [],
         choiceRows: [],
@@ -574,6 +572,7 @@ const runCommand = (command: string) => {
 
   .quest-body {
     color: $color-text;
+    white-space: pre-line;
   }
 
   .quest-recap {

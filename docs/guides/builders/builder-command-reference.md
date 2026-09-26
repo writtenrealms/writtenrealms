@@ -56,6 +56,7 @@ Commands are listed alphabetically. Select a command to jump to its details.
 | --- | --- | --- | --- | --- | --- | --- |
 | [`/close`, `/lock`, `/open`, `/unlock`](#open-close-lock-unlock) | Direct | No | Script | Script | No | No |
 | [`/cmd`, `/force`, `/rcmd`, `/wcmd`, `/zcmd`](#cmd-force-rcmd-zcmd-wcmd) | Direct | Script | Script | Script | Script | Script |
+| [`/destroy`](#destroy) | Direct | No | No | No | No | No |
 | [`/echo`, `/wecho`, `/zecho`](#echo-zecho-wecho) | Direct | Script | Script | Script | Script | Script |
 | [`/edit`](#edit) | Direct | No | No | No | No | No |
 | [`/exitinstance`](#exitinstance) | Direct | No | Script | Script | No | No |
@@ -1123,6 +1124,37 @@ This command is intended for builder testing and deliberate room interactions,
 not as a replacement for ordinary spawn-plan scheduling. High-frequency room
 triggers should not run it because work scales with the active plans and
 placements in the zone.
+
+### `/destroy`
+
+Format:
+
+```text
+/destroy
+```
+
+Leaves and immediately cleans up the current instance using its normal idle
+cleanup. This command requires a builder character with edit access and only
+works inside an instance. It takes no arguments and runs immediately, even when
+instance time is paused.
+
+All participants, including offline characters, return to their recorded
+base-world entrances. Characters retain their inventory, equipment, and
+character state. The runtime world, run, Instance ID, and instance runtime data
+are removed. Authored templates and other runs are unaffected.
+
+To test instance creation again, use:
+
+```text
+/destroy
+enter
+```
+
+The next `enter` creates a fresh run with a new Instance ID and initializes it
+from the current template. Match arenas still use the normal duel challenge
+workflow to create a new run.
+
+This command is direct-builder-only.
 
 ### `/reset`
 
