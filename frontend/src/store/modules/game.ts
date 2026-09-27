@@ -222,6 +222,7 @@ const set_initial_state = () => {
     is_connected: false,
     websocket: null,
     messages: [],
+    pending_instance_entry: null,
     received_event_ids: {},
     received_event_id_order: [],
 
@@ -1607,6 +1608,23 @@ const mutations = {
     // Console entries are terminal-style snapshots. Never retain references
     // to the live payload objects that the rest of the store may update.
     const historyMessage = _.cloneDeep(message);
+    if (message.type === "cmd.enter.success" && message.data?.instance_ref) {
+      state.pending_instance_entry = {
+        world_id: message.data.world_id,
+        instance_ref: message.data.instance_ref,
+      };
+    } else if (
+      message.type === "cmd.state.sync.success"
+      || (message.type === "system.connect.success" && message.data?.room)
+    ) {
+      const pending = state.pending_instance_entry;
+      historyMessage.instance_ref_announced = Boolean(
+        pending
+        && String(pending.world_id) === String(message.data?.world?.id)
+        && pending.instance_ref === message.data?.world?.instance_ref
+      );
+      state.pending_instance_entry = null;
+    }
     historyMessage.receive_ts = new Date().getTime();
     historyMessage.message_id = uuidv4();
     if (!historyMessage.group) {
@@ -1740,6 +1758,7 @@ const mutations = {
   },
 
   messages_clear: (state) => {
+    state.pending_instance_entry = null;
     // Keep in-flight receipts for acknowledgement and turn-control checks,
     // but remove every previous entry from the visible transcript. This is
     // bounded by MESSAGE_LIMIT, including any retained hidden receipts.

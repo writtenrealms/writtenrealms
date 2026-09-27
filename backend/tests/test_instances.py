@@ -1550,6 +1550,46 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.assertEqual(state_message["data"]["room"]["id"], self.instance_room.id)
         self.assertIsNone(self._message_by_type(messages, "notification.instance.time_control_hint"))
 
+    def test_enter_announces_instance_before_room_greeting_and_final_snapshot(self):
+        self._link_current_room_to_instance()
+        self.player.in_game = True
+        self.player.save(update_fields=["in_game"])
+        Trigger.objects.create(
+            world=self.instance_template,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(self.instance_room),
+            target_id=self.instance_room.pk,
+            event=adv_consts.TRIGGER_EVENT_ENTER,
+            script="/cmd room -- /echo -- The watchman greets you.",
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+        for entry in range(2):
+            with self.subTest(entry=entry):
+                # APITestCase normally postpones on_commit until teardown.
+                # Run outbox delivery at the entry transaction's boundary, as
+                # it runs in the live command path.
+                with patch("worlds.instances.transaction.on_commit", side_effect=lambda fn, **kwargs: fn()):
+                    with capture_game_messages() as messages:
+                        dispatch_and_drain_combat(self.player.pk, "enter")
+                visible = [row["message"] for row in messages if row["player_key"] == self.player.key]
+                types = [message["type"] for message in visible]
+                run = InstanceRun.objects.get()
+                announcement = self._message_by_type(messages, "cmd.enter.success")
+                self.assertEqual(announcement["text"], f"Instance ID: {run.ref}")
+                self.assertEqual(announcement["data"]["world_id"], run.spawned_world_id)
+                self.assertEqual(types.count("cmd.enter.success"), 1)
+                greeting_index = next(
+                    index for index, message in enumerate(visible)
+                    if message.get("text") == "The watchman greets you."
+                )
+                self.assertLess(types.index("cmd.enter.success"), greeting_index)
+                self.assertLess(greeting_index, types.index("cmd.state.sync.success"))
+                self.player.refresh_from_db()
+                World.leave_instance(player=self.player)
+                flush_game_event_outbox()
+
     def test_time_control_entry_and_reentry_show_owner_command_hint(self):
         self._link_current_room_to_instance()
         self.instance_config.instance_single_player = True

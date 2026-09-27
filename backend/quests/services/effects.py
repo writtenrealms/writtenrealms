@@ -22,6 +22,7 @@ from core.utils import format_actor_msg
 from quests.entity_refs import resolve_entity_ref_id
 from spawns.actions.base import ActionError
 from spawns.actions.targeting import first_room_mob_with_definition, resolve_room_mob_target
+from spawns.events import GameEvent
 from spawns.models import Item, Mob
 from spawns.wallet import WalletError, mutate_balances
 from quests.services.predicates import resolve_value
@@ -34,6 +35,7 @@ ALLOWED_MOB_COMMAND_TOKENS = {
     "/echo",
     "/zecho",
     "/wecho",
+    "/open",
 }
 GRANTED_ITEM_IDS_STATE_KEY = "granted_item_ids"
 
@@ -42,6 +44,7 @@ GRANTED_ITEM_IDS_STATE_KEY = "granted_item_ids"
 class QuestEffectResult:
     reward_summaries: list[str] = field(default_factory=list)
     currency_rewards: list[dict[str, Any]] = field(default_factory=list)
+    events: list[GameEvent] = field(default_factory=list)
 
 
 def _normalize_granted_item_ids(raw_ids: Any) -> list[int]:
@@ -327,7 +330,11 @@ def _run_allowed_mob_commands(
     template=None,
     quest_instance=None,
     event_data: dict[str, Any] | None = None,
-) -> None:
+) -> list[GameEvent]:
+    commands = _command_list(
+        effect, player=player, template=template,
+        quest_instance=quest_instance, event_data=event_data,
+    )
     mob = _resolve_effect_mob(
         effect,
         player=player,
@@ -336,16 +343,16 @@ def _run_allowed_mob_commands(
         event_data=event_data,
     )
     if not mob:
-        return
+        if any(command.split()[0].lower() == "/open" for command in commands):
+            raise ActionError(
+                "The quest's door-opening mob is not here.",
+                code="quest_mob_not_found",
+            )
+        return []
     dispatch_command = import_module("spawns.handlers.registry").dispatch_command
+    events: list[GameEvent] = []
 
-    for command_text in _command_list(
-        effect,
-        player=player,
-        template=template,
-        quest_instance=quest_instance,
-        event_data=event_data,
-    ):
+    for command_text in commands:
         command_text = str(
             format_actor_msg(
                 command_text,
@@ -361,6 +368,25 @@ def _run_allowed_mob_commands(
         command_token = command_text.split()[0].lower()
         if command_token not in ALLOWED_MOB_COMMAND_TOKENS:
             continue
+        if command_token == "/open":
+            # Reuse the audited transactional command path. Keep its output in
+            # the quest result so failed acceptance/transitions cannot announce
+            # a door change that was rolled back.
+            from spawns.script_commands import ScriptCommandError, ScriptCommandRunner
+
+            try:
+                command_result = ScriptCommandRunner().execute(
+                    issuer=mob.room,
+                    subject=mob,
+                    command=command_text,
+                    render_actor=player,
+                    runtime_world=player.world,
+                    provenance={"quest_instance_id": quest_instance.pk},
+                )
+            except ScriptCommandError as exc:
+                raise ActionError(str(exc), code=exc.code) from exc
+            events.extend(command_result.events)
+            continue
         dispatch_command(
             command_type="text",
             actor_type="mob",
@@ -368,6 +394,7 @@ def _run_allowed_mob_commands(
             payload={"text": command_text},
             script_source=True,
         )
+    return events
 
 
 def apply_quest_effects(
@@ -636,13 +663,13 @@ def apply_quest_effects(
                 if isinstance(raw_command, str):
                     effect = dict(effect)
                     effect["command"] = raw_command
-            _run_allowed_mob_commands(
+            result.events.extend(_run_allowed_mob_commands(
                 effect,
                 player=player,
                 template=template,
                 quest_instance=quest_instance,
                 event_data=event_data,
-            )
+            ))
 
     if state_changed:
         quest_instance.local_state = state

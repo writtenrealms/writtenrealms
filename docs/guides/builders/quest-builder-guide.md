@@ -340,7 +340,7 @@ text:
 
     Accept this quest with quest accept a-debt-to-athens.
 
-    Once you have accepted, type rattle bars to signal that you are ready.
+    After accepting, follow the watchman's directions to enter the practice court.
 ```
 
 
@@ -408,6 +408,30 @@ Each item in `step.transitions` is a mapping with these common fields:
 
 ### Effects and Rewards
 
+Accepting a quest immediately enters its first step and applies that step's
+`effects`. Use this to record acceptance or have the quest giver speak:
+
+```yaml
+effects:
+  - type: set_state
+    scope: character
+    key: accepted_watch_contract
+    value: true
+  - type: mob_command
+    mob_definition: mobdefinition.watchman
+    command: say Report back when you have finished practicing.
+```
+
+These effects also run for an automatically started quest and whenever the
+graph re-enters that step. Character state records acceptance for that player
+until explicitly changed; it is not cleared on completion or abandonment. Use
+`scope: world` only when the value should belong to the current runtime world,
+such as a private instance run.
+
+Quest effects are separate from Trigger `steps` and `actions`. There is no
+builder-facing quest-acceptance Trigger hook; put acceptance behavior in the
+first step's `effects`. `mob_command` only supports the verbs listed below.
+
 Use canonical effect `type` values when authoring new manifests:
 
 
@@ -417,7 +441,7 @@ Use canonical effect `type` values when authoring new manifests:
 | `grant_currency` | `currency`, `amount`                    | Adds one authored currency to the player immediately. |
 | `grant_xp`    | `amount`                                    | Adds experience and applies world leveling immediately. |
 | `adjust_reputation` | `faction`, `amount`                   | Adds or subtracts player standing with a reputation faction. |
-| `mob_command` | `mob_definition` and `command` or `commands` | Runs a constrained mob speech/emote/echo command.   |
+| `mob_command` | `mob_definition` and `command` or `commands` | Runs a constrained mob speech/emote/echo or door-opening command. |
 
 `grant_currency` requires an explicit currency code and a positive whole-number
 amount. It does not fall back to Gold or the current default. See
@@ -432,6 +456,28 @@ Allowed `mob_command` verbs today:
 - `/echo`
 - `/zecho`
 - `/wecho`
+- `/open`
+
+For a quest giver who opens a locked door on acceptance, put this effect on
+the first step:
+
+```yaml
+effects:
+  - type: mob_command
+    mob_definition: mobdefinition.watchman
+    command: /open east -- The watchman turns his key and opens the cell door.
+```
+
+`/open` immediately opens even a locked door, without requiring a player key.
+The mob must be in the player's current room and exact runtime world; instance
+runs cannot open each other's doors. Use a direction or an unambiguous door
+name. Optional text after `--` replaces the normal door-state message for
+occupants of both adjoining rooms, and appears only if the state changes.
+
+Door opening uses the audited transactional command executor. A missing mob,
+invalid door, or later failed quest transition rolls back the quest mutation
+and door change without sending the door-opening message. Command chains and
+arbitrary builder commands are not supported.
 
 `spec.rewards` is a mapping from resolution key to a list of effects:
 

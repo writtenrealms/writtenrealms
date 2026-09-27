@@ -241,6 +241,10 @@ the underlying editor URL.
 
 Each instance can also have its own optional [full-screen entry message](world-config-builder-guide.md#full-screen-entry-messages),
 with all-at-once, cumulative reveal, or paragraph replacement presentation.
+When a player enters a run, the console prints `Instance ID: <id>` before
+room-entry greetings and other arrival-trigger text. The room snapshot that
+follows does not repeat that ID. The full-screen entry message remains a
+separate presentation overlay.
 
 The instance template owns instance-local content and policy instead: starting
 room, death room, zones, rooms, paths, spawn plans, goals, timer settings,

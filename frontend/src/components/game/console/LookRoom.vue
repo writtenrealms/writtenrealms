@@ -7,8 +7,12 @@
       </ConsoleNotice>
     </div>
 
-    <div v-if="isStateSnapshot && message.data.world.instance_ref" class="mb-4">
-      <div>Instance ID: {{ message.data.world.instance_ref }}</div>
+    <div
+      v-if="isStateSnapshot && message.data.world.instance_ref &&
+        (!message.instance_ref_announced || message.data.world.instance_status === 'completed')"
+      class="mb-4"
+    >
+      <div v-if="!message.instance_ref_announced">Instance ID: {{ message.data.world.instance_ref }}</div>
       <div v-if="message.data.world.instance_status === 'completed'" class="instance-completed color-secondary">
         Status: Completed
       </div>

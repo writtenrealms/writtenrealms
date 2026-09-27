@@ -256,13 +256,18 @@ def _apply_effects(
     player=None,
     event_data: dict[str, Any] | None = None,
 ):
-    return apply_quest_effects(
-        quest_instance,
-        effects,
-        player=player,
-        template=quest_instance.template,
-        event_data=event_data,
-    )
+    from spawns.actions.base import ActionError
+
+    try:
+        return apply_quest_effects(
+            quest_instance,
+            effects,
+            player=player,
+            template=quest_instance.template,
+            event_data=event_data,
+        )
+    except ActionError as exc:
+        raise QuestRuntimeError(exc.message, code=exc.code) from exc
 
 
 def _build_player_event(
@@ -538,19 +543,21 @@ def _transition_if_any(
             objective_state_map=objective_state_map,
         ):
             continue
-        _apply_effects(
+        effect_result = _apply_effects(
             quest_instance,
             transition.get("effects") or [],
             player=player,
             event_data=event_data,
         )
-        return enter_step(
+        result = enter_step(
             quest_instance,
             step_id=str(transition.get("goto") or "").strip(),
             player=player,
             entry_reason="transition",
             event_data=event_data,
         )
+        result.events = [*effect_result.events, *result.events]
+        return result
     return QuestTransitionResult(quest_instance=quest_instance, events=[])
 
 
@@ -634,6 +641,7 @@ def enter_step(
     )
     reward_summaries = list(step_effect_result.reward_summaries)
     currency_rewards = list(step_effect_result.currency_rewards)
+    effect_events = list(step_effect_result.events)
     if step_kind == "resolution":
         reward_result = _apply_effects(
             refreshed,
@@ -643,6 +651,7 @@ def enter_step(
         )
         reward_summaries.extend(reward_result.reward_summaries)
         currency_rewards.extend(reward_result.currency_rewards)
+        effect_events.extend(reward_result.events)
     payload, info_text = _info_for_instance(refreshed, player=player)
     if step_kind == "resolution":
         event_type = "quest.instance.resolved"
@@ -663,7 +672,7 @@ def enter_step(
 
     return QuestTransitionResult(
         quest_instance=refreshed,
-        events=[_build_player_event(
+        events=[*effect_events, _build_player_event(
             player,
             event_type=event_type,
             text=text,
@@ -766,7 +775,7 @@ def choose_for_instance(player, identity: str, choice_id: str) -> QuestTransitio
     if not selected_choice:
         raise QuestRuntimeError("Choice was not found for this quest step.", code="choice_not_found")
 
-    _apply_effects(
+    effect_result = _apply_effects(
         quest_instance,
         selected_choice.get("effects") or [],
         player=player,
@@ -775,12 +784,14 @@ def choose_for_instance(player, identity: str, choice_id: str) -> QuestTransitio
     goto = str(selected_choice.get("goto") or "").strip()
     if not goto:
         raise QuestRuntimeError("Choice does not lead anywhere.", code="missing_goto")
-    return enter_step(
+    result = enter_step(
         quest_instance,
         step_id=goto,
         player=player,
         entry_reason=f"choice:{selected_choice.get('id')}",
     )
+    result.events = [*effect_result.events, *result.events]
+    return result
 
 
 @serialized_world(lambda player, *args, **kwargs: player.world_id)

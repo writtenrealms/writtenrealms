@@ -347,6 +347,7 @@ def emit_pending_initial_instance_entry(player):
     _enqueue_instance_events(_instance_entry_events(
         run=run, player=player, origin_room_id=None,
         destination_room_id=player.room_id,
+        announce_instance=False,
     ))
 
 
@@ -903,15 +904,27 @@ def _cancel_pending_door_action(*, player, code, message):
     )
 
 
-def _instance_entry_events(*, run, player, origin_room_id, destination_room_id):
+def _instance_entry_events(
+        *, run, player, origin_room_id, destination_room_id,
+        announce_instance=True):
     from spawns.events import GameEvent, player_room_enter_event
 
-    events = [player_room_enter_event(
+    events = []
+    if announce_instance:
+        # Deliver identity before room-entry reactions. The later state sync
+        # still follows those reactions so its room/player snapshot is current.
+        events.append(GameEvent(
+            type="cmd.enter.success",
+            recipients=[player.key],
+            data={"world_id": run.spawned_world_id, "instance_ref": run.ref},
+            text=f"Instance ID: {run.ref}",
+        ))
+    events.append(player_room_enter_event(
         player=player,
         origin_room_id=origin_room_id,
         destination_room_id=destination_room_id,
         source="instance_enter",
-    )]
+    ))
     if run.time_control and run.single_player and run.owner_id == player.pk:
         events.append(GameEvent(
             type="notification.instance.time_control_hint",

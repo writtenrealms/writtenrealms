@@ -324,6 +324,20 @@ transitions:
 `questtemplate.<slug>`, or a bare quest slug. Bare slugs are preferred in
 authored content.
 
+There is currently no `quest_accepted` or `quest_active` predicate. To remember
+that a player accepted a quest, set character state in its first step's
+`effects`, then test that state in a condition:
+
+```yaml
+conditions:
+  eq: [state.character.accepted_watch_contract, true]
+```
+
+This records that acceptance happened; it does not track whether the quest is
+still active. Completion or abandonment does not automatically clear authored
+state. See [quest-builder-guide.md](quest-builder-guide.md#effects-and-rewards)
+for the acceptance effect.
+
 ## Abilities
 
 Abilities have two related gates:
