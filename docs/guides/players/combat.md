@@ -131,8 +131,9 @@ combat order; the newcomer becomes eligible in the next round.
 The Combat section in the desktop right sidebar shows the round, allies and
 enemies, their health, and their active effects. It replaces the sidebar's
 character list; the left-side status, map, and target panel keep their usual
-layout. Quest Log and Communication Log are available under the expandable
-Logs heading at the top of the right sidebar.
+layout. The split action bar at the top of the right sidebar opens either log
+directly: select **QUESTS** for the Quest Log or **COMS** for the Communication
+Log. **COMS** appears in multiplayer worlds.
 
 Click an enemy in the roster or use `kill <target>` to select your current opponent.
 Changing targets keeps you in the same fight. If that opponent leaves or dies,

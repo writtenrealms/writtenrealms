@@ -1,12 +1,12 @@
 <template>
   <div id="sidebar">
-    <details class="sidebar-element logs">
-      <summary>Logs</summary>
-      <div class="log-actions mt-3">
-        <button class="btn-small mb-1 button-gray" @click="onClickQuestLog">QUEST LOG</button>
-        <button class="btn-small button-gray" @click="onClickCommunicationLog" v-if="world.is_multiplayer">COMMUNICATION LOG</button>
-      </div>
-    </details>
+    <div class="sidebar-element logs" role="group" aria-label="Logs">
+      <button type="button" class="log-link" aria-label="Quest Log" @click="onClickQuestLog">QUESTS</button>
+      <template v-if="world.is_multiplayer">
+        <span class="log-divider" aria-hidden="true">|</span>
+        <button type="button" class="log-link" aria-label="Communication Log" @click="onClickCommunicationLog">COMS</button>
+      </template>
+    </div>
 
     <!-- Focus -->
     <div class="sidebar-element focus" v-if="allow_combat">
@@ -136,21 +136,42 @@ const onClickCommunicationLog = () => {
     }
 
     &.logs {
-      summary {
+      display: flex;
+      position: relative;
+      padding: 0;
+      white-space: nowrap;
+
+      .log-link {
         @include font-title-regular;
-        color: $color-text-half;
-        text-transform: uppercase;
-        list-style: none;
+        flex: 1 1 0;
+        min-width: 0;
+        min-height: 54px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        appearance: none;
+        background: rgba(255, 255, 255, 0.025);
+        border: 0;
+        padding: 12px 8px;
+        color: $color-text-hex-70;
+        font-size: 1rem;
+        line-height: 1.5;
+        text-align: center;
         cursor: pointer;
 
-        &::-webkit-details-marker { display: none; }
-        &::before { content: "+"; display: inline-block; width: 14px; }
-        &:hover { color: $color-text; }
-        &:focus-visible { outline: 1px solid $color-primary; outline-offset: 4px; }
+        &:hover { color: $color-text; background: rgba(255, 255, 255, 0.06); }
+        &:active { background: rgba(255, 255, 255, 0.09); }
+        &:focus-visible { outline: 1px solid $color-primary; outline-offset: -3px; }
       }
 
-      &[open] summary::before { content: "−"; }
-      .log-actions { display: flex; flex-direction: column; align-items: flex-start; }
+      .log-divider {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        color: $color-text-hex-30;
+        pointer-events: none;
+      }
     }
   }
 }

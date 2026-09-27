@@ -17,14 +17,15 @@ test("the encounter roster belongs only to the right sidebar", () => {
   assert.match(leftCombat.template.content, /doAction\('loot'\)/);
 });
 
-test("both log actions share a keyboard-accessible section that starts collapsed", () => {
-  const logs = sidebar.template.content.match(/<details([^>]*)>([\s\S]*?)<\/details>/);
+test("both logs are directly available as keyboard-accessible buttons in a split action bar", () => {
+  const logs = sidebar.template.content.match(/<div class="sidebar-element logs"[^>]*>([\s\S]*?)<\/div>/);
   assert.ok(logs);
-  assert.doesNotMatch(logs[1], /\bopen\b/);
-  assert.match(logs[2], /<summary>Logs<\/summary>/);
-  assert.match(logs[2], /onClickQuestLog/);
-  assert.match(logs[2], /onClickCommunicationLog/);
-  assert.match(logs[2], /v-if="world.is_multiplayer"/);
+  assert.doesNotMatch(sidebar.template.content, /<details|<summary/);
+  assert.match(logs[1], /<button type="button"[^>]*aria-label="Quest Log"[^>]*@click="onClickQuestLog">QUESTS<\/button>/);
+  assert.match(logs[1], /<button type="button"[^>]*aria-label="Communication Log"[^>]*@click="onClickCommunicationLog">COMS<\/button>/);
+  assert.match(logs[1], /<template v-if="world.is_multiplayer">\s*<span[^>]*aria-hidden="true">\|<\/span>/);
+  assert.match(sidebar.styles[0].content, /&\.logs\s*\{\s*display: flex;/);
+  assert.match(sidebar.styles[0].content, /white-space: nowrap/);
 });
 
 test("the roster keeps target selection, paused rounds, and a quiet empty state", () => {
