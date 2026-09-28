@@ -32,3 +32,37 @@ event subscriptions, movement policies, or more complex scripting, use a
   be discoverable through the room's writing or surrounding context.
 - Use a cooldown appropriate to the side effect, especially for actions that
   grant items, currency, state, or messages to multiple players.
+
+## Show a Quest Giver Until Acceptance
+
+A room-scoped command trigger can display an existing command as a room action:
+
+```yaml
+kind: trigger
+metadata:
+  name: Talk to the Watchman
+spec:
+  scope: room
+  kind: command
+  target: room@1
+  match: talk watchman
+  script: talk watchman
+  display_action_in_room: true
+  gate_delay: 0
+  conditions:
+    not:
+      quest_accepted: watch_contract
+```
+
+Replace `watch_contract` with the quest's slug in this world or instance
+template. The room action appears as **TALK WATCHMAN** until acceptance, and
+subsequent room views omit it. The built-in `talk` command handles the click
+and remains available after the hint disappears, including for reporting quest
+completion. No custom character-state flag is needed; existing acceptance
+records work too.
+
+`quest_accepted` stays true after completion or abandonment. To redisplay a
+hint after abandonment, require both `not: {quest_active: watch_contract}`
+and `not: {quest_completed: watch_contract}` with `all`. See the
+[quest condition reference](condition-builder-guide.md#quests) for lifecycle
+semantics and repeatable quests.

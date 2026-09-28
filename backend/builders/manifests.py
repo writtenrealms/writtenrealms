@@ -2684,14 +2684,19 @@ def _coerce_conditions_payload(raw_conditions: Any, *, world: World) -> str:
         normalized = _normalize_trigger_condition_refs(raw_conditions, world=world)
         # Import normalization has already converted explicit legacy room
         # aliases. Validate that persisted operands now use stable room refs.
-        from quests.manifests import validate_condition_room_refs
+        from quests.manifests import validate_condition_quest_refs, validate_condition_room_refs
 
+        builder_serializers.validate_conditions(None, normalized)
+        validate_condition_quest_refs(
+            world=world,
+            condition=normalized,
+            field_name="spec.conditions",
+        )
         validate_condition_room_refs(
             world=world,
             condition=normalized,
             field_name="spec.conditions",
         )
-        builder_serializers.validate_conditions(None, normalized)
         return json.dumps(normalized)
     conditions = _coerce_text(raw_conditions)
     if conditions:

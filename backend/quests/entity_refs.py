@@ -41,12 +41,13 @@ def is_dynamic_reference(value: Any) -> bool:
     return text.startswith("{") and text.endswith("}") and len(text) >= 3
 
 
-def resolve_entity_ref_id(
+def entity_ref_lookup(
     *,
     world: World | None,
     value: Any,
     expected_type: str,
-) -> int | None:
+) -> dict[str, Any] | None:
+    """Build a lookup without querying; typed numeric refs remain slug refs."""
     expected = canonical_entity_type(expected_type)
     if not expected:
         return None
@@ -55,7 +56,7 @@ def resolve_entity_ref_id(
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        return value
+        return {"id": value}
     if is_dynamic_reference(value):
         return None
 
@@ -63,7 +64,7 @@ def resolve_entity_ref_id(
     if not text:
         return None
     if text.isdigit():
-        return int(text)
+        return {"id": int(text)}
 
     prefix, sep, raw = text.partition(".")
     if sep == ".":
@@ -79,14 +80,28 @@ def resolve_entity_ref_id(
 
     if not world:
         return None
-    model_cls = _ENTITY_MODELS[expected]
     world_id = world.pk
     if expected in {"itemdefinition", "mobdefinition"}:
         # Definitions are shared by the family; quests remain template-local.
         # Use the parent id without fetching the parent World on every lookup.
         template_world = world.context or world
         world_id = template_world.instance_of_id or template_world.pk
-    return model_cls.objects.filter(world_id=world_id, slug=text).values_list("id", flat=True).first()
+    return {"world_id": world_id, "slug": text}
+
+
+def resolve_entity_ref_id(
+    *,
+    world: World | None,
+    value: Any,
+    expected_type: str,
+) -> int | None:
+    lookup = entity_ref_lookup(world=world, value=value, expected_type=expected_type)
+    if lookup is None:
+        return None
+    if "id" in lookup:
+        return lookup["id"]
+    model_cls = _ENTITY_MODELS[canonical_entity_type(expected_type)]
+    return model_cls.objects.filter(**lookup).values_list("id", flat=True).first()
 
 
 def resolve_room_ref_id(

@@ -165,6 +165,58 @@ class TestQuestDoorEffects(WorldTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(self._door_messages(repeated), [])
 
+    def test_talk_prompt_hides_after_command_or_http_acceptance_and_report_still_works(self):
+        response = self.client.post(
+            reverse("builder-world-manifest-apply", args=[self.template.pk]),
+            {"manifest": yaml.safe_dump({
+                "kind": "trigger",
+                "metadata": {"name": "Talk to watchman"},
+                "spec": {
+                    "scope": "room", "kind": "command",
+                    "target": f"room@{self.room.relative_id}",
+                    "match": "talk watchman", "script": "talk watchman",
+                    "display_action_in_room": True, "gate_delay": 0,
+                    "conditions": {"not": {"quest_accepted": self.quest.slug}},
+                },
+            })}, format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        other_runtime = self.template.create_spawn_world()
+        other = self.create_player("Other", world=other_runtime, room=self.room)
+        other.in_game = True
+        other.save(update_fields=["in_game"])
+        self.guard_definition.spawn(self.room, other_runtime)
+
+        def actions(player):
+            with capture_game_messages() as messages:
+                dispatch_and_drain_combat(player.pk, "look")
+            return next(entry["message"]["data"]["target"]["actions"] for entry in messages
+                        if entry["message"]["type"] == "cmd.look.success")
+
+        for player, via_http in ((self.player, False), (other, True)):
+            with self.subTest(via_http=via_http):
+                self.assertIn("talk watchman", actions(player))
+                with capture_game_messages() as messages:
+                    dispatch_and_drain_combat(player.pk, "TALK WATCHMAN")
+                self.assertEqual(sum(entry["message"]["type"] == "cmd.talk.success"
+                                     for entry in messages), 1)
+                self.assertIn("talk watchman", actions(player))
+                with capture_game_messages():
+                    if via_http:
+                        response = self.client.post(
+                            reverse("game-quest-opportunity-accept", args=[self.quest.slug]),
+                            {}, format="json", HTTP_X_PLAYER_ID=str(player.pk),
+                        )
+                        self.assertEqual(response.status_code, 201, response.data)
+                    else:
+                        dispatch_and_drain_combat(player.pk, f"quest accept {self.quest.slug}")
+                self.assertNotIn("talk watchman", actions(player))
+                with capture_game_messages():
+                    dispatch_and_drain_combat(player.pk, "talk watchman")
+                self.assertEqual(QuestInstance.objects.get(player=player, template=self.quest).resolution,
+                                 "complete")
+                self.assertNotIn("talk watchman", actions(player))
+
     def test_auto_start_announces_quest_before_door_output(self):
         self.quest.discovery_policy = {"sources": [{"type": "auto_start"}]}
         self.quest.save(update_fields=["discovery_policy"])

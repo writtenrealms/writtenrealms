@@ -4,6 +4,7 @@ import re
 
 from core.condition_dsl import (
     ConditionContext,
+    QUEST_CONDITION_OPERATORS,
     evaluate_condition as evaluate_structured_condition,
     structured_condition_payload,
 )
@@ -297,6 +298,7 @@ def evaluate_conditions(
     zone=None,
     world=None,
     event_data=None,
+    quest_cache=None,
 ):
     """
     Top level call for evaluating conditions. Multiple condition blocks can be chained
@@ -313,35 +315,36 @@ def evaluate_conditions(
     """
 
     structured_condition = structured_condition_payload(text)
+    quest_cache = {} if quest_cache is None else quest_cache
 
-    # Presence predicates already evaluate against indexed runtime querysets in
+    # Presence and quest predicates evaluate against indexed runtime querysets in
     # ``condition_dsl``.  Building the legacy actor/room/world dictionaries
     # first would serialize every item and character in a busy room only to
     # discard that data, turning a single EXISTS check into work proportional
     # to room occupancy.  Keep this deliberately narrow: comparison predicates
     # may depend on legacy-derived fields in those dictionaries and continue
     # through the compatibility path below.
-    def uses_only_direct_presence_predicates(value):
+    def uses_only_direct_predicates(value):
         if isinstance(value, bool):
             return True
         if isinstance(value, list):
-            return all(uses_only_direct_presence_predicates(child) for child in value)
+            return all(uses_only_direct_predicates(child) for child in value)
         if not isinstance(value, dict) or len(value) != 1:
             return False
         operator, operand = next(iter(value.items()))
-        if operator in ("item_present", "mob_present", "always"):
+        if operator in ("item_present", "mob_present", "always", *QUEST_CONDITION_OPERATORS):
             return True
         if operator in ("all", "any"):
             return isinstance(operand, list) and all(
-                uses_only_direct_presence_predicates(child) for child in operand
+                uses_only_direct_predicates(child) for child in operand
             )
         if operator == "not":
-            return uses_only_direct_presence_predicates(operand)
+            return uses_only_direct_predicates(operand)
         return False
 
     if (
         structured_condition is not None
-        and uses_only_direct_presence_predicates(structured_condition)
+        and uses_only_direct_predicates(structured_condition)
     ):
         condition_room = room if room is not None else getattr(actor, 'room', None)
         condition_world = (
@@ -358,6 +361,7 @@ def evaluate_conditions(
                     zone=zone,
                     world=condition_world,
                     event_data=event_data if isinstance(event_data, dict) else {},
+                    quest_cache=quest_cache,
                 ),
             ),
             'detail': '',
@@ -437,6 +441,7 @@ def evaluate_conditions(
                     zone=condition_zone,
                     world=condition_world,
                     event_data=event_data if isinstance(event_data, dict) else {},
+                    quest_cache=quest_cache,
                 ),
             ),
             'detail': '',

@@ -25,6 +25,7 @@ from quests.models import (
     QuestTemplate,
 )
 from builders.models import Currency, ItemDefinition
+from core.condition_dsl import QUEST_CONDITION_OPERATORS
 from core.economy import economy_world
 from worlds.models import World
 from worlds.room_refs import parse_room_reference
@@ -350,6 +351,33 @@ def _condition_uses_room_ref(
     return path.endswith(".id") or path.endswith("_id") or path == "event.target.id"
 
 
+def _validate_quest_condition_ref(world, quest_ref, field_name):
+    if quest_ref in (None, ""):
+        raise serializers.ValidationError(_entity_ref_error("questtemplate", field_name))
+    if isinstance(quest_ref, (list, tuple, set, dict)):
+        raise serializers.ValidationError(
+            f"{field_name} must be a single quest ref; use all/any for multiple quest prerequisites."
+        )
+    _validate_entity_ref(world, quest_ref, "questtemplate", field_name)
+
+
+def validate_condition_quest_refs(*, world: World, condition: Any, field_name="condition") -> None:
+    if isinstance(condition, list):
+        for index, child in enumerate(condition):
+            validate_condition_quest_refs(
+                world=world, condition=child, field_name=f"{field_name}[{index}]",
+            )
+    elif isinstance(condition, dict):
+        for operator in QUEST_CONDITION_OPERATORS:
+            if operator in condition:
+                _validate_quest_condition_ref(world, condition[operator], f"{field_name}.{operator}")
+        for operator in ("all", "any", "not"):
+            if operator in condition:
+                validate_condition_quest_refs(
+                    world=world, condition=condition[operator], field_name=f"{field_name}.{operator}",
+                )
+
+
 def _validate_condition_entity_refs(world: World, condition: Any, field_name: str) -> None:
     if condition in (None, {}, []):
         return
@@ -366,22 +394,9 @@ def _validate_condition_entity_refs(world: World, condition: Any, field_name: st
         _validate_condition_entity_refs(world, condition.get("any"), f"{field_name}.any")
     if "not" in condition:
         _validate_condition_entity_refs(world, condition.get("not"), f"{field_name}.not")
-    if "quest_completed" in condition:
-        quest_ref = condition.get("quest_completed")
-        if quest_ref in (None, ""):
-            raise serializers.ValidationError(
-                _entity_ref_error("questtemplate", f"{field_name}.quest_completed")
-            )
-        if isinstance(quest_ref, (list, tuple, set, dict)):
-            raise serializers.ValidationError(
-                f"{field_name}.quest_completed must be a single quest ref; use all/any for multiple quest prerequisites."
-            )
-        _validate_entity_ref(
-            world,
-            quest_ref,
-            "questtemplate",
-            f"{field_name}.quest_completed",
-        )
+    for operator in QUEST_CONDITION_OPERATORS:
+        if operator in condition:
+            _validate_quest_condition_ref(world, condition[operator], f"{field_name}.{operator}")
 
     for operator in ("eq", "ne", "gte", "lte", "in"):
         raw_args = condition.get(operator)

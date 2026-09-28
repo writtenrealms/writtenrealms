@@ -281,11 +281,17 @@ Notes:
       quest_completed: rival_path
   ```
 
-- `quest_completed` accepts the same quest template ref styles as other typed
-  refs: integer ids, `questtemplate.<id>`, `questtemplate.<slug>`, or a bare
-  slug. Bare slugs are preferred for readability.
-- `quest_completed` currently means the player has a resolved quest instance
-  with `resolution: complete`. `abandoned` does not count.
+- `quest_accepted` checks whether this character has ever started the quest,
+  including automatic starts. Completion and abandonment leave it true.
+- `quest_active` checks whether this character currently has an active attempt.
+- `quest_completed` checks whether the character has a resolved quest instance
+  with `resolution: complete`. `abandoned` does not count. A repeatable quest
+  can be both active and previously completed.
+- All three accept a bare slug or `questtemplate.<slug>`. Bare integer ids and
+  numeric strings are database-local references; typed numeric suffixes are
+  numeric slugs. Slugs are local to the authored world or instance template.
+  See [quest conditions](condition-builder-guide.md#quests) for examples,
+  including room prompts before acceptance and after abandonment.
 - `objective_complete` is only useful once the current quest instance exists.
   It should be used in step transitions and conditional choices, not in
   `visible_if` or `accept_if`.
@@ -416,22 +422,20 @@ Each item in `step.transitions` is a mapping with these common fields:
 ### Effects and Rewards
 
 Accepting a quest immediately enters its first step and applies that step's
-`effects`. Use this to record acceptance or have the quest giver speak:
+`effects`. Use this to have the quest giver speak or change the world:
 
 ```yaml
 effects:
-  - type: set_state
-    scope: character
-    key: accepted_watch_contract
-    value: true
   - type: mob_command
     mob_definition: mobdefinition.watchman
     command: say Report back when you have finished practicing.
 ```
 
 These effects also run for an automatically started quest and whenever the
-graph re-enters that step. Character state records acceptance for that player
-until explicitly changed; it is not cleared on completion or abandonment. Use
+graph re-enters that step. Use `quest_accepted`, `quest_active`, or
+`quest_completed` conditions to check quest lifecycle directly; no state-writing
+effect is needed. Character state remains available for other authored facts
+and is not automatically cleared on completion or abandonment. Use
 `scope: world` only when the value should belong to the current runtime world,
 such as a private instance run.
 

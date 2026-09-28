@@ -52,7 +52,9 @@ state-aware content should use the structured format.
 | `in` | `{in: [<path>, [<value>, ...]]}` | Path value is in a list. |
 | `mob_present` | `{mob_present: <mob_definition_ref>}` or `{mob_present: {ref: ..., where: ...}}` | A spawned mob from that definition, optionally matching a nested condition, is present in the context room. |
 | `item_present` | `{item_present: {location: room, item: <item_definition_ref>}}` | A live item from that definition is present in the actor's inventory or context room. |
-| `quest_completed` | `{quest_completed: <quest_ref>}` | Player has completed a quest template. |
+| `quest_accepted` | `{quest_accepted: <quest_ref>}` | Character has started this quest at least once, manually or automatically. |
+| `quest_active` | `{quest_active: <quest_ref>}` | Character currently has an active attempt at this quest. |
+| `quest_completed` | `{quest_completed: <quest_ref>}` | Character has successfully completed this quest at least once. |
 | `objective_complete` | `{objective_complete: <objective_id>}` | Current quest objective is complete. |
 
 ## Paths
@@ -320,23 +322,55 @@ transitions:
     goto: resolved
 ```
 
-`quest_completed` accepts integer ids, `questtemplate.<id>`,
-`questtemplate.<slug>`, or a bare quest slug. Bare slugs are preferred in
-authored content.
+The quest predicates read the character's quest records directly. Use a bare
+quest slug in authored content, such as `quest_accepted: watch_contract`.
+`questtemplate.<slug>` is also supported; a typed numeric suffix is a numeric
+**slug**, not a database id. Bare integer ids and numeric strings remain
+supported for database-local references.
 
-There is currently no `quest_accepted` or `quest_active` predicate. To remember
-that a player accepted a quest, set character state in its first step's
-`effects`, then test that state in a condition:
+| Character's quest history | `quest_accepted` | `quest_active` | `quest_completed` |
+| --- | --- | --- | --- |
+| Never started; an offer alone does not count | false | false | false |
+| First attempt in progress | true | true | false |
+| Abandoned, never completed | true | false | false |
+| Completed, no current attempt | true | false | true |
+| Previously completed and repeating now | true | true | true |
+
+Automatic starts count as acceptance. Abandonment does not clear acceptance
+and does not count as completion. Conditions refer to this character and the
+resolved quest template across its runs, not the account or another character.
+Slugs resolve inside the current authored world or instance template; sibling
+templates with the same slug have separate quest identities. Without a player
+context these predicates return false.
+
+To display a room action only before the first acceptance:
 
 ```yaml
 conditions:
-  eq: [state.character.accepted_watch_contract, true]
+  not:
+    quest_accepted: watch_contract
 ```
 
-This records that acceptance happened; it does not track whether the quest is
-still active. Completion or abandonment does not automatically clear authored
-state. See [quest-builder-guide.md](quest-builder-guide.md#effects-and-rewards)
-for the acceptance effect.
+To show it again after abandonment, while hiding it during an active attempt
+or after a successful completion:
+
+```yaml
+conditions:
+  all:
+    - not:
+        quest_active: watch_contract
+    - not:
+        quest_completed: watch_contract
+```
+
+These conditions also work in quest discovery, choices, transitions, and other
+shared DSL consumers. They need no custom state flag or acceptance effect and
+work with existing quest records. They do not by themselves check repeatability
+cooldowns or whether the character can accept a new offer right now.
+
+Room action display batches referenced quests into one indexed lookup per
+action collection. Results are shared within that collection and refreshed on
+the next evaluation, so quest changes do not wait for a cache timeout.
 
 ## Abilities
 

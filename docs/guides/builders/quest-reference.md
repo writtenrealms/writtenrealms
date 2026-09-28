@@ -271,6 +271,13 @@ What this teaches:
 - `accept_if` can enforce the same prerequisite again at accept time
 - `quest_completed` currently requires a `complete` resolution, not `abandoned`
 
+For acceptance and in-progress gates, the same DSL also supports
+`quest_accepted: first_steps` (ever started, including automatic starts) and
+`quest_active: first_steps` (an active attempt exists now). Acceptance stays
+true after abandonment or completion. See the
+[quest condition reference](condition-builder-guide.md#quests) for the full
+lifecycle table and room-action examples.
+
 For more than one prerequisite quest, compose the same predicate with `all`:
 
 ```yaml

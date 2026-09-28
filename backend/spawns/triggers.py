@@ -17,6 +17,7 @@ from config import game_settings as adv_config
 from core.condition_dsl import (
     ConditionContext,
     evaluate_condition as evaluate_structured_condition,
+    prefetch_quest_conditions,
     structured_condition_payload,
 )
 from core.conditions import evaluate_conditions
@@ -1326,6 +1327,11 @@ def _collect_display_action_labels(
 ) -> list[str]:
     labels: list[str] = []
     seen_labels: set[str] = set()
+    condition_context = ConditionContext(actor=actor, room=room, zone=zone, world=world)
+    prefetch_quest_conditions(
+        (trigger.conditions for trigger in triggers if trigger.display_action_in_room),
+        context=condition_context,
+    )
 
     for trigger in triggers:
         if not trigger.display_action_in_room:
@@ -1337,7 +1343,9 @@ def _collect_display_action_labels(
             continue
 
         if trigger.conditions:
-            evaluated = evaluate_conditions(actor, trigger.conditions)
+            evaluated = evaluate_conditions(
+                actor, trigger.conditions, quest_cache=condition_context.quest_cache,
+            )
             if not evaluated.get("result"):
                 continue
 

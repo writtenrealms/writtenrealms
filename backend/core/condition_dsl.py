@@ -8,6 +8,7 @@ from core.scoped_state import resolve_state_path
 
 
 COMPARISON_OPERATORS = ("eq", "ne", "gte", "lte")
+QUEST_CONDITION_OPERATORS = ("quest_accepted", "quest_active", "quest_completed")
 STRUCTURED_CONDITION_OPERATORS = (
     "always",
     "all",
@@ -15,7 +16,7 @@ STRUCTURED_CONDITION_OPERATORS = (
     "not",
     "mob_present",
     "item_present",
-    "quest_completed",
+    *QUEST_CONDITION_OPERATORS,
     "objective_complete",
     *COMPARISON_OPERATORS,
     "in",
@@ -69,6 +70,12 @@ class ConditionContext:
     room_data: dict[str, Any] | None = None
     world_data: dict[str, Any] | None = None
     state_cache: dict[str, dict[str, Any]] = field(
+        default_factory=dict,
+        compare=False,
+        repr=False,
+    )
+    # Evaluation-local only: never retain quest results across game commands.
+    quest_cache: dict[tuple, dict[str, bool]] = field(
         default_factory=dict,
         compare=False,
         repr=False,
@@ -261,6 +268,26 @@ def validate_condition_payload(
             raise ValueError(
                 f"{field_name}.item_present.count must be a positive integer."
             )
+
+    for operator in QUEST_CONDITION_OPERATORS:
+        if operator not in condition:
+            continue
+        ref = condition[operator]
+        if (
+            isinstance(ref, bool)
+            or not isinstance(ref, (str, int))
+            or not str(ref).strip()
+        ):
+            raise ValueError(f"{field_name}.{operator} must be a single quest ref.")
+        if isinstance(ref, str) and not ref.strip().startswith("{"):
+            prefix, separator, _ = ref.strip().partition(".")
+            if separator:
+                from quests.entity_refs import canonical_entity_type
+
+                if canonical_entity_type(prefix) != "questtemplate":
+                    raise ValueError(
+                        f"{field_name}.{operator} must reference a questtemplate."
+                    )
 
     for operator in COMPARISON_OPERATORS + ("in",):
         if operator not in condition:
@@ -695,31 +722,92 @@ def _resolve_comparison_value(path: str, value: Any, context: ConditionContext) 
     return value
 
 
-def _player_completed_quest_template(value: Any, context: ConditionContext) -> bool:
+def _quest_condition_lookup(value: Any, context: ConditionContext):
+    from quests.entity_refs import entity_ref_lookup
+
     player = _context_player(context)
-    if not player:
-        return False
-
-    try:
-        from quests.entity_refs import resolve_entity_ref_id
-        from quests.models import QuestInstance
-    except Exception:
-        return False
-
-    template_id = resolve_entity_ref_id(
+    if not player or not getattr(player, "pk", None):
+        return None
+    lookup = entity_ref_lookup(
         world=_condition_ref_world(context),
         value=resolve_value(value, context),
         expected_type="questtemplate",
     )
-    if not template_id:
-        return False
+    if lookup is None:
+        return None
+    key = (player.pk, lookup.get("world_id"), lookup.get("slug"), lookup.get("id"))
+    return key, lookup
 
-    return QuestInstance.objects.filter(
-        player=player,
-        template_id=template_id,
-        status="resolved",
-        resolution="complete",
-    ).exists()
+
+def _load_quest_condition_states(lookups: dict, context: ConditionContext) -> None:
+    """Fetch only referenced templates, with indexed EXISTS checks per template."""
+    from django.db.models import Exists, OuterRef, Q
+    from quests.models import QuestInstance, QuestOfferState, QuestTemplate
+
+    missing = {key: lookup for key, lookup in lookups.items() if key not in context.quest_cache}
+    if not missing:
+        return
+    ids = set()
+    slugs_by_world = {}
+    for lookup in missing.values():
+        if "id" in lookup:
+            ids.add(lookup["id"])
+        else:
+            slugs_by_world.setdefault(lookup["world_id"], set()).add(lookup["slug"])
+    template_filter = Q(pk__in=ids)
+    for world_id, slugs in slugs_by_world.items():
+        template_filter |= Q(world_id=world_id, slug__in=slugs)
+    player = _context_player(context)
+    instances = QuestInstance.objects.filter(player_id=player.pk, template_id=OuterRef("pk"))
+    offers = QuestOfferState.objects.filter(
+        player_id=player.pk, template_id=OuterRef("pk"), last_accepted_at__isnull=False,
+    )
+    rows = QuestTemplate.objects.filter(template_filter).order_by().annotate(
+        # Offer timestamps retain acceptance if an old runtime's attempts
+        # have been removed. Existing attempts also work without offer state.
+        quest_accepted=Exists(instances) | Exists(offers),
+        quest_active=Exists(instances.filter(status="active")),
+        quest_completed=Exists(instances.filter(status="resolved", resolution="complete")),
+    ).values("id", "world_id", "slug", *QUEST_CONDITION_OPERATORS)
+    for key in missing:
+        context.quest_cache[key] = dict.fromkeys(QUEST_CONDITION_OPERATORS, False)
+    for row in rows:
+        state = {operator: row[operator] for operator in QUEST_CONDITION_OPERATORS}
+        context.quest_cache[(player.pk, None, None, row["id"])] = state
+        context.quest_cache[(player.pk, row["world_id"], row["slug"], None)] = state
+
+
+def prefetch_quest_conditions(conditions, *, context: ConditionContext) -> None:
+    """Share one quest lookup across a read-only group, such as room action labels."""
+    lookups = {}
+
+    def collect(condition):
+        if isinstance(condition, list):
+            for child in condition:
+                collect(child)
+        elif isinstance(condition, dict):
+            for operator in QUEST_CONDITION_OPERATORS:
+                if operator in condition:
+                    resolved = _quest_condition_lookup(condition[operator], context)
+                    if resolved is not None:
+                        key, lookup = resolved
+                        lookups[key] = lookup
+            for operator in ("all", "any", "not"):
+                if operator in condition:
+                    collect(condition[operator])
+
+    for condition in conditions:
+        collect(structured_condition_payload(condition))
+    _load_quest_condition_states(lookups, context)
+
+
+def _player_quest_condition(operator: str, value: Any, context: ConditionContext) -> bool:
+    resolved = _quest_condition_lookup(value, context)
+    if resolved is None:
+        return False
+    key, lookup = resolved
+    _load_quest_condition_states({key: lookup}, context)
+    return context.quest_cache[key][operator]
 
 
 def _mob_definition_filter(value: Any) -> dict[str, Any] | None:
@@ -1012,8 +1100,9 @@ def evaluate_condition(
             return False
         state = (context.objective_state_map or {}).get(objective_id)
         return bool(state and getattr(state, "status", None) == "complete")
-    if "quest_completed" in condition:
-        return _player_completed_quest_template(condition.get("quest_completed"), context)
+    for operator in QUEST_CONDITION_OPERATORS:
+        if operator in condition:
+            return _player_quest_condition(operator, condition[operator], context)
 
     comparisons = (
         ("eq", lambda left, right: left == right),
