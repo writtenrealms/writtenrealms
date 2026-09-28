@@ -47,73 +47,19 @@
             Showing the {{ selectedLimit.limit }} most recent quests.
           </div>
 
-          <template v-if="quests.length">
-            <div v-for="quest in quests" :key="quest.id" class="quest-entry mt-4">
-              <div class="quest-heading">
-                <h2 class="mb-2">
-                  <button
-                    type="button"
-                    class="quest-title-button"
-                    :aria-controls="questDetailsId(quest)"
-                    :aria-expanded="expanded == quest.id"
-                    @click="onClickName(quest)"
-                  >
-                    <span class="interactive">{{ quest.template.name }}</span>
-                    <span class="ml-2 color-text-50" v-if="store.state.game.player.is_builder">[ {{ quest.id }} ]</span>
-                  </button>
-                </h2>
-                <span v-if="selectedTab == 'repeatable'" class="repeatable-badge">
-                  Repeatable Quest
-                </span>
-              </div>
-              <div
-                v-if="selectedTab == 'repeatable'"
-                class="repeatability-status"
-                :class="repeatabilityStatusClass(quest)"
-                :title="repeatabilityReadyAtTitle(quest)"
-              >
-                {{ repeatabilityStatus(quest) }}
-              </div>
-              <div v-show="expanded == quest.id" :id="questDetailsId(quest)">
-                <div class="quest-meta color-text-50">
-                  {{ selectedTab == "repeatable" ? "Repeatable Quest" : quest.status }}
-                  <template v-if="quest.resolution"> - {{ quest.resolution }}</template>
-                  <template v-if="quest.template.slug"> - {{ quest.template.slug }}</template>
+          <div v-if="questCards.length" class="quest-log-cards">
+            <QuestCard v-for="{ quest, card } in questCards" :key="quest.id" :card="card"
+              collapsible :expanded="expanded == quest.id" :details-id="questDetailsId(quest)"
+              :reference="store.state.game.player.is_builder ? `[ ${quest.id} ]` : undefined"
+              actionable @toggle="onClickName(quest)" @command="runQuestCommand">
+              <template v-if="selectedTab == 'repeatable'" #summary>
+                <div class="repeatability-status" :class="repeatabilityStatusClass(quest)"
+                  :title="repeatabilityReadyAtTitle(quest)">
+                  {{ repeatabilityStatus(quest) }}
                 </div>
-
-                <div v-if="quest.current_step.recap" class="my-2">
-                  {{ quest.current_step.recap }}
-                </div>
-                <div v-if="quest.current_step.text.body" class="quest-body my-2">
-                  {{ quest.current_step.text.body }}
-                </div>
-
-                <div v-if="visibleObjectives(quest).length" class="quest-objectives my-2">
-                  <div class="quest-section-label">Objectives</div>
-                  <div
-                    v-for="objective in visibleObjectives(quest)"
-                    :key="objective.id"
-                    class="quest-objective"
-                  >
-                    <span>{{ objective.text || objective.id }}</span>
-                    <span class="quest-progress color-text-50">{{ objectiveProgress(objective) }}</span>
-                  </div>
-                </div>
-
-                <div v-if="quest.latest_journal_entry?.recap" class="my-2 color-text-50">
-                  Last change: {{ quest.latest_journal_entry.recap }}
-                </div>
-
-                <button
-                  v-if="quest.status == 'active'"
-                  class="btn-small mt-2"
-                  @click="showQuestInfo(quest)"
-                >
-                  INFO
-                </button>
-              </div>
-            </div>
-          </template>
+              </template>
+            </QuestCard>
+          </div>
           <template v-else>
             <div class="mt-6" v-if="selectedTab == 'resolved'">No resolved quests.</div>
             <div class="mt-6" v-else-if="selectedTab == 'repeatable'">No repeatable quests.</div>
@@ -126,6 +72,8 @@
 </template>
 
 <script lang="ts" setup>
+import QuestCard from "@/components/game/QuestCard.vue";
+import { questInstanceCard, splitQuestLines } from "@/core/questPresentation";
 import { gameplayTimeMs } from "@/core/instanceTimeControl";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useStore } from "vuex";
@@ -213,6 +161,22 @@ const serverTimeAtFetchMs = ref<number | null>(null);
 let countdownTimer: number | null = null;
 
 const quests = computed(() => questGroups.value[selectedTab.value]);
+// Card content depends on the fetched quests, not the one-second cooldown tick.
+const questCards = computed(() => quests.value.map((quest) => {
+  const card = questInstanceCard(quest);
+  if (selectedTab.value === "repeatable") {
+    card.badges.push({ label: "repeatable", tone: "tone-type" });
+  }
+  if (quest.resolution) card.metaLines.push(`Resolution: ${quest.resolution}`);
+  const lastRecap = splitQuestLines(quest.latest_journal_entry?.recap).join("\n");
+  if (lastRecap && lastRecap !== card.recapLines.join("\n")) {
+    card.metaLines.push(`Last change: ${lastRecap}`);
+  }
+  if (quest.status === "active" && card.slug) {
+    card.actions.push({ label: "INFO", command: `quest info ${card.slug}`, tone: "secondary" });
+  }
+  return { quest, card };
+}));
 const selectedLimit = computed(() => questLimits.value[selectedTab.value]);
 
 const getQuests = async () => {
@@ -281,16 +245,6 @@ const onClickName = (quest: QuestInstance) => {
 
 const questDetailsId = (quest: QuestInstance) => `quest-log-details-${quest.id}`;
 
-const visibleObjectives = (quest: QuestInstance) => {
-  return (quest.current_step.objectives || []).filter((objective) => objective.status !== "hidden");
-};
-
-const objectiveProgress = (objective: QuestObjective) => {
-  const current = Number(objective.progress_current || 0);
-  const target = Number(objective.progress_target || 0);
-  return target > 0 ? `${current}/${target}` : `${current}`;
-};
-
 const repeatabilityRemainingSeconds = (quest: QuestInstance) => {
   const repeatability = quest.repeatability;
   if (!repeatability || repeatability.state !== "waiting") return 0;
@@ -355,9 +309,9 @@ const repeatabilityReadyAtTitle = (quest: QuestInstance) => {
   return `Ready at ${parsedReadyAt.toLocaleString()}`;
 };
 
-const showQuestInfo = (quest: QuestInstance) => {
-  if (!quest.template.slug) return;
-  store.dispatch("game/cmd", `quest info ${quest.template.slug}`);
+const runQuestCommand = (command: string) => {
+  if (!command) return;
+  store.dispatch("game/cmd", command);
   closeQuestLog();
 };
 
@@ -396,10 +350,6 @@ onBeforeUnmount(() => {
     padding: 20px;
   }
 
-  h2 {
-    margin: 0;
-  }
-
   .quest-tabs {
     overflow-x: auto;
     padding: 0;
@@ -419,21 +369,11 @@ onBeforeUnmount(() => {
     }
   }
 
-  .quest-heading {
-    align-items: baseline;
+  .quest-log-cards {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  .quest-title-button {
-    appearance: none;
-    background: transparent;
-    border: 0;
-    color: inherit;
-    font: inherit;
-    padding: 0;
-    text-align: left;
+    flex-direction: column;
+    gap: 0.85rem;
+    margin-top: 1rem;
   }
 
   .quest-log-message {
@@ -445,17 +385,9 @@ onBeforeUnmount(() => {
     margin-top: 0.75rem;
   }
 
-  .repeatable-badge {
-    border: 1px solid $color-secondary;
-    color: $color-secondary;
-    font-size: 0.7rem;
-    padding: 0.1rem 0.35rem;
-    text-transform: uppercase;
-  }
-
   .repeatability-status {
     font-size: 0.9rem;
-    margin-bottom: 0.5rem;
+    margin-top: 0.8rem;
 
     &.is-ready {
       color: $color-secondary;
@@ -467,25 +399,5 @@ onBeforeUnmount(() => {
     }
   }
 
-  .quest-meta,
-  .quest-section-label {
-    font-size: 0.85rem;
-    text-transform: uppercase;
-  }
-
-  .quest-body {
-    white-space: pre-line;
-  }
-
-  .quest-objective {
-    align-items: baseline;
-    display: flex;
-    gap: 0.75rem;
-    justify-content: space-between;
-  }
-
-  .quest-progress {
-    white-space: nowrap;
-  }
 }
 </style>

@@ -670,15 +670,20 @@ def enter_step(
             f"{removed_item_count}"
         )
 
-    return QuestTransitionResult(
-        quest_instance=refreshed,
-        events=[*effect_events, _build_player_event(
-            player,
-            event_type=event_type,
-            text=text,
-            data={"quest": payload, "currency_rewards": currency_rewards},
-        )],
+    quest_event = _build_player_event(
+        player,
+        event_type=event_type,
+        text=text,
+        data={"quest": payload, "currency_rewards": currency_rewards},
     )
+    # Announce acceptance before its effect output, while still applying all
+    # effects successfully before returning any events for publication.
+    events = (
+        [quest_event, *effect_events]
+        if event_type == "quest.instance.started"
+        else [*effect_events, quest_event]
+    )
+    return QuestTransitionResult(quest_instance=refreshed, events=events)
 
 
 @serialized_world(lambda player, *args, **kwargs: player.world_id)

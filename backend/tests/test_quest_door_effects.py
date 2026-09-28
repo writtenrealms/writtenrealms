@@ -105,6 +105,13 @@ class TestQuestDoorEffects(WorldTestCase):
         return [entry for entry in messages
                 if entry["message"]["type"] == "door.state_changed"]
 
+    def _assert_start_before_door(self, messages):
+        self.assertEqual([
+            entry["message"]["type"] for entry in messages
+            if entry["player_key"] == self.player.key
+            and entry["message"]["type"] in {"quest.instance.started", "door.state_changed"}
+        ], ["quest.instance.started", "door.state_changed"])
+
     def _save_graph(self, graph):
         self.quest.graph = graph
         self.quest.save(update_fields=["graph"])
@@ -120,6 +127,7 @@ class TestQuestDoorEffects(WorldTestCase):
 
         with capture_game_messages() as messages:
             dispatch_and_drain_combat(self.player.pk, "quest accept a-debt-to-athens")
+        self._assert_start_before_door(messages)
         self.assertEqual(self._state(), "open")
         door_messages = self._door_messages(messages)
         self.assertEqual(len(door_messages), 1)
@@ -145,6 +153,7 @@ class TestQuestDoorEffects(WorldTestCase):
         with capture_game_messages() as messages:
             response = self._accept_http()
         self.assertEqual(response.status_code, 201, response.data)
+        self._assert_start_before_door(messages)
         self.assertEqual(self._state(), "open")
         self.assertEqual(self._state(other_runtime), "locked")
         door_messages = self._door_messages(messages)
@@ -155,6 +164,14 @@ class TestQuestDoorEffects(WorldTestCase):
             response = self._accept_http()
         self.assertEqual(response.status_code, 400)
         self.assertEqual(self._door_messages(repeated), [])
+
+    def test_auto_start_announces_quest_before_door_output(self):
+        self.quest.discovery_policy = {"sources": [{"type": "auto_start"}]}
+        self.quest.save(update_fields=["discovery_policy"])
+        with capture_game_messages() as messages:
+            dispatch_and_drain_combat(self.player.pk, "look")
+        self._assert_start_before_door(messages)
+        self.assertEqual(self._state(), "open")
 
     def test_later_failed_effect_rolls_back_acceptance_door_and_output(self):
         self._state()
@@ -168,6 +185,7 @@ class TestQuestDoorEffects(WorldTestCase):
         self.assertEqual(self._state(), "locked")
         self.assertFalse(QuestInstance.objects.filter(player=self.player).exists())
         self.assertEqual(self._door_messages(messages), [])
+        self.assertNotIn("quest.instance.started", [entry["message"]["type"] for entry in messages])
 
     def test_missing_local_guard_cannot_use_another_runs_guard(self):
         self.guard.delete()

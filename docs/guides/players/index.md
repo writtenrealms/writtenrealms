@@ -23,6 +23,20 @@ replace each paragraph with the next every three seconds. Click or tap anywhere
 to dismiss it at any time; Enter, Space, and Escape work too. Long messages can
 be scrolled. The world continues running while the introduction is visible.
 
+## Command Output
+
+Commands appear directly above their first response, including quest
+confirmations. Follow-up narration and separate events have paragraph spacing
+to keep each exchange easy to scan.
+
+## Quest Log
+
+Open **QUESTS** in the sidebar, or **Quest Log** in the mobile menu, to browse
+Active, Repeatable, and Resolved quests. Each entry uses the same card as
+`quest info <slug>`, with a status badge, story text, recap, and objective
+progress. Click a title to expand or collapse its details. Repeatable quests
+show when they will be ready again; **INFO** opens an active quest in the console.
+
 ## Clearing the Console
 
 Type `clear` on its own to empty the game console on desktop or mobile. New

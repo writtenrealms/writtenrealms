@@ -164,14 +164,13 @@ const messages = computed(() => {
 const isGrouped = (message, prevMessage) => {
   if (!prevMessage) return false;
 
-  // A direct command response belongs with the command echo immediately above
-  // it. Notifications remain standalone even when a command caused them (for
-  // example, a duel completion after `duel surrender`).
+  // Pair the first command response with its echo. Quest replies use their own
+  // event namespace, including the confirmation for `quest accept`.
   if (
     prevMessage.echo &&
     !message.echo &&
     typeof message.type === "string" &&
-    message.type.startsWith("cmd.")
+    (message.type.startsWith("cmd.") || message.type.startsWith("quest."))
   ) {
     return true;
   }

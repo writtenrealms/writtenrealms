@@ -63,6 +63,13 @@ out-of-band completion verb.
 
 ## Quest Log
 
+The Quest Log and `quest info <slug>` use the same card layout: quest title and
+slug, status badge, authored text, divided recap, and objective progress rows.
+Click a quest title in the log to collapse or expand its details. Repeatable
+quests retain their cooldown beneath the heading, and **INFO** opens the quest
+in the console. A last-change recap appears only when it adds information
+beyond the current step's recap.
+
 The player-facing Quest Log projects quest history into three groups:
 
 - **Active Quests** shows current runs.
@@ -473,6 +480,8 @@ The mob must be in the player's current room and exact runtime world; instance
 runs cannot open each other's doors. Use a direction or an unambiguous door
 name. Optional text after `--` replaces the normal door-state message for
 occupants of both adjoining rooms, and appears only if the state changes.
+On acceptance, including automatic starts, the player sees the quest-start
+confirmation before the door-opening narration.
 
 Door opening uses the audited transactional command executor. A missing mob,
 invalid door, or later failed quest transition rolls back the quest mutation
