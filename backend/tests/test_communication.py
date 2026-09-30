@@ -1,3 +1,7 @@
+from unittest.mock import patch
+
+from spawns.actions.base import ActionError
+from spawns.actions.communication import TalkAction
 from spawns.models import Mob
 from tests.base import WorldTestCase
 from tests.utils import (
@@ -279,6 +283,36 @@ class TestTalkCommands(WorldTestCase):
         self.assertIsNotNone(actor_msg)
         self.assertEqual(actor_msg["message"]["data"]["target"]["id"], guard.id)
         self.assertEqual(actor_msg["message"]["text"], "You talk to Guard.")
+        self.assertTrue(actor_msg["message"]["data"]["target"]["talkable"])
+
+    def test_talk_rejects_non_talkable_mob_for_explicit_and_implicit_targets(self):
+        dummy = Mob.objects.create(
+            world=self.spawn_world,
+            room=self.room,
+            name="Dummy",
+            keywords="dummy",
+            talkable=False,
+        )
+        for command in ("talk dummy", f"talk {dummy.key}", "talk"):
+            with self.subTest(command=command), capture_game_messages() as messages, patch(
+                "quests.subscriptions.build_talk_guidance_events",
+            ) as guidance:
+                dispatch_text_command(self.player.id, command)
+
+            error_msg = self._message_entry(messages, "cmd.talk.error", self.player.key)
+            self.assertIsNotNone(error_msg)
+            self.assertEqual(error_msg["message"]["data"]["code"], "not_talkable")
+            self.assertEqual(error_msg["message"]["text"], "You cannot talk to them.")
+            self.assertIsNone(self._message_entry(messages, "cmd.talk.success", self.player.key))
+            guidance.assert_not_called()
+
+    def test_non_talkable_check_adds_no_query_after_target_resolution(self):
+        dummy = Mob(talkable=False)
+        with patch(
+            "spawns.actions.communication.resolve_room_mob_target", return_value=dummy,
+        ), self.assertNumQueries(0), self.assertRaises(ActionError) as error:
+            TalkAction().execute(self.player, "dummy")
+        self.assertEqual(error.exception.code, "not_talkable")
 
     def test_talk_without_target_uses_only_mob_in_room(self):
         guard = Mob.objects.create(

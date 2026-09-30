@@ -785,7 +785,7 @@ class AnimateMobSerializer(serializers.ModelSerializer):
             'group_id',
             'room_description', 'keywords',
             'factions',
-            'is_merchant', 'is_trainer', 'currency_rewards',
+            'is_merchant', 'is_trainer', 'talkable', 'currency_rewards',
             'reactions',
             'roams',
         ]

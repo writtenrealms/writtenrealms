@@ -375,6 +375,11 @@ Currency authoring is also blocked while an ordinary spawn or instance run for
 the base world is running. Stop those worlds before changing the catalog,
 default, starting policy, or display fields.
 
+Saving the same values is allowed while worlds are running. In particular,
+**World > Config > Save YAML** can retain the exported `default_currency` and
+`starting_balances` fields while changing an unrelated setting. Unchanged
+starting balances do not rewrite balance rows or advance the economy revision.
+
 ## Optional WR1 World Conversion
 
 WR2 starts with an empty database. There is no account, player, balance,

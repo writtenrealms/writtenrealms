@@ -169,6 +169,7 @@ class Char(BaseModel):
     is_merchant: bool = False
     is_trainer: bool = False
     attackable: bool = True
+    talkable: bool = True
 
     char_type: Literal["player", "mob"] = "mob"
 

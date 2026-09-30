@@ -143,6 +143,80 @@ class TestMobDefinitionManifests(WorldTestCase):
         self.apply_ep = reverse("builder-world-manifest-apply", args=[self.world.pk])
         self.export_ep = reverse("builder-world-export", args=[self.world.pk])
 
+    def test_talkable_round_trips_and_syncs_spawned_mobs(self):
+        from builders.serializers import MobDefinitionSerializer
+        from spawns.state_payloads import serialize_char_from_mob
+
+        manifest = {
+            "kind": "mobdefinition",
+            "metadata": {"slug": "dummy", "name": "a practice dummy"},
+            "spec": {"talkable": False},
+        }
+        response = self.client.post(
+            self.apply_ep, {"manifest": yaml.safe_dump(manifest)}, format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        payload = response.data["mob_definition"]
+        self.assertFalse(payload["talkable"])
+        self.assertFalse(yaml.safe_load(payload["yaml"])["spec"]["talkable"])
+        definition = MobDefinition.objects.get(pk=payload["id"])
+        self.assertFalse(MobDefinitionSerializer(definition).data["talkable"])
+        mob = definition.spawn(self.room, self.spawn_world)
+        self.assertFalse(mob.talkable)
+        self.assertFalse(serialize_char_from_mob(mob).model_dump()["talkable"])
+
+        export_response = self.client.get(self.export_ep)
+        self.assertEqual(export_response.status_code, 200, export_response.data)
+        exported = next(
+            doc for doc in yaml.safe_load_all(export_response.data["yaml"])
+            if doc and doc["kind"] == "mobdefinition"
+        )
+        self.assertFalse(exported["spec"]["talkable"])
+
+        # Omission preserves false; an explicit edit enables existing and future copies.
+        for spec, expected in (({"notes": "Updated notes"}, False), ({"talkable": True}, True)):
+            manifest["spec"] = spec
+            response = self.client.post(
+                self.apply_ep, {"manifest": yaml.safe_dump(manifest)}, format="json",
+            )
+            self.assertEqual(response.status_code, 200, response.data)
+            definition.refresh_from_db()
+            mob.refresh_from_db()
+            self.assertEqual(definition.talkable, expected)
+            self.assertEqual(mob.talkable, expected)
+            self.assertEqual(serialize_char_from_mob(mob).talkable, expected)
+        self.assertTrue(definition.spawn(self.room, self.spawn_world).talkable)
+
+        # Reimporting a full export restores the exported false value on live copies.
+        response = self.client.post(
+            self.apply_ep, {"manifest": yaml.safe_dump(exported)}, format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        mob.refresh_from_db()
+        self.assertFalse(mob.talkable)
+
+    def test_talkable_defaults_true_when_omitted_on_create(self):
+        response = self.client.post(self.apply_ep, {"manifest": yaml.safe_dump({
+            "kind": "mobdefinition", "metadata": {"slug": "watchman"},
+            "spec": {"type": "humanoid"},
+        })}, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        payload = response.data["mob_definition"]
+        self.assertTrue(payload["talkable"])
+        self.assertTrue(yaml.safe_load(payload["yaml"])["spec"]["talkable"])
+        definition = MobDefinition.objects.get(pk=payload["id"])
+        self.assertTrue(definition.spawn(self.room, self.spawn_world).talkable)
+
+    def test_talkable_rejects_invalid_values(self):
+        for value in (None, "sometimes", 2, [], {}):
+            with self.subTest(value=value):
+                response = self.client.post(self.apply_ep, {"manifest": yaml.safe_dump({
+                    "kind": "mobdefinition", "metadata": {"slug": "dummy"},
+                    "spec": {"talkable": value},
+                })}, format="json")
+                self.assertEqual(response.status_code, 400, response.data)
+                self.assertIn("spec.talkable must be a boolean", str(response.data))
+
     def test_rip_message_round_trips_and_null_clears_spawned_copies(self):
         from builders.serializers import MobDefinitionSerializer
 

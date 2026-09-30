@@ -66,6 +66,30 @@ stands at attention.` See the [`/set` command reference](builder-command-referen
 The override does not edit this definition; fresh spawns retain the authored
 text, and a later definition resync can replace the runtime value.
 
+## Talking
+
+Set `spec.talkable: false` for mobs that cannot be spoken to, such as practice
+dummies:
+
+```yaml
+kind: mobdefinition
+metadata:
+  slug: practice-dummy
+spec:
+  talkable: false
+```
+
+This hides the built-in **TALK** action in both the mob lookup and inspection
+view. Typed `talk` commands are also rejected before conversation Triggers or
+quest interactions run. Combat, merchant, trainer, and other authored actions
+remain independent of this setting.
+
+The default is `true`, regardless of mob type or aggression. The UI's existing
+hostile-faction filter still applies: `talkable: true` does not force a **TALK**
+button for an opposing faction. Omit the field from a partial edit to keep its
+current value; set it to `true` to restore talking. Definition edits update
+existing spawned copies and future spawns, and exports always include the value.
+
 ## RIP Messages
 
 Set `spec.rip_message` to replace the message shown to the room when the mob

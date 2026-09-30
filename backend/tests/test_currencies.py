@@ -2,7 +2,9 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.reverse import reverse
 from rest_framework.test import APIClient
@@ -14,6 +16,7 @@ from builders.currencies import (
     delete_currency,
     replace_starting_balances,
     select_default_currency,
+    set_starting_balance,
 )
 from builders.models import (
     CraftingRecipe,
@@ -75,6 +78,47 @@ class EconomyOwnershipTests(CurrencyTestCase):
 
 
 class CurrencyAuthoringTests(CurrencyTestCase):
+    def test_unchanged_starting_balances_are_read_only_while_running(self):
+        obol = create_currency(world=self.world, code="obol", name="Obol")
+        for amount in (0, 25):
+            self.spawn_world.lifecycle = adv_consts.WORLD_LIFECYCLE_STOPPED
+            self.spawn_world.save(update_fields=["lifecycle"])
+            set_starting_balance(currency=obol, amount=amount)
+            self.world.refresh_from_db()
+            revision = self.world.economy_revision
+            self.spawn_world.lifecycle = adv_consts.WORLD_LIFECYCLE_RUNNING
+            self.spawn_world.save(update_fields=["lifecycle"])
+            for update in (
+                lambda: replace_starting_balances(world=self.world, balances={obol: amount}),
+                lambda: set_starting_balance(currency=obol, amount=amount),
+            ):
+                with self.subTest(amount=amount), CaptureQueriesContext(connection) as queries:
+                    update()
+                selects = [q["sql"] for q in queries if q["sql"].startswith("SELECT")]
+                self.assertEqual(len(selects), 1, selects)
+                self.assertIn("builders_worldstartingcurrencybalance", selects[0])
+                self.assertNotIn("FOR UPDATE", selects[0])
+                self.assertFalse(any(q["sql"].startswith(("INSERT", "UPDATE", "DELETE")) for q in queries))
+                self.world.refresh_from_db()
+                self.assertEqual(self.world.economy_revision, revision)
+
+    def test_changed_starting_balances_still_require_stopped_worlds(self):
+        obol = create_currency(world=self.world, code="obol", name="Obol")
+        set_starting_balance(currency=obol, amount=25)
+        self.spawn_world.lifecycle = adv_consts.WORLD_LIFECYCLE_RUNNING
+        self.spawn_world.save(update_fields=["lifecycle"])
+        for update in (
+            lambda: replace_starting_balances(world=self.world, balances={}),
+            lambda: replace_starting_balances(world=self.world, balances={obol: 7}),
+            lambda: set_starting_balance(currency=obol, amount=0),
+            lambda: set_starting_balance(currency=obol, amount=7),
+        ):
+            with self.assertRaisesMessage(ValidationError, "Stop active"):
+                update()
+        self.assertEqual(WorldStartingCurrencyBalance.objects.get(
+            world=self.world, currency=obol,
+        ).amount, 25)
+
     def test_first_currency_is_normalized_and_becomes_default(self):
         obol = create_currency(
             world=self.world,

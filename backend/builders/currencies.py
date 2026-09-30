@@ -133,21 +133,27 @@ def replace_starting_balances(*, world, balances: dict) -> None:
             currency,
             validate_currency_amount(raw_amount, field_name=str(reference)),
         )
-    # All economy authoring takes the world aggregate lock before any balance
-    # row locks. This also serializes a missing-row create with concurrent
-    # single-balance edits.
-    _assert_economy_editable(base_world)
-    current = dict(
-        WorldStartingCurrencyBalance.objects.select_for_update()
-        .filter(world=base_world)
-        .order_by("currency_id")
-        .values_list("currency_id", "amount")
-    )
     target = {
         currency_id: amount
         for currency_id, (_, amount) in resolved.items()
         if amount
     }
+    balances_qs = WorldStartingCurrencyBalance.objects.filter(
+        world=base_world,
+    ).order_by("currency_id")
+    # Full config saves include unchanged balances. A read-only no-op is safe
+    # while runtimes are active and must not lock every runtime in the family.
+    if dict(balances_qs.values_list("currency_id", "amount")) == target:
+        return
+    # All economy authoring takes the world aggregate lock before any balance
+    # row locks. This also serializes a missing-row create with concurrent
+    # single-balance edits. Re-read after locking rather than using the early
+    # snapshot to decide whether a write is still needed.
+    _assert_economy_editable(base_world)
+    current = dict(
+        balances_qs.select_for_update()
+        .values_list("currency_id", "amount")
+    )
     if current == target:
         return
     WorldStartingCurrencyBalance.objects.filter(world=base_world).delete()
@@ -168,13 +174,14 @@ def set_starting_balance(*, currency: Currency, amount: int) -> None:
     """Set one authored starting balance without replacing the rest."""
     base_world = _assert_base_world(currency.world)
     amount = validate_currency_amount(amount, field_name=currency.code)
+    balances_qs = WorldStartingCurrencyBalance.objects.filter(
+        world=base_world, currency=currency,
+    ).order_by("currency_id")
+    current_amount = balances_qs.values_list("amount", flat=True).first() or 0
+    if current_amount == amount:
+        return
     _assert_economy_editable(base_world)
-    existing = (
-        WorldStartingCurrencyBalance.objects.select_for_update()
-        .filter(world=base_world, currency=currency)
-        .order_by("currency_id")
-        .first()
-    )
+    existing = balances_qs.select_for_update().first()
     current_amount = int(existing.amount) if existing else 0
     if current_amount == amount:
         return

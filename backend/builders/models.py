@@ -578,6 +578,7 @@ class MobDefinition(AdventBaseModel):
     combat_engage_when = models.JSONField(default=dict, blank=True)
 
     attackable = models.BooleanField(default=True)
+    talkable = models.BooleanField(default=True)
     merchant_profile = models.ForeignKey(
         'builders.MerchantProfile',
         on_delete=models.SET_NULL,

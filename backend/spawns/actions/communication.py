@@ -219,6 +219,9 @@ class TalkAction:
             not_found_error="You don't see them here.",
             allow_single_match_when_empty=True,
         )
+        if not target_mob.talkable:
+            raise ActionError("You cannot talk to them.", code="not_talkable")
+
         data = {
             "actor": _actor_payload(actor),
             "target": serialize_char_from_mob(target_mob).model_dump(),

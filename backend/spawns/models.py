@@ -1683,6 +1683,7 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
     is_pending_deletion = models.BooleanField(default=False)
     pending_deletion_ts = models.DateTimeField(db_index=True, **optional)
     attackable = models.BooleanField(default=True)
+    talkable = models.BooleanField(default=True)
     target_priority = models.IntegerField(default=0)
     follow_move_sequence = models.BigIntegerField(default=0)
 

@@ -651,6 +651,7 @@ def serialize_char_from_mob(
         is_merchant=bool(mob.definition and mob.definition.merchant_profile_id),
         is_trainer=is_trainer,
         attackable=getattr(mob, "attackable", True),
+        talkable=mob.talkable,
         equipment=serialize_equipment(mob.equipment, viewer=viewer) if include_equipment else None,
         actions=actions,
         quest_indicator=QuestIndicator(

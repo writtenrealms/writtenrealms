@@ -42,6 +42,7 @@ export const hasOpposingCoreFaction = (player, char, world) => {
 
 export const shouldShowTalkAction = (player, char, world) => {
   if (!char || char.char_type !== "mob") return false;
+  if (char.talkable === false) return false;
   return !hasOpposingCoreFaction(player, char, world);
 };
 
@@ -86,6 +87,7 @@ export const buildCharActions = (char, player, world) => {
     if (!actions.unlearn) actions.unlearn = true;
   }
   if (shouldShowTalkAction(player, char, world)) actions.talk = true;
+  if (char?.char_type === "mob" && char.talkable === false) actions.talk = false;
 
   return actions;
 };

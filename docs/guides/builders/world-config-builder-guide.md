@@ -6,6 +6,13 @@ Use **Copy YAML** to copy the editor contents and **Save YAML** to apply changes
 to the selected world. **World > Edit** remains available for general and
 multi-document manifest workflows.
 
+You can edit one field in the full YAML and save the whole document. Unchanged
+currency defaults and starting balances do not count as currency edits, so they
+do not block an unrelated change such as `starting_room` while the world is
+running. Changing `default_currency` or `starting_balances` still requires the
+affected worlds to be stopped; the editor displays a validation error if that
+requirement is not met.
+
 Instance templates can also set `instance_goal` to record timed population
 clears, such as killing every initially spawned Persian mob. See
 [timed population clears](instance-builder-guide.md#timed-population-clears)

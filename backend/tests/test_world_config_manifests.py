@@ -2,7 +2,7 @@ import yaml
 
 from rest_framework.reverse import reverse
 
-from builders.currencies import create_currency
+from builders.currencies import create_currency, replace_starting_balances
 from builders.models import (
     FACTION_TYPE_CORE,
     Faction,
@@ -74,6 +74,84 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
             is_multiplayer=True,
             instance_of=self.world,
         )
+
+    def _assert_full_yaml_starting_room_edit(self, *, balances, instance=False):
+        replace_starting_balances(world=self.world, balances=balances)
+        runtime = self._instance_world().create_spawn_world() if instance else self.spawn_world
+        runtime.lifecycle = adv_consts.WORLD_LIFECYCLE_RUNNING
+        runtime.save(update_fields=["lifecycle"])
+        destination = self.create_imported_room(relative_id=87, x=87, name="Gate Court")
+        self.world.refresh_from_db()
+        revision = self.world.economy_revision
+        before_balances = list(WorldStartingCurrencyBalance.objects.filter(
+            world=self.world,
+        ).values_list("pk", "currency_id", "amount"))
+
+        response = self.client.get(self.config_ep)
+        self.assertEqual(response.status_code, 200, response.data)
+        manifest = yaml.safe_load(response.data["yaml"])
+        self.assertEqual(manifest["spec"]["starting_balances"], balances)
+        manifest["spec"]["starting_room"] = "room@87"
+        for _ in range(2):
+            response = self.client.post(
+                self.apply_ep, {"manifest": yaml.safe_dump(manifest)}, format="json",
+            )
+            self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        self.world.refresh_from_db()
+        runtime.refresh_from_db()
+        self.assertEqual(self.world.config.starting_room_id, destination.id)
+        self.assertEqual(self.world.economy_revision, revision)
+        self.assertEqual(runtime.lifecycle, adv_consts.WORLD_LIFECYCLE_RUNNING)
+        self.assertEqual(list(WorldStartingCurrencyBalance.objects.filter(
+            world=self.world,
+        ).values_list("pk", "currency_id", "amount")), before_balances)
+
+    def test_full_yaml_room_edit_allows_unchanged_empty_balances_while_running(self):
+        self._assert_full_yaml_starting_room_edit(balances={})
+
+    def test_full_yaml_room_edit_allows_unchanged_balances_with_active_instance(self):
+        self._assert_full_yaml_starting_room_edit(balances={"obol": 25}, instance=True)
+
+    def test_blocked_currency_changes_return_json_and_roll_back_config(self):
+        other_currency = create_currency(world=self.world, code="drachma", name="Drachma")
+        destination = self.create_imported_room(relative_id=87, x=87, name="Gate Court")
+        self.world.refresh_from_db()
+        revision = self.world.economy_revision
+        original_default_id = self.world.default_currency_id
+        for lifecycle in (
+            adv_consts.WORLD_LIFECYCLE_RUNNING,
+            adv_consts.WORLD_LIFECYCLE_STARTING,
+            adv_consts.WORLD_LIFECYCLE_STOPPING,
+        ):
+            self.spawn_world.lifecycle = lifecycle
+            self.spawn_world.save(update_fields=["lifecycle"])
+            for currency_change in (
+                {"starting_balances": {"obol": 7}},
+                {"default_currency": other_currency.code},
+            ):
+                with self.subTest(lifecycle=lifecycle, change=currency_change):
+                    response = self.client.get(self.config_ep)
+                    self.assertEqual(response.status_code, 200, response.data)
+                    manifest = yaml.safe_load(response.data["yaml"])
+                    manifest["spec"].update(currency_change)
+                    manifest["spec"]["starting_room"] = f"room@{destination.relative_id}"
+                    manifest["spec"]["initial_state"] = {"should_rollback": True}
+                    response = self.client.post(
+                        self.apply_ep, {"manifest": yaml.safe_dump(manifest)}, format="json",
+                    )
+                    self.assertEqual(response.status_code, 400, response.data)
+                    self.assertEqual(response["Content-Type"], "application/json")
+                    self.assertIn("Stop active or transitioning worlds", str(response.data))
+                    self.world.refresh_from_db()
+                    self.world.config.refresh_from_db()
+                    self.assertEqual(self.world.config.starting_room_id, self.room.id)
+                    self.assertEqual(self.world.initial_state, {})
+                    self.assertEqual(self.world.default_currency_id, original_default_id)
+                    self.assertEqual(self.world.economy_revision, revision)
+                    self.assertFalse(WorldStartingCurrencyBalance.objects.filter(
+                        world=self.world,
+                    ).exists())
 
     def test_world_config_endpoint_matches_export_world_document(self):
         config_resp = self.client.get(self.config_ep)

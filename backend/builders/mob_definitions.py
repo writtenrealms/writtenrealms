@@ -253,6 +253,7 @@ def spawn_mob_from_definition(
         loot=copy.deepcopy(definition.loot or {}),
         currency_reward_snapshot=_currency_reward_snapshot(definition),
         attackable=definition.attackable,
+        talkable=definition.talkable,
         health=mob_fields.get("health_max") or 1,
         stamina=mob_fields.get("stamina_max") or 0,
         energy=mob_fields.get("energy_max") or 0,
@@ -313,6 +314,7 @@ def sync_spawned_mobs_from_definition(definition) -> int:
         for field_name, value in mob_fields.items():
             setattr(mob, field_name, value)
         mob.attackable = definition.attackable
+        mob.talkable = definition.talkable
         mob.currency_reward_snapshot = reward_snapshot
         mob.health = mob.health_max
         mob.stamina = mob.stamina_max
@@ -348,6 +350,7 @@ def sync_spawned_mobs_from_definition(definition) -> int:
                 "stamina",
                 "energy",
                 "attackable",
+                "talkable",
                 "currency_reward_snapshot",
                 "trait_instances",
                 *trait_update_fields,

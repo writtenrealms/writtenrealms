@@ -382,6 +382,7 @@ _MOB_DEFINITION_SPEC_FIELDS = (
     "keywords",
     "type",
     "assists",
+    "talkable",
     "attributes",
     "randomization",
     "initial_state",
@@ -1634,6 +1635,7 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
         "keywords": mob_definition.keywords or "",
         "type": mob_definition.mob_type or adv_consts.MOB_TYPE_BEAST,
         "assists": bool(mob_definition.assists),
+        "talkable": bool(mob_definition.talkable),
     }
     for field_name, value in (mob_definition.base_properties or {}).items():
         if field_name == "traits":
@@ -1744,6 +1746,7 @@ def serialize_mob_definition_payload(
         "notes": mob_definition.notes or "",
         "type": mob_definition.mob_type,
         "assists": bool(mob_definition.assists),
+        "talkable": bool(mob_definition.talkable),
         "aggression": _mob_definition_aggression(mob_definition),
         "base_properties": mob_definition.base_properties or {},
         "attributes": mob_definition.attributes or {},
@@ -5208,6 +5211,10 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
             spec_patch.get("assists", existing.assists if existing else False),
             "spec.assists",
         ),
+        "talkable": _coerce_bool(
+            spec_patch.get("talkable", existing.talkable if existing else True),
+            "spec.talkable",
+        ),
         "base_properties": base_properties,
         "attributes": attributes,
         "randomization": randomization,
@@ -8074,23 +8081,27 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
                 world,
                 parsed.initial_state,
             )
-        if parsed.update_default_currency:
-            from builders.currencies import select_default_currency
+        try:
+            if parsed.update_default_currency:
+                from builders.currencies import select_default_currency
 
-            select_default_currency(
-                world=world,
-                currency=parsed.default_currency,
-            )
-        if parsed.starting_balances is not None:
-            from builders.currencies import replace_starting_balances
+                select_default_currency(
+                    world=world,
+                    currency=parsed.default_currency,
+                )
+            if parsed.starting_balances is not None:
+                from builders.currencies import replace_starting_balances
 
-            replace_starting_balances(
-                world=world,
-                balances={
-                    currency.code: amount
-                    for currency, amount in parsed.starting_balances.items()
-                },
-            )
+                replace_starting_balances(
+                    world=world,
+                    balances={
+                        currency.code: amount
+                        for currency, amount in parsed.starting_balances.items()
+                    },
+                )
+        except ValidationError as exc:
+            detail = exc.message_dict if hasattr(exc, "message_dict") else exc.messages
+            raise serializers.ValidationError(detail) from exc
         world_updates = parsed.world_updates
         if world_updates:
             for field_name, value in world_updates.items():
