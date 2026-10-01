@@ -222,6 +222,14 @@ class QuestJournalEntry(AdventBaseModel):
 
 
 class QuestOfferState(AdventBaseModel):
+    # Base-world offers follow the character; instance offers belong to a run
+    # and are deleted with that runtime, just like its QuestInstance records.
+    world = models.ForeignKey(
+        'worlds.World',
+        on_delete=models.CASCADE,
+        related_name='quest_offer_states',
+        **optional,
+    )
     player = models.ForeignKey(
         'spawns.Player',
         on_delete=models.CASCADE,
@@ -241,5 +249,15 @@ class QuestOfferState(AdventBaseModel):
     dismiss_count = models.PositiveIntegerField(default=0)
 
     class Meta(AdventBaseModel.Meta):
-        unique_together = [('player', 'template')]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['player', 'template'],
+                condition=models.Q(world__isnull=True),
+                name='quests_offer_character_unique',
+            ),
+            models.UniqueConstraint(
+                fields=['player', 'template', 'world'],
+                name='quests_offer_run_unique',
+            ),
+        ]
         ordering = ['-modified_ts', '-created_ts']

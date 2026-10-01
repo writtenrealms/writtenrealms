@@ -37,6 +37,12 @@ Active, Repeatable, and Resolved quests. Each entry uses the same card as
 progress. Click a title to expand or collapse its details. Repeatable quests
 show when they will be ready again; **INFO** opens an active quest in the console.
 
+Quests belonging to an instance start fresh in each new run. Leaving hides
+that run's quests; returning to the same retained run resumes your progress.
+Base-world quests stay with your character. Adventures may separately record
+lasting outcomes, but an instance quest's completion does not carry into the
+next run.
+
 ## Clearing the Console
 
 Type `clear` on its own to empty the game console on desktop or mobile. New

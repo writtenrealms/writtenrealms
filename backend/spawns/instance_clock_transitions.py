@@ -4,7 +4,7 @@ from contextvars import ContextVar
 from datetime import timedelta
 
 from django.db import transaction
-from django.db.models import DateTimeField, ExpressionWrapper, F, Value
+from django.db.models import DateTimeField, ExpressionWrapper, F, Q, Value
 from django.utils import timezone
 
 from spawns.instance_clock import in_simulation, time_control_run
@@ -64,7 +64,9 @@ def _rebase_timers(run, delta):
     _shift(CombatRoomState.objects.filter(world_id=world), ['next_run_ts', 'active_until'], delta)
     _shift(CombatEncounter.objects.filter(world_id=world, status__in=['active', 'paused']),
            ['next_resolution_ts', 'last_resolution_ts', 'npc_active_until'], delta)
-    _shift(QuestOfferState.objects.filter(player_id=run.owner_id, player__world_id=world),
+    _shift(QuestOfferState.objects.filter(
+        Q(world_id=world) | Q(world__isnull=True, player__world_id=world,
+                              template__world__instance_of__isnull=True)),
            ['last_resolved_at', 'cooldown_until', 'snoozed_until'], delta)
 
     # Merchant ordinal snapshots are presentation tokens, not authoritative

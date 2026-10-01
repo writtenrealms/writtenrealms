@@ -86,6 +86,21 @@ repeatability mode, cooldown, and status, so a builder edit reclassifies the
 card immediately without rewriting old quest instances. A repeatable template
 that is currently `draft` or `archived` remains visible as unavailable.
 
+Instance-template quests belong to one spawned instance run. A new run starts
+with fresh progress, acceptance, offers, snoozes, and cooldowns, even while an
+older run still exists. `repeatability.mode: never` means once per character
+**within that run**; other repeatability policies also apply within the run.
+Leaving hides its quests from the log and makes them unavailable to quest
+commands. Re-entering the same retained run resumes them. Cleanup deletes both
+its quest attempts and offer state. An in-place builder reset keeps the same
+run and therefore keeps its quests.
+
+Base-world quests keep their character-wide history and remain available while
+the character visits instances. To make an instance outcome matter outside its
+run, explicitly write character state with a quest effect or Trigger and read
+that state through the shared condition DSL. Instance quest completion itself
+is not a persistent prerequisite.
+
 For scalability, each group is bounded to its most recent entries. If a world
 exceeds a group limit, the Quest Log says how many recent quests it is showing
 instead of silently omitting older entries.
@@ -281,7 +296,8 @@ Notes:
       quest_completed: rival_path
   ```
 
-- `quest_accepted` checks whether this character has ever started the quest,
+- `quest_accepted` checks whether this character has started the quest in its
+  applicable scope (current run for instance quests, character history for base quests),
   including automatic starts. Completion and abandonment leave it true.
 - `quest_active` checks whether this character currently has an active attempt.
 - `quest_completed` checks whether the character has a resolved quest instance

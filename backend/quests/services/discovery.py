@@ -15,8 +15,10 @@ from quests.services.engine import (
     can_start_template,
     runtime_templates_qs,
     serialize_opportunity,
+    template_world_for_player,
 )
 from quests.services.predicates import evaluate_condition
+from quests.services.scope import offer_lookup, offers_for_player
 
 
 @dataclass
@@ -99,12 +101,11 @@ def _source_matches_player(
 def _offer_state(player, template: QuestTemplate, *, persist=True) -> QuestOfferState:
     if not persist:
         return (
-            QuestOfferState.objects.filter(player=player, template=template).first()
-            or QuestOfferState(player=player, template=template)
+            QuestOfferState.objects.filter(**offer_lookup(player, template)).first()
+            or QuestOfferState(**offer_lookup(player, template))
         )
     offer_state, _ = QuestOfferState.objects.get_or_create(
-        player=player,
-        template=template,
+        **offer_lookup(player, template),
     )
     return offer_state
 
@@ -302,9 +303,10 @@ def refresh_player_quests(player, *, allow_auto_start: bool = True) -> Discovery
         return DiscoveryRefreshResult(opportunities=list_opportunities(player, refresh=False))
     now = timezone.now()
     result = DiscoveryRefreshResult()
-    previously_visible_ids = set(
-        QuestOfferState.objects.filter(player=player, is_visible=True).values_list("template_id", flat=True)
+    visible_offers = offers_for_player(player).filter(
+        is_visible=True, template__world=template_world_for_player(player),
     )
+    previously_visible_ids = set(visible_offers.values_list("template_id", flat=True))
     currently_visible_ids: set[int] = set()
 
     templates = list(runtime_templates_qs(player))
@@ -346,7 +348,7 @@ def refresh_player_quests(player, *, allow_auto_start: bool = True) -> Discovery
                 )
             )
 
-    QuestOfferState.objects.filter(player=player, is_visible=True).exclude(
+    visible_offers.exclude(
         template_id__in=currently_visible_ids
     ).update(is_visible=False, modified_ts=now)
 
@@ -359,7 +361,7 @@ def list_opportunities(player, *, refresh: bool = True) -> list[dict]:
         return refresh_player_quests(player, allow_auto_start=False).opportunities
 
     qs = (
-        QuestOfferState.objects.filter(player=player, is_visible=True)
+        offers_for_player(player).filter(is_visible=True, template__world=template_world_for_player(player))
         .select_related("template", "template__arc")
         .order_by("template__name", "template__created_ts")
     )

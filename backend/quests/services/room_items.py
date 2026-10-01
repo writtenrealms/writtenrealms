@@ -11,6 +11,7 @@ from config import constants as adv_consts
 from quests.entity_refs import resolve_entity_ref_id, resolve_room_ref_id
 from quests.models import QuestInstance
 from quests.services.engine import active_instances_qs, get_step
+from quests.services.scope import instances_for_player
 from spawns.models import Item
 
 
@@ -318,7 +319,7 @@ def find_quest_room_item_target(player, room_id: int | None, selector: str | Non
 
 def claim_quest_room_item(player, projection: QuestRoomItemProjection) -> Item | None:
     quest_instance = (
-        QuestInstance.objects.select_for_update()
+        instances_for_player(player).select_for_update(of=("self",))
         .select_related("template")
         .filter(pk=projection.quest_instance_id, player=player, status="active")
         .first()

@@ -735,14 +735,15 @@ def _quest_condition_lookup(value: Any, context: ConditionContext):
     )
     if lookup is None:
         return None
-    key = (player.pk, lookup.get("world_id"), lookup.get("slug"), lookup.get("id"))
+    key = (player.pk, player.world_id, lookup.get("world_id"), lookup.get("slug"), lookup.get("id"))
     return key, lookup
 
 
 def _load_quest_condition_states(lookups: dict, context: ConditionContext) -> None:
     """Fetch only referenced templates, with indexed EXISTS checks per template."""
     from django.db.models import Exists, OuterRef, Q
-    from quests.models import QuestInstance, QuestOfferState, QuestTemplate
+    from quests.models import QuestTemplate
+    from quests.services.scope import instances_for_player, offers_for_player
 
     missing = {key: lookup for key, lookup in lookups.items() if key not in context.quest_cache}
     if not missing:
@@ -758,13 +759,13 @@ def _load_quest_condition_states(lookups: dict, context: ConditionContext) -> No
     for world_id, slugs in slugs_by_world.items():
         template_filter |= Q(world_id=world_id, slug__in=slugs)
     player = _context_player(context)
-    instances = QuestInstance.objects.filter(player_id=player.pk, template_id=OuterRef("pk"))
-    offers = QuestOfferState.objects.filter(
-        player_id=player.pk, template_id=OuterRef("pk"), last_accepted_at__isnull=False,
+    instances = instances_for_player(player).filter(template_id=OuterRef("pk"))
+    offers = offers_for_player(player).filter(
+        template_id=OuterRef("pk"), last_accepted_at__isnull=False,
     )
     rows = QuestTemplate.objects.filter(template_filter).order_by().annotate(
-        # Offer timestamps retain acceptance if an old runtime's attempts
-        # have been removed. Existing attempts also work without offer state.
+        # Base quest acceptance outlives runtime attempts. Instance attempts
+        # and offers count only in the character's current run.
         quest_accepted=Exists(instances) | Exists(offers),
         quest_active=Exists(instances.filter(status="active")),
         quest_completed=Exists(instances.filter(status="resolved", resolution="complete")),
@@ -773,8 +774,8 @@ def _load_quest_condition_states(lookups: dict, context: ConditionContext) -> No
         context.quest_cache[key] = dict.fromkeys(QUEST_CONDITION_OPERATORS, False)
     for row in rows:
         state = {operator: row[operator] for operator in QUEST_CONDITION_OPERATORS}
-        context.quest_cache[(player.pk, None, None, row["id"])] = state
-        context.quest_cache[(player.pk, row["world_id"], row["slug"], None)] = state
+        context.quest_cache[(player.pk, player.world_id, None, None, row["id"])] = state
+        context.quest_cache[(player.pk, player.world_id, row["world_id"], row["slug"], None)] = state
 
 
 def prefetch_quest_conditions(conditions, *, context: ConditionContext) -> None:

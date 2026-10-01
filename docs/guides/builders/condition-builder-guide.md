@@ -338,7 +338,14 @@ supported for database-local references.
 
 Automatic starts count as acceptance. Abandonment does not clear acceptance
 and does not count as completion. Conditions refer to this character and the
-resolved quest template across its runs, not the account or another character.
+resolved quest template, not the account or another character. Base-world
+quests use character-wide history. Instance-template quests use only attempts
+and offer state from the character's **current instance run**. A new run starts
+with all three predicates false, even when an older run is still retained.
+Re-entering the same run resumes its state. Outside that run, its quest
+predicates return false, including when referenced by numeric template id.
+For an outcome that must survive the run or be checked in the base world,
+explicitly write persistent character state and check it with the shared DSL.
 Slugs resolve inside the current authored world or instance template; sibling
 templates with the same slug have separate quest identities. Without a player
 context these predicates return false.

@@ -838,6 +838,25 @@ is retried once it has been stopped for five minutes. Lingering combat records
 do not extend this grace period. Players and their carried equipment return to
 the base world before the instance is removed.
 
+## Quests In Instances
+
+Each new instance run starts its instance-template quests fresh. Acceptance,
+active progress, completion, offer visibility, snoozes, and cooldowns are local
+to that run and character. Even non-repeatable quests can be completed again
+in a new run. Other players' progress and other retained runs do not count.
+
+On leaving, that run's quests disappear from the Quest Log and cannot be
+inspected, chosen, abandoned, or advanced from outside. Returning to the same
+retained run resumes them. Cleanup deletes its attempts and offer records;
+an in-place builder reset preserves them because it keeps the same run.
+Cooldowns and snoozes follow that run's gameplay clock, including while the
+character is elsewhere.
+
+Base-world quest history stays with the character. For lasting instance
+outcomes, explicitly set character state and check it through the
+[condition DSL](condition-builder-guide.md), rather than depending on an old
+instance quest completion. See the [quest guide](quest-builder-guide.md).
+
 ## Inventory And Equipment
 
 When a player enters an instance, WR2 moves the world ownership of carried and

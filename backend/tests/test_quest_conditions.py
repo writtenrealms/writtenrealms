@@ -109,7 +109,7 @@ class TestQuestConditions(WorldTestCase):
             {"quest_active": self.quest.slug}, actor=mob, player=self.player,
         ))
 
-    def test_instance_template_slugs_are_local_but_history_spans_its_runs(self):
+    def test_instance_template_slugs_and_history_are_local_to_the_current_run(self):
         self.world.is_multiplayer = True
         self.world.save(update_fields=["is_multiplayer"])
         template = create_instance_template(base_world=self.world, author=self.user, name="Orientation")
@@ -120,6 +120,9 @@ class TestQuestConditions(WorldTestCase):
         self.player.world = template.create_spawn_world()
         self.player.room = template.config.starting_room
         self.player.save(update_fields=["world", "room"])
+        self.assertEqual(self.states(), (False, False, False))
+        self.player.world = old_run
+        self.player.save(update_fields=["world"])
         self.assertEqual(self.states(), (True, False, True))
 
     def test_boolean_composition_and_cache_refresh_between_evaluations(self):

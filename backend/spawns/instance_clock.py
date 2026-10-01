@@ -340,7 +340,11 @@ def rebase_character_timers(player, origin_world_id, destination_world_id):
     from django.db.models.functions import Greatest
     from quests.models import QuestOfferState
 
-    offers = QuestOfferState.objects.filter(player=player)
+    # Only base quests travel with the character. Instance clocks own their
+    # offers even while a participant is outside that run.
+    offers = QuestOfferState.objects.filter(
+        player=player, world__isnull=True, template__world__instance_of__isnull=True,
+    )
     # Anchors retain elapsed gameplay time (including a completed cooldown).
     # Deadlines retain remaining time, with already-due deadlines due on entry.
     offers.filter(last_resolved_at__isnull=False).update(

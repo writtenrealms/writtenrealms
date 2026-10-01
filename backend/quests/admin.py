@@ -161,6 +161,7 @@ class QuestOfferStateAdmin(BaseAdmin):
         'id',
         'player',
         'template',
+        'world',
         'is_visible',
         'cooldown_until',
         'snoozed_until',
@@ -169,7 +170,7 @@ class QuestOfferStateAdmin(BaseAdmin):
         'last_resolved_at',
     )
     list_filter = ('is_visible',)
-    raw_id_fields = ['player', 'template']
+    raw_id_fields = ['player', 'template', 'world']
     readonly_fields = ['created_ts', 'modified_ts', 'last_seen_at', 'last_accepted_at', 'last_resolved_at']
     search_fields = [
         'id',
@@ -177,7 +178,7 @@ class QuestOfferStateAdmin(BaseAdmin):
         'template__slug',
         'template__name',
     ]
-    list_select_related = ['player', 'template']
+    list_select_related = ['player', 'template', 'world']
 
 
 admin.site.register(QuestArcTemplate, QuestArcTemplateAdmin)

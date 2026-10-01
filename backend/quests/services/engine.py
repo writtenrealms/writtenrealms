@@ -27,6 +27,7 @@ from quests.services.journal import (
     serialize_objective_state,
 )
 from quests.services.predicates import evaluate_condition, resolve_value
+from quests.services.scope import instances_for_player, offer_lookup
 
 
 RUNTIME_TEMPLATE_TYPES = {"quest"}
@@ -65,7 +66,7 @@ def runtime_templates_qs(player):
         status="active",
         scope="player",
         quest_type__in=RUNTIME_TEMPLATE_TYPES,
-    ).select_related("arc")
+    ).select_related("arc", "world")
 
 
 def get_template_steps(template: QuestTemplate) -> list[dict[str, Any]]:
@@ -422,8 +423,8 @@ def _info_for_instance(quest_instance: QuestInstance, *, player) -> tuple[dict[s
 
 def active_instances_qs(player):
     return (
-        QuestInstance.objects.filter(player=player, status="active")
-        .select_related("template", "template__arc", "world", "player")
+        instances_for_player(player).filter(status="active")
+        .select_related("template", "template__arc", "template__world", "world", "player")
         .prefetch_related("objective_states", "journal_entries")
         .order_by("-modified_ts", "-created_ts")
     )
@@ -431,9 +432,9 @@ def active_instances_qs(player):
 
 def resolved_instances_qs(player):
     return (
-        QuestInstance.objects.filter(player=player, status="resolved")
+        instances_for_player(player).filter(status="resolved")
         .exclude(resolution="abandoned")
-        .select_related("template", "template__arc", "world", "player")
+        .select_related("template", "template__arc", "template__world", "world", "player")
         .prefetch_related("objective_states", "journal_entries")
         .order_by("-resolved_at", "-modified_ts", "-created_ts")
     )
@@ -452,7 +453,7 @@ def resolve_instance_identity(player, identity: str, *, status: str | None = Non
     if not text:
         raise QuestRuntimeError("Quest identifier is required.", code="missing_identifier")
 
-    qs = QuestInstance.objects.filter(player=player).select_related("template", "template__arc", "world", "player").prefetch_related("objective_states", "journal_entries")
+    qs = instances_for_player(player).select_related("template", "template__arc", "template__world", "world", "player").prefetch_related("objective_states", "journal_entries")
     if status:
         qs = qs.filter(status=status)
     if text.isdigit():
@@ -482,6 +483,10 @@ def _assert_gameplay_advancing(player):
 
 
 def can_start_template(player, template: QuestTemplate) -> bool:
+    # A direct service call must not create an attempt for another instance's
+    # template in this runtime. Base quests retain character-wide semantics.
+    if template.world.instance_of_id and template.world_id != template_world_for_player(player).pk:
+        return False
     if active_instances_qs(player).filter(template=template).exists():
         return False
 
@@ -496,7 +501,7 @@ def can_start_template(player, template: QuestTemplate) -> bool:
             # The offer anchor follows the character's gameplay clock. The
             # quest instance retains wall-clock history for sorting/auditing.
             anchor = QuestOfferState.objects.filter(
-                player=player, template=template,
+                **offer_lookup(player, template),
             ).values_list('last_resolved_at', flat=True).first()
             cooldown_until = (anchor or latest.resolved_at) + timedelta(
                 seconds=int(template.repeatability_cooldown_seconds or 0)
@@ -584,7 +589,7 @@ def enter_step(
         )
 
     with transaction.atomic():
-        quest_instance = QuestInstance.objects.select_for_update().get(pk=quest_instance.pk)
+        quest_instance = instances_for_player(player).select_for_update(of=("self",)).get(pk=quest_instance.pk)
         quest_instance.current_step_id = str(step.get("id") or "").strip()
         quest_instance.save(update_fields=["current_step_id", "modified_ts"])
 
@@ -615,8 +620,7 @@ def enter_step(
             quest_instance.save(update_fields=["status", "resolution", "resolved_at", "modified_ts"])
 
             offer_state, _ = QuestOfferState.objects.get_or_create(
-                player=player,
-                template=quest_instance.template,
+                **offer_lookup(player, quest_instance.template),
             )
             offer_state.is_visible = False
             from spawns.instance_clock import gameplay_now
@@ -626,7 +630,7 @@ def enter_step(
                 update_fields=["is_visible", "last_resolved_at", "modified_ts"]
             )
 
-    refreshed = QuestInstance.objects.select_related("template", "template__arc", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
+    refreshed = QuestInstance.objects.select_related("template", "template__arc", "template__world", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
     removed_item_count = 0
     if step_kind == "resolution":
         removed_item_count = cleanup_player_owned_granted_items(
@@ -724,8 +728,7 @@ def start_quest_instance(
             visible_objective_ids=[],
         )
         offer_state, _ = QuestOfferState.objects.get_or_create(
-            player=player,
-            template=template,
+            **offer_lookup(player, template),
         )
         offer_state.is_visible = False
         offer_state.last_accepted_at = timezone.now()
@@ -752,7 +755,7 @@ def choose_for_instance(player, identity: str, choice_id: str) -> QuestTransitio
     resolved_instance = resolve_instance_identity(player, identity, status="active")
     quest_instance = (
         QuestInstance.objects.select_for_update(of=("self",))
-        .select_related("template", "template__arc", "world", "player")
+        .select_related("template", "template__arc", "template__world", "world", "player")
         .get(pk=resolved_instance.pk)
     )
     step = get_step(quest_instance.template, quest_instance.current_step_id)
@@ -830,15 +833,14 @@ def abandon_instance(player, identity: str) -> QuestTransitionResult:
             payload={"reason": "abandoned"},
         )
         offer_state, _ = QuestOfferState.objects.get_or_create(
-            player=player,
-            template=template,
+            **offer_lookup(player, template),
         )
         offer_state.is_visible = False
         # Abandonment is excluded from repeatability history and must not
         # replace the gameplay anchor of the most recent completed attempt.
         offer_state.save(update_fields=["is_visible", "modified_ts"])
 
-    quest_instance = QuestInstance.objects.select_related("template", "template__arc", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
+    quest_instance = QuestInstance.objects.select_related("template", "template__arc", "template__world", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
     payload, info_text = _info_for_instance(quest_instance, player=player)
     if removed_item_count:
         info_text = (
@@ -873,10 +875,12 @@ def progress_active_instance_for_event(
 ) -> QuestTransitionResult:
     player = type(player).objects.select_for_update().get(pk=player.pk)
     quest_instance = (
-        QuestInstance.objects.select_for_update(of=("self",))
-        .select_related("template", "template__arc", "world", "player")
-        .get(pk=quest_instance.pk)
+        instances_for_player(player).select_for_update(of=("self",))
+        .select_related("template", "template__arc", "template__world", "world", "player")
+        .filter(pk=quest_instance.pk, status="active").first()
     )
+    if quest_instance is None:
+        return QuestTransitionResult(quest_instance=None, events=[])
     step = get_step(quest_instance.template, quest_instance.current_step_id)
     if not step or str(step.get("kind") or "").strip().lower() != "objective":
         return QuestTransitionResult(quest_instance=quest_instance, events=[])
@@ -975,7 +979,7 @@ def progress_active_instance_for_event(
     if not updated:
         return QuestTransitionResult(quest_instance=quest_instance, events=[])
 
-    refreshed_instance = QuestInstance.objects.select_related("template", "template__arc", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
+    refreshed_instance = QuestInstance.objects.select_related("template", "template__arc", "template__world", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
     objective_state_map = {
         state.objective_id: state
         for state in refreshed_instance.objective_states.all()

@@ -11,9 +11,9 @@ from quests.models import (
     QuestInstance,
     QuestJournalEntry,
     QuestObjectiveState,
-    QuestOfferState,
 )
 from quests.services.engine import get_step, serialize_instance
+from quests.services.scope import instances_for_player, offers_for_player
 
 
 QUEST_LOG_ACTIVE_LIMIT = 50
@@ -44,8 +44,7 @@ def _with_serialization_data(qs):
 
 
 def _active_instances(player):
-    qs = QuestInstance.objects.filter(
-        player=player,
+    qs = instances_for_player(player).filter(
         status="active",
     ).order_by("-modified_ts", "-created_ts", "-pk")
     instances = list(_with_serialization_data(qs)[:QUEST_LOG_ACTIVE_LIMIT + 1])
@@ -54,8 +53,7 @@ def _active_instances(player):
 
 def _latest_completed_instances(player):
     latest_completed_pk = (
-        QuestInstance.objects.filter(
-            player=player,
+        instances_for_player(player).filter(
             template_id=OuterRef("template_id"),
             status="resolved",
         )
@@ -63,14 +61,12 @@ def _latest_completed_instances(player):
         .order_by("-resolved_at", "-modified_ts", "-created_ts", "-pk")
         .values("pk")[:1]
     )
-    active_for_template = QuestInstance.objects.filter(
-        player=player,
+    active_for_template = instances_for_player(player).filter(
         template_id=OuterRef("template_id"),
         status="active",
     )
     return (
-        QuestInstance.objects.filter(
-            player=player,
+        instances_for_player(player).filter(
             status="resolved",
             pk=Subquery(latest_completed_pk),
         )
@@ -89,8 +85,8 @@ def _completed_instances(player, *, repeatable: bool):
         qs = qs.filter(template__repeatability_mode="never")
         limit = QUEST_LOG_RESOLVED_LIMIT
     qs = qs.annotate(_cooldown_anchor=Subquery(
-        QuestOfferState.objects.filter(
-            player=player, template_id=OuterRef('template_id'),
+        offers_for_player(player).filter(
+            template_id=OuterRef('template_id'),
         ).values('last_resolved_at')[:1]
     )).order_by("-resolved_at", "-modified_ts", "-created_ts", "-pk")
     instances = list(_with_serialization_data(qs)[:limit + 1])

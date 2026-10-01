@@ -1015,6 +1015,26 @@ transaction. These updates are batched by Django's deletion collector, so
 active mob combat cannot violate the participant actor constraint during world
 cleanup or the stopped-instance retry.
 
+Instance-template quests are scoped to the character and spawned runtime.
+`QuestInstance.world` owns attempts, and `QuestOfferState.world` owns instance
+discovery, acceptance, snoozes, and gameplay cooldown anchors. Deleting the
+runtime cascades to both. Base quest offers have a null world and retain their
+character-wide lifetime. Partial uniqueness for base offers and a
+player/template/world unique constraint for run offers prevent duplicate state.
+
+Quest conditions, logs, commands, and event progression select base quests plus
+only the character's current run's instance quests. They never count an older
+retained run. Conditions still batch references into one query with indexed
+`EXISTS` checks; log buckets keep their limits and batched prefetches. No entry
+or exit path scans or deletes another run's quest history. Instance offer timers
+stay on their owning run's clock; only base offer timers move with a character.
+Persistent outcomes must be explicitly written to character state through the
+existing effects/Trigger and condition framework.
+
+The WR2 offer-scope schema migration assigns existing instance offers to their
+latest surviving attempt's runtime and removes orphaned instance offers. Base
+offers and quest attempts are unchanged.
+
 Recommended template policy:
 
 ```yaml
