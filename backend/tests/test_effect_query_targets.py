@@ -81,12 +81,15 @@ class EffectQueryTargetTests(WorldTestCase):
         self.assertEqual(active_combat_effects(self.player), [])
 
     def test_inactive_membership_does_not_admit_effect(self):
+        CombatParticipant.objects.filter(current_target__player=self.player).update(current_target=None)
         CombatParticipant.objects.filter(player=self.player).update(is_active=False)
         self.assertEqual(active_combat_effects(self.player), [])
 
     def test_player_read_still_excludes_paused_and_finished_encounters(self):
         for status in (CombatEncounter.STATUS_PAUSED, CombatEncounter.STATUS_FINISHED):
             with self.subTest(status=status):
+                if status == CombatEncounter.STATUS_FINISHED:
+                    self.encounter.participants.update(is_active=False, current_target=None)
                 CombatEncounter.objects.filter(pk=self.encounter.pk).update(status=status)
                 self.assertEqual(active_combat_effects(self.player), [])
 

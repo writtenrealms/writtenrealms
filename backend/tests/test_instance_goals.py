@@ -309,7 +309,7 @@ class TestInstanceGoals(WorldTestCase):
 
     def test_all_death_finalizers_record_goals(self):
         from spawns.actions.combat import _append_mob_defeat_events, _append_uncredited_mob_defeat_events
-        from spawns.combat_rewards import defeat_mob
+        from spawns.combat_rounds import _defeat
         from spawns.combat_encounters import locked_combat
         from tests.combat_fixtures import create_combat_encounter
         from tests.utils import apply_basic_stat_system
@@ -322,7 +322,10 @@ class TestInstanceGoals(WorldTestCase):
         encounter = create_combat_encounter(world=self.run.spawned_world, room=self.entry, player=self.player, mob=mobs[2])
         with locked_combat(encounter_ids=[encounter.pk]) as context:
             target = context.actors[mobs[2].key]
-            defeat_mob(context, context.encounters[encounter.pk], context.participant(target.key), target, self.player)
+            # The production defeat boundary clears membership/targets before
+            # the reward finalizer deletes the defeated mob.
+            _defeat(context, context.encounters[encounter.pk], context.participant(target.key),
+                    context.actors[self.player.key], 'instance-goal-test')
         self.drain()
         self.assertEqual(self.run.progress['remaining'], 0)
         self.assertEqual(self.run.status, 'completed')
