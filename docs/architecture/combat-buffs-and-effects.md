@@ -746,7 +746,9 @@ Harmful character-scoped periodic effects also maintain a combat tag for their
 live source and target. Engagement controls legal attacks; the combat tag only
 controls combat-exit policies such as regeneration and resting. Offline actors
 and actors in stopped worlds pause their effect clocks and do not hold combat
-tags. Damage attribution belongs to the active effect rather than encounter
+tags. The heartbeat collects player and mob source/target IDs together in one
+spatially filtered query. It streams those rows into sets without retaining an
+effect snapshot across pulses. Damage attribution belongs to the active effect rather than encounter
 membership, so a lethal remote tick resolves death, corpse placement, rewards,
 and conditional loot against the original source in the effect transaction and
 emits the normal `quest.mob.killed` event for quest credit after commit.

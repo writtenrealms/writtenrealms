@@ -729,18 +729,19 @@ def combat_tagged_actor_ids(*, world_ids=None) -> tuple[set[int], set[int]]:
     effects = _live_hostile_effects()
     if world_ids is not None:
         effects = effects.filter(world_id__in=world_ids)
-    player_ids = set(
-        effects.filter(source_player_id__isnull=False).values_list("source_player_id", flat=True)
-    )
-    player_ids.update(
-        effects.filter(target_player_id__isnull=False).values_list("target_player_id", flat=True)
-    )
-    mob_ids = set(
-        effects.filter(source_mob_id__isnull=False).values_list("source_mob_id", flat=True)
-    )
-    mob_ids.update(
-        effects.filter(target_mob_id__isnull=False).values_list("target_mob_id", flat=True)
-    )
+    player_ids: set[int] = set()
+    mob_ids: set[int] = set()
+    for source_player_id, target_player_id, source_mob_id, target_mob_id in effects.values_list(
+        "source_player_id", "target_player_id", "source_mob_id", "target_mob_id",
+    ).iterator(chunk_size=200):
+        player_ids.update(
+            actor_id for actor_id in (source_player_id, target_player_id)
+            if actor_id is not None
+        )
+        mob_ids.update(
+            actor_id for actor_id in (source_mob_id, target_mob_id)
+            if actor_id is not None
+        )
     return player_ids, mob_ids
 
 
