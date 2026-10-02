@@ -50,6 +50,53 @@ Key responsibilities:
 6. `build_state_sync(...)`
    - Aggregates map + actor + room + world + who_list for initial/full sync.
 
+### Query loading
+
+`get_player_with_related` loads player relations separately from the world's
+runtime/template/base configuration graph. Each existing inheritance level uses
+a small query, avoiding a single large join whose planning cost grows even when
+the result is only one player. Equipment items and their definition, currency,
+and augment data are fetched together across room occupants. Equipped items use
+the same batched action/salvageability serialization as inventory items.
+
+Movement resolution loads only the requested neighboring room. Payload assembly
+uses exit IDs and does not load neighboring room objects. Observer recipients
+are fetched together for the origin and destination within the player's runtime;
+the observer character payload is built only when at least one recipient needs
+it. These changes retain the full actor, room, and map response contract.
+When a room snapshot is scoped to a runtime world, its occupants share that
+world's loaded configuration graph rather than fetching it again. Movement also
+reuses the combat coordinator's verified absence of active membership for actors
+it has locked; positive memberships and calls outside that context retain their
+normal queries and checks.
+
+Ordinary-world instance-clock checks are reused only within the current
+`clock_guard`. Instance templates keep authoritative clock queries and locking,
+including when a run is created during an operation. No world or payload state
+is cached across commands.
+
+Effect payload reads use actor IDs and stored source metadata without joining
+the full actor records; encounter and spatial filters still run in the database.
+Room quest discovery checks source relevance before querying eligibility, and
+cooldowns load only their resolution timestamp. Quest pickup projections walk
+carried inventory only when a matching room item has an existing claim to check.
+
+Within a single response, actor serialization reads character effects once and
+uses that same snapshot for displayed effects and computed stats. Room and
+observer character summaries can reuse that actor's computed maximum health.
+The existing combat transaction's effect/stat cache remains authoritative when
+it owns the actor. No snapshot survives into another command. Destination rooms
+already loaded with the actor are reused, with a separate read when a callback
+has moved the actor elsewhere and the response still needs the arrival room.
+
+Minimap selection combines visited, starting, and landmark room IDs in one
+authored-world-scoped query. Canonical character state is read before the legacy
+marks fallback, without eagerly loading unused marks. Player-only encounter
+effect queries omit the impossible mob-target branch while retaining database
+location and membership checks. Movement still reloads the player after the
+combat coordinator acquires its lock: a joined row's related-object snapshot
+can be stale when that lock had to wait for another movement transaction.
+
 ## Look Command Assembly
 
 ### Backend flow

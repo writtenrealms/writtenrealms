@@ -156,6 +156,17 @@ Use `DJANGO_SETTINGS_MODULE=backend.config.settings.production` with an HTTPS
 reverse proxy. In addition to the variables below, provide `ALLOWED_HOSTS`,
 `WR_SITE_BASE`, `POSTGRES_HOST`, `POSTGRES_PORT`, and `POSTGRES_SSLROOTCERT`.
 PostgreSQL connections verify the server certificate against that CA file.
+`POSTGRES_CONN_MAX_AGE` defaults to `0`, keeping persistent connections disabled
+for the ASGI web service. Set it to `60` in the **prefork Celery worker's service
+environment only** to reuse each process's database connection for up to 60
+seconds instead of repeating TLS/authentication for every task. Celery's Django
+integration checks connection age at task boundaries, and Django health checks
+test reused connections before the first query of each task. Idle connections
+are retired at the next task boundary, rather than by a separate timer. Set the
+value to `0` to disable reuse; only nonnegative integer seconds are accepted.
+Allow one connection per worker process when sizing database connections. Do
+not set a positive value in a shared environment used by the ASGI web service;
+see [Django's persistent connection guidance](https://docs.djangoproject.com/en/5.2/ref/databases/#persistent-connections).
 Provide a credentialed `CELERY_BROKER_URL` and shared `DJANGO_CACHE_URL` to all
 Django processes. Configure `CHANNEL_REDIS_HOST` for the gateway and workers.
 Enable transactional email with `WR_SEND_EMAIL=1`, `WR_AWS_ACCESS_KEY`,

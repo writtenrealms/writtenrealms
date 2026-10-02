@@ -177,6 +177,9 @@ class MoveHandler(CommandHandler):
         try:
             from spawns.combat_encounters import locked_combat
             with locked_combat(keys=[ctx.player.key]):
+                # Reload after locking: the coordinator's joined SELECT can
+                # return updated Player fields with stale related rows after
+                # a lock wait. Movement needs the current location and world.
                 try:
                     player = (
                         Player.objects.select_for_update(

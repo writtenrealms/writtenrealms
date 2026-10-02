@@ -26,6 +26,15 @@ SECURE_HSTS_PRELOAD = False
 # a browser preload submission. HTTPS, secure cookies, and host validation stay enforced.
 SILENCED_SYSTEM_CHECKS = ['security.W005', 'security.W021']
 
+# Keep ASGI's default short-lived connections. Prefork Celery workers can opt
+# into bounded reuse (for example, 60 seconds) in their own service environment.
+try:
+    POSTGRES_CONN_MAX_AGE = int(os.environ.get('POSTGRES_CONN_MAX_AGE', '0'))
+except ValueError as exc:
+    raise ImproperlyConfigured('POSTGRES_CONN_MAX_AGE must be a nonnegative integer.') from exc
+if POSTGRES_CONN_MAX_AGE < 0:
+    raise ImproperlyConfigured('POSTGRES_CONN_MAX_AGE must be a nonnegative integer.')
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -34,7 +43,8 @@ DATABASES = {
         'PASSWORD': os.environ['POSTGRES_PASSWORD'],
         'HOST': os.environ['POSTGRES_HOST'],
         'PORT': os.environ.get('POSTGRES_PORT', '5432'),
-        'CONN_MAX_AGE': 0,
+        'CONN_MAX_AGE': POSTGRES_CONN_MAX_AGE,
+        'CONN_HEALTH_CHECKS': True,
         'DISABLE_SERVER_SIDE_CURSORS': True,
         'OPTIONS': {
             'sslmode': 'verify-full',

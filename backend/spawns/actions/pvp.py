@@ -104,6 +104,13 @@ def active_pvp_participation(
     room: Room | None = None,
     lock: bool = False,
 ) -> CombatParticipant | None:
+    from spawns.combat_encounters import current_context
+
+    context = current_context()
+    if (context is not None and player.key in context.actors
+            and context.participant(player.key) is None):
+        # Membership is authoritative only for actors locked by this context.
+        return None
     queryset = (
         CombatParticipant.objects.select_related(
             "encounter",

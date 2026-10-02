@@ -35,17 +35,15 @@ from worlds.models import Room
 _movement_cost = movement_cost
 
 
-def _room_with_exits(room_id: int) -> Room:
-    return Room.objects.select_related(
-        "north",
-        "east",
-        "south",
-        "west",
-        "up",
-        "down",
-        "zone",
-        "world",
-    ).get(pk=room_id)
+def _movement_room(room_id: int, direction: str | None = None) -> Room:
+    # Resolution needs only the chosen destination. Payload assembly uses exit
+    # IDs, so loading all six neighboring room objects only adds planning work.
+    related = ["zone", "world"]
+    if direction is not None:
+        related.append(direction)
+    else:
+        related.extend(["merchant_profile", "trainer_profile"])
+    return Room.objects.select_related(*related).get(pk=room_id)
 
 
 @dataclass(frozen=True)
@@ -78,7 +76,7 @@ class ResolveMoveAction:
             raise ActionError("You are nowhere. Cannot move.", code="no_room")
 
         try:
-            current_room = _room_with_exits(player.room_id)
+            current_room = _movement_room(player.room_id, direction)
         except Room.DoesNotExist:
             raise ActionError("Current room is invalid.", code="invalid_room")
 
@@ -283,7 +281,7 @@ class MoveMobAction:
 
             authored_world_id = self._authored_world_id(runtime_world)
             try:
-                current_room = _room_with_exits(mob.room_id)
+                current_room = _movement_room(mob.room_id, normalized_direction)
             except Room.DoesNotExist as exc:
                 raise ActionError(
                     "The mob's current room is invalid.",
@@ -394,7 +392,11 @@ class BuildMoveEventsAction:
         follow_event_override: GameEvent | None = None,
     ) -> ActionResult:
         player = get_player_with_related(context.player_id)
-        dest_room = _room_with_exits(context.dest_room_id)
+        dest_room = (
+            player.room
+            if player.room_id == context.dest_room_id
+            else _movement_room(context.dest_room_id)
+        )
         origin_room = Room.objects.filter(pk=context.origin_room_id).only(
             "id",
             "relative_id",
@@ -402,10 +404,16 @@ class BuildMoveEventsAction:
         ).first()
 
         room_world = dest_room.world or (player.world.context or player.world)
-        room_ids, _ = collect_map_room_ids(player, room_world, dest_room)
+        room_ids = collect_map_room_ids(player, room_world, dest_room)
         door_states_all = door_state_lookup(player.world, room_ids)
         map_rooms, room_key_lookup = build_map_payload(room_world, room_ids, door_states_all)
 
+        # A post-commit callback may already have relocated the player. Reuse
+        # this snapshot only when it still describes the movement destination.
+        actor_payload = (
+            serialize_actor(player, dest_room)
+            if player.room_id == context.dest_room_id else None
+        )
         room_payload = room_payload_override
         if room_payload is None:
             room_payload = serialize_room(
@@ -414,8 +422,10 @@ class BuildMoveEventsAction:
                 door_states_all,
                 viewer=player,
                 runtime_world=player.world,
+                actor_payload=actor_payload,
             ).model_dump()
-        actor_payload = serialize_actor(player, dest_room)
+        if actor_payload is None:
+            actor_payload = serialize_actor(player, dest_room)
 
         door_state_updates = []
         for room_id, states in door_states_all.items():
@@ -456,24 +466,18 @@ class BuildMoveEventsAction:
             ))
 
         if not player.is_invisible:
-            actor_char = serialize_char_from_player(player).model_dump()
-            origin_recipients = (
-                Player.objects.filter(
-                    world=player.world,
-                    room_id=context.origin_room_id,
-                    in_game=True,
-                )
-                .exclude(pk=player.id)
-                .values_list("id", flat=True)
-            )
-            dest_recipients = (
-                Player.objects.filter(
-                    world=player.world,
-                    room_id=dest_room.id,
-                    in_game=True,
-                )
-                .exclude(pk=player.id)
-                .values_list("id", flat=True)
+            recipients_by_room = {context.origin_room_id: [], dest_room.id: []}
+            for room_id, player_id in Player.objects.filter(
+                world=player.world,
+                room_id__in=recipients_by_room,
+                in_game=True,
+            ).exclude(pk=player.id).values_list("room_id", "id"):
+                recipients_by_room[room_id].append(player_id)
+            origin_recipients = recipients_by_room[context.origin_room_id]
+            dest_recipients = recipients_by_room[dest_room.id]
+            actor_char = (
+                serialize_char_from_player(player, actor_payload=actor_payload).model_dump()
+                if origin_recipients or dest_recipients else None
             )
 
             if origin_recipients:

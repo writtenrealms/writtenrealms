@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from copy import deepcopy
 from datetime import timedelta
 import math
-from typing import Any
+from typing import Any, Literal
 
 from django.db.models import F, Q, QuerySet
 
@@ -87,7 +87,6 @@ def active_character_effects(actor: Player | Mob) -> list[dict[str, Any]]:
     effects = list(
         _actor_effect_queryset(actor)
         .filter(scope=ActiveEffect.SCOPE_CHARACTER, remaining_rounds__gt=0)
-        .select_related("source_player", "source_mob", "target_player", "target_mob")
         .order_by("created_ts", "id")
     )
     payloads = [active_effect_payload(effect) for effect in effects]
@@ -107,8 +106,7 @@ def active_combat_effects(player: Player) -> list[dict[str, Any]]:
             target_player=player,
             remaining_rounds__gt=0,
         )
-        .filter(_spatially_valid_encounter_effect_q())
-        .select_related("source_player", "source_mob", "target_player", "target_mob")
+        .filter(_spatially_valid_encounter_effect_q(target_type="player"))
         .order_by("created_ts", "id")
     )
     return [
@@ -244,7 +242,9 @@ def preventing_action_effect(
     return None
 
 
-def _spatially_valid_encounter_effect_q() -> Q:
+def _spatially_valid_encounter_effect_q(
+    *, target_type: Literal["player", "mob"] | None = None,
+) -> Q:
     live = Q(scope=ActiveEffect.SCOPE_ENCOUNTER,
              encounter__status__in=[CombatEncounter.STATUS_ACTIVE, CombatEncounter.STATUS_PAUSED])
     player = Q(target_player_id__isnull=False,
@@ -253,6 +253,10 @@ def _spatially_valid_encounter_effect_q() -> Q:
                world_id=F("target_player__world_id"),
                encounter__world_id=F("target_player__world_id"),
                encounter__room_id=F("target_player__room_id"))
+    # ActiveEffect's exactly-one-target constraint lets a typed lookup omit
+    # the other actor table while retaining authoritative DB spatial checks.
+    if target_type == "player":
+        return live & player
     mob = Q(target_mob_id__isnull=False,
             encounter__participants__mob_id=F("target_mob_id"),
             encounter__participants__is_active=True,
@@ -261,6 +265,8 @@ def _spatially_valid_encounter_effect_q() -> Q:
             encounter__room_id=F("target_mob__room_id"),
             target_mob__is_pending_deletion=False,
             target_mob__health__gt=0)
+    if target_type == "mob":
+        return live & mob
     return live & (player | mob)
 
 
@@ -723,18 +729,19 @@ def combat_tagged_actor_ids(*, world_ids=None) -> tuple[set[int], set[int]]:
     effects = _live_hostile_effects()
     if world_ids is not None:
         effects = effects.filter(world_id__in=world_ids)
-    player_ids = set(
-        effects.filter(source_player_id__isnull=False).values_list("source_player_id", flat=True)
-    )
-    player_ids.update(
-        effects.filter(target_player_id__isnull=False).values_list("target_player_id", flat=True)
-    )
-    mob_ids = set(
-        effects.filter(source_mob_id__isnull=False).values_list("source_mob_id", flat=True)
-    )
-    mob_ids.update(
-        effects.filter(target_mob_id__isnull=False).values_list("target_mob_id", flat=True)
-    )
+    player_ids: set[int] = set()
+    mob_ids: set[int] = set()
+    for source_player_id, target_player_id, source_mob_id, target_mob_id in effects.values_list(
+        "source_player_id", "target_player_id", "source_mob_id", "target_mob_id",
+    ).iterator(chunk_size=200):
+        player_ids.update(
+            actor_id for actor_id in (source_player_id, target_player_id)
+            if actor_id is not None
+        )
+        mob_ids.update(
+            actor_id for actor_id in (source_mob_id, target_mob_id)
+            if actor_id is not None
+        )
     return player_ids, mob_ids
 
 

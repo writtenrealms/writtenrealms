@@ -9,7 +9,7 @@ import json
 from datetime import timedelta
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from django.db.models import F, OuterRef, Prefetch, Subquery
+from django.db.models import F, OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
@@ -225,6 +225,52 @@ def _combat_rating_percentages(world: World, level: int, stats: dict[str, int]) 
     return payload
 
 
+def _payload_world_queryset():
+    """Load each actual inheritance level with a small, bounded join graph.
+
+    Joining runtime, template, and base configurations into the player query
+    makes PostgreSQL spend more time planning than executing that query.
+    Prefetch follows only the inheritance links that exist for these worlds.
+    """
+    worlds = World.objects.select_related(
+        "config__death_currency", "default_currency"
+    )
+    return worlds.prefetch_related(
+        Prefetch(
+            "context",
+            queryset=worlds.prefetch_related(
+                Prefetch("instance_of", queryset=worlds)
+            ),
+        ),
+        Prefetch("instance_of", queryset=worlds),
+    )
+
+
+def _load_equipment_items(players: Iterable[Player]) -> None:
+    """Hydrate all occupied equipment slots in one query across the players."""
+    equipment_rows = {
+        player.equipment_id: player.equipment
+        for player in players
+        if player.equipment_id
+    }
+    item_ids = {
+        item_id
+        for equipment in equipment_rows.values()
+        for slot in adv_consts.EQUIPMENT_SLOTS
+        if (item_id := getattr(equipment, f"{slot}_id", None))
+    }
+    if not item_ids:
+        return
+    items = with_item_salvageability(
+        Item.objects.select_related("definition", "currency", "augment")
+    ).in_bulk(item_ids)
+    for equipment in equipment_rows.values():
+        for slot in adv_consts.EQUIPMENT_SLOTS:
+            item_id = getattr(equipment, f"{slot}_id", None)
+            if item_id in items:
+                setattr(equipment, slot, items[item_id])
+
+
 def get_player_with_related(player_id: int) -> Player:
     """
     Reload the player with the relations we need for serialization to keep
@@ -243,32 +289,22 @@ def get_player_with_related(player_id: int) -> Player:
     currency_balance_qs = PlayerCurrencyBalance.objects.select_related(
         "currency"
     ).filter(amount__gt=0).order_by("currency__code", "currency_id")
-    return (
+    player = (
         Player.objects.select_related(
-            "world",
-            "world__default_currency",
-            "world__config",
-            "world__config__death_currency",
-            "world__context",
-            "world__context__default_currency",
-            "world__context__config",
-            "world__context__config__death_currency",
-            "world__context__instance_of",
-            "world__context__instance_of__config",
-            "world__context__instance_of__default_currency",
-            "world__instance_of",
-            "world__instance_of__default_currency",
-            "room",
-            "room__merchant_profile",
-            "room__trainer_profile",
             "user",
             "config",
             "equipment",
             "core_faction",
         )
         .prefetch_related(
+            Prefetch("world", queryset=_payload_world_queryset()),
+            Prefetch(
+                "room",
+                queryset=Room.objects.select_related(
+                    "zone", "world", "merchant_profile", "trainer_profile"
+                ),
+            ),
             "aliases",
-            "marks",
             "faction_assignments__faction",
             "clan_memberships__clan",
             Prefetch("inventory", queryset=inventory_qs),
@@ -277,6 +313,8 @@ def get_player_with_related(player_id: int) -> Player:
         )
         .get(pk=player_id)
     )
+    _load_equipment_items([player])
+    return player
 
 
 # ---- Serialization helpers ----
@@ -511,22 +549,10 @@ def serialize_equipment(equipment, *, viewer: Player | Mob | None = None) -> Equ
         )
         if (eq_item := getattr(equipment, slot, None))
     ]
-    salvageable_definition_ids = set(
-        ItemSalvageYield.objects.filter(
-            item_definition_id__in={
-                item.definition_id
-                for _, item in slot_items
-                if item.definition_id
-            },
-        ).values_list("item_definition_id", flat=True)
-    )
+    payloads = serialize_inventory([item for _, item in slot_items], viewer=viewer)
     slots = {
-        slot: serialize_item(
-            item,
-            viewer=viewer,
-            salvageable_definition_ids=salvageable_definition_ids,
-        )
-        for slot, item in slot_items
+        slot: payload
+        for (slot, _), payload in zip(slot_items, payloads)
     }
     return EquipmentSchema(**slots)
 
@@ -536,9 +562,24 @@ def serialize_char_from_player(
     *,
     viewer: Player | Mob | None = None,
     include_equipment: bool = False,
+    actor_payload: Actor | None = None,
 ) -> Char:
     keywords = getattr(player, "keywords", "") or f"{player.name.lower()} player {player.key}"
-    stat_payload = build_player_stat_payload(player)
+    if actor_payload is not None and actor_payload.id != player.id:
+        raise ValueError("The actor payload does not match the player.")
+    health_max = (
+        actor_payload.health_max
+        if actor_payload is not None
+        else build_player_stat_payload(player).get("health_max")
+    )
+    core_faction = (
+        actor_payload.factions.get("core")
+        if actor_payload is not None else None
+    )
+    if core_faction is None:
+        # Full Actor data omits unassigned factions; room Char data also uses
+        # the world's fallback core faction. Preserve that separate contract.
+        core_faction = (player.factions or {}).get("core")
     return Char(
         id=player.id,
         key=player.key,
@@ -546,13 +587,13 @@ def serialize_char_from_player(
         title=player.title,
         description=player.description,
         archetype=player.archetype,
-        core_faction=(player.factions or {}).get("core"),
+        core_faction=core_faction,
         room_description=safe_capitalize(player.name) + " is here.",
         state=player_state(player),
         stance="normal",
         health=player.health,
         health_max=int(
-            stat_payload.get("health_max")
+            health_max
             or getattr(player, "health_max", player.health)
             or 1
         ),
@@ -663,27 +704,20 @@ def serialize_char_from_mob(
 
 def collect_map_room_ids(
     player: Player, room_world: World, current_room: Optional[Room]
-) -> Tuple[set[int], Optional[Room]]:
+) -> set[int]:
     """Return a set of room PKs to include on the minimap."""
-    room_ids: set[int] = set()
-    starting_room = None
-
+    world_config = player.world.config or room_world.config
+    starting_room_id = world_config.starting_room_id if world_config else None
+    room_ids = set(
+        room_world.rooms.filter(
+            Q(pk__in=player.viewed_rooms.values("pk"))
+            | Q(pk=starting_room_id)
+            | Q(is_landmark=True)
+        ).values_list("pk", flat=True)
+    )
     if current_room:
         room_ids.add(current_room.id)
-
-    world_config = player.world.config or room_world.config
-    if world_config and world_config.starting_room_id:
-        starting_room = world_config.starting_room
-        if starting_room and starting_room.world_id == room_world.id:
-            room_ids.add(starting_room.id)
-
-    visited_ids = player.viewed_rooms.filter(world=room_world).values_list("id", flat=True)
-    room_ids.update(visited_ids)
-
-    landmark_ids = room_world.rooms.filter(is_landmark=True).values_list("id", flat=True)
-    room_ids.update(landmark_ids)
-
-    return room_ids, starting_room
+    return room_ids
 
 
 def room_payload_key(room_id: int, relative_id: Optional[int]) -> str:
@@ -917,6 +951,7 @@ def serialize_room(
     *,
     viewer: Player | Mob | None = None,
     runtime_world: World | None = None,
+    actor_payload: Actor | None = None,
 ) -> RoomSchema:
     from spawns.triggers import get_room_action_labels_for_actor
 
@@ -942,11 +977,26 @@ def serialize_room(
             for payload in serialized_quest_room_items_for_room(viewer, room.id)
         )
 
-    room_players = room.players.filter(in_game=True).select_related("user", "equipment")
+    room_players = room.players.filter(in_game=True).select_related(
+        "user", "equipment", "core_faction"
+    ).prefetch_related(
+        "faction_assignments__faction",
+    )
     room_mobs_qs = room.mobs.select_related("definition").order_by("id")
     if runtime_world is not None:
         room_players = room_players.filter(world=runtime_world)
         room_mobs_qs = room_mobs_qs.filter(world=runtime_world)
+    else:
+        room_players = room_players.prefetch_related(
+            Prefetch("world", queryset=_payload_world_queryset())
+        )
+    room_players = list(room_players)
+    if runtime_world is not None:
+        # Every filtered player shares this runtime. Reuse its already-loaded
+        # inheritance/configuration graph within this room snapshot.
+        for player in room_players:
+            player.world = runtime_world
+    _load_equipment_items(room_players)
     room_mobs = list(room_mobs_qs)
     quest_indicator_map: dict[int, dict[str, bool]] = {}
     quest_callout_data: list[dict] = []
@@ -955,7 +1005,17 @@ def serialize_room(
         quest_callout_data = room_quest_callouts(viewer, room.id)
 
     chars: List[Char] = []
-    chars.extend(serialize_char_from_player(p) for p in room_players)
+    chars.extend(
+        serialize_char_from_player(
+            p,
+            actor_payload=(
+                actor_payload
+                if actor_payload is not None and actor_payload.id == p.id
+                else None
+            ),
+        )
+        for p in room_players
+    )
     chars.extend(
         serialize_char_from_mob(
             m,
@@ -1060,7 +1120,18 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "state": player_state(player),
             "room": None,
         }
-    stat_payload = build_player_stat_payload(player)
+    character_effects = active_character_effects(player)
+    from spawns.combat_encounters import current_context
+
+    combat_context = current_context()
+    if combat_context is not None and player.key in combat_context.actors:
+        # Combat already owns an effect snapshot and computed-stat cache. Keep
+        # using that cache when this serializer participates in its transaction.
+        stat_payload = build_player_stat_payload(player)
+    else:
+        stat_payload = build_player_stat_payload(
+            player, character_effects=character_effects
+        )
     actor_data.update(stat_payload)
     actor_data.update(
         _combat_rating_percentages(
@@ -1083,7 +1154,7 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "known_abilities": _known_ability_slugs(player),
             "ability_hotkeys": _ability_hotkeys(player),
             "ability_cooldowns": _ability_cooldowns(player),
-            "active_effects": active_character_effects(player),
+            "active_effects": character_effects,
             "combat_effects": active_combat_effects(player),
         }
     )
@@ -1291,11 +1362,15 @@ def build_state_sync(player: Player) -> StateSyncData:
     room_ids: set[int] = set()
     door_states: Dict[int, Dict[str, str]] = {}
     if room_world:
-        room_ids, _ = collect_map_room_ids(player, room_world, room)
+        room_ids = collect_map_room_ids(player, room_world, room)
         door_states = door_state_lookup(world, room_ids)
 
     map_rooms, room_key_lookup = (
         build_map_payload(room_world, room_ids, door_states) if room_world else ([], {})
+    )
+    actor_payload = (
+        serialize_actor(player, room)
+        if player.room_id == getattr(room, "id", None) else None
     )
     room_payload = serialize_room(
         room,
@@ -1303,8 +1378,10 @@ def build_state_sync(player: Player) -> StateSyncData:
         door_states,
         viewer=player,
         runtime_world=world,
+        actor_payload=actor_payload,
     )
-    actor_payload = serialize_actor(player, room)
+    if actor_payload is None:
+        actor_payload = serialize_actor(player, room)
     world_payload = serialize_world(world)
     who_list = build_who_list(world, player)
 

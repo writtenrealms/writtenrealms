@@ -692,7 +692,7 @@ class Player(CharMixin, AdventBaseModel):
 
 def post_player_save(sender, **kwargs):
     player = kwargs['instance']
-    if not player.config:
+    if not player.config_id:
         default_config = PlayerConfig.objects.order_by('created_ts').first()
         if not default_config:
             # This should only happen in tests, or would in a fresh db install.
