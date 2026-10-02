@@ -50,6 +50,26 @@ Key responsibilities:
 6. `build_state_sync(...)`
    - Aggregates map + actor + room + world + who_list for initial/full sync.
 
+### Query loading
+
+`get_player_with_related` loads player relations separately from the world's
+runtime/template/base configuration graph. Each existing inheritance level uses
+a small query, avoiding a single large join whose planning cost grows even when
+the result is only one player. Equipment items and their definition, currency,
+and augment data are fetched together across room occupants. Equipped items use
+the same batched action/salvageability serialization as inventory items.
+
+Movement resolution loads only the requested neighboring room. Payload assembly
+uses exit IDs and does not load neighboring room objects. Observer recipients
+are fetched together for the origin and destination within the player's runtime;
+the observer character payload is built only when at least one recipient needs
+it. These changes retain the full actor, room, and map response contract.
+
+Ordinary-world instance-clock checks are reused only within the current
+`clock_guard`. Instance templates keep authoritative clock queries and locking,
+including when a run is created during an operation. No world or payload state
+is cached across commands.
+
 ## Look Command Assembly
 
 ### Backend flow

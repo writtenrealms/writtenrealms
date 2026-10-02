@@ -225,6 +225,52 @@ def _combat_rating_percentages(world: World, level: int, stats: dict[str, int]) 
     return payload
 
 
+def _payload_world_queryset():
+    """Load each actual inheritance level with a small, bounded join graph.
+
+    Joining runtime, template, and base configurations into the player query
+    makes PostgreSQL spend more time planning than executing that query.
+    Prefetch follows only the inheritance links that exist for these worlds.
+    """
+    worlds = World.objects.select_related(
+        "config__death_currency", "default_currency"
+    )
+    return worlds.prefetch_related(
+        Prefetch(
+            "context",
+            queryset=worlds.prefetch_related(
+                Prefetch("instance_of", queryset=worlds)
+            ),
+        ),
+        Prefetch("instance_of", queryset=worlds),
+    )
+
+
+def _load_equipment_items(players: Iterable[Player]) -> None:
+    """Hydrate all occupied equipment slots in one query across the players."""
+    equipment_rows = {
+        player.equipment_id: player.equipment
+        for player in players
+        if player.equipment_id
+    }
+    item_ids = {
+        item_id
+        for equipment in equipment_rows.values()
+        for slot in adv_consts.EQUIPMENT_SLOTS
+        if (item_id := getattr(equipment, f"{slot}_id", None))
+    }
+    if not item_ids:
+        return
+    items = with_item_salvageability(
+        Item.objects.select_related("definition", "currency", "augment")
+    ).in_bulk(item_ids)
+    for equipment in equipment_rows.values():
+        for slot in adv_consts.EQUIPMENT_SLOTS:
+            item_id = getattr(equipment, f"{slot}_id", None)
+            if item_id in items:
+                setattr(equipment, slot, items[item_id])
+
+
 def get_player_with_related(player_id: int) -> Player:
     """
     Reload the player with the relations we need for serialization to keep
@@ -243,30 +289,21 @@ def get_player_with_related(player_id: int) -> Player:
     currency_balance_qs = PlayerCurrencyBalance.objects.select_related(
         "currency"
     ).filter(amount__gt=0).order_by("currency__code", "currency_id")
-    return (
+    player = (
         Player.objects.select_related(
-            "world",
-            "world__default_currency",
-            "world__config",
-            "world__config__death_currency",
-            "world__context",
-            "world__context__default_currency",
-            "world__context__config",
-            "world__context__config__death_currency",
-            "world__context__instance_of",
-            "world__context__instance_of__config",
-            "world__context__instance_of__default_currency",
-            "world__instance_of",
-            "world__instance_of__default_currency",
-            "room",
-            "room__merchant_profile",
-            "room__trainer_profile",
             "user",
             "config",
             "equipment",
             "core_faction",
         )
         .prefetch_related(
+            Prefetch("world", queryset=_payload_world_queryset()),
+            Prefetch(
+                "room",
+                queryset=Room.objects.select_related(
+                    "merchant_profile", "trainer_profile"
+                ),
+            ),
             "aliases",
             "marks",
             "faction_assignments__faction",
@@ -277,6 +314,8 @@ def get_player_with_related(player_id: int) -> Player:
         )
         .get(pk=player_id)
     )
+    _load_equipment_items([player])
+    return player
 
 
 # ---- Serialization helpers ----
@@ -511,22 +550,10 @@ def serialize_equipment(equipment, *, viewer: Player | Mob | None = None) -> Equ
         )
         if (eq_item := getattr(equipment, slot, None))
     ]
-    salvageable_definition_ids = set(
-        ItemSalvageYield.objects.filter(
-            item_definition_id__in={
-                item.definition_id
-                for _, item in slot_items
-                if item.definition_id
-            },
-        ).values_list("item_definition_id", flat=True)
-    )
+    payloads = serialize_inventory([item for _, item in slot_items], viewer=viewer)
     slots = {
-        slot: serialize_item(
-            item,
-            viewer=viewer,
-            salvageable_definition_ids=salvageable_definition_ids,
-        )
-        for slot, item in slot_items
+        slot: payload
+        for (slot, _), payload in zip(slot_items, payloads)
     }
     return EquipmentSchema(**slots)
 
@@ -942,11 +969,18 @@ def serialize_room(
             for payload in serialized_quest_room_items_for_room(viewer, room.id)
         )
 
-    room_players = room.players.filter(in_game=True).select_related("user", "equipment")
+    room_players = room.players.filter(in_game=True).select_related(
+        "user", "equipment", "core_faction"
+    ).prefetch_related(
+        Prefetch("world", queryset=_payload_world_queryset()),
+        "faction_assignments__faction",
+    )
     room_mobs_qs = room.mobs.select_related("definition").order_by("id")
     if runtime_world is not None:
         room_players = room_players.filter(world=runtime_world)
         room_mobs_qs = room_mobs_qs.filter(world=runtime_world)
+    room_players = list(room_players)
+    _load_equipment_items(room_players)
     room_mobs = list(room_mobs_qs)
     quest_indicator_map: dict[int, dict[str, bool]] = {}
     quest_callout_data: list[dict] = []

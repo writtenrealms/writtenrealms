@@ -79,7 +79,9 @@ def _resolve_command_actor(
     world = None
     if actor_type == "player":
         try:
-            player = Player.objects.get(pk=actor_id)
+            player = Player.objects.select_related("world", "room__zone").get(
+                pk=actor_id
+            )
         except Player.DoesNotExist:
             raise PlayerNotFoundError(actor_id)
         actor = player
@@ -88,7 +90,9 @@ def _resolve_command_actor(
         zone = getattr(room, "zone", None)
     elif actor_type == "mob":
         try:
-            mob = Mob.objects.get(pk=actor_id)
+            mob = Mob.objects.select_related("world", "room__zone").get(
+                pk=actor_id
+            )
         except Mob.DoesNotExist:
             raise ActorNotFoundError("mob", actor_id)
         actor = mob

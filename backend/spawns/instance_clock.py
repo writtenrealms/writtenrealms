@@ -21,6 +21,7 @@ MAX_STEP_EVENTS = 2048
 MAX_PENDING_REACTIONS = 256
 _simulation = ContextVar('instance_simulation', default=None)
 _guard = ContextVar('instance_clock_guard', default=None)
+_ordinary_worlds = ContextVar('instance_clock_ordinary_worlds', default=frozenset())
 _world_scope = ContextVar('instance_world_scope', default=None)
 _exclude_capable = ContextVar('exclude_time_capable_worlds', default=False)
 REACTIONS_DONE = '_instance_reactions_done'
@@ -76,6 +77,8 @@ def time_control_run(world_or_id):
         run = next((run for run in combat.runs.values() if run.spawned_world_id == key), None)
         if run is not None:
             return run if run.time_control and run.single_player else None
+    if key in _ordinary_worlds.get():
+        return None
     # Ordinary authored/base worlds cannot be controlled; avoid a query there.
     if hasattr(world_or_id, 'context_id') and not world_or_id.context_id:
         return None
@@ -105,7 +108,25 @@ def guarded_run_scope(run):
 def clock_guard(world_or_id):
     """Serialize eligible gameplay with pause/resume before locking its rows."""
     run = time_control_run(world_or_id)
-    if run is None or in_simulation(world_or_id) or _guard.get() is run:
+    if run is None:
+        # A world's authored scope is immutable. Ordinary worlds cannot acquire
+        # an instance clock, so remember this negative lookup only while their
+        # command/operation is running. Nested ID-only clock checks share it.
+        # Do not cache missing runs for instance templates: entry/reset can
+        # create a run for an existing spawned instance during this operation.
+        ordinary = hasattr(world_or_id, 'context_id') and (
+            not world_or_id.context_id or not world_or_id.context.instance_of_id
+        )
+        token = None
+        if ordinary:
+            token = _ordinary_worlds.set(_ordinary_worlds.get() | {world_id(world_or_id)})
+        try:
+            yield None
+        finally:
+            if token is not None:
+                _ordinary_worlds.reset(token)
+        return
+    if in_simulation(world_or_id) or _guard.get() is run:
         yield run
         return
     from worlds.models import InstanceRun
