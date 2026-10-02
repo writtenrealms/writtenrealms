@@ -608,6 +608,9 @@ class MultiParticipantCombatTests(WorldTestCase):
         from django.db import connection
         module = importlib.import_module('spawns.migrations.0162_combat_scope_constraints')
         with connection.cursor() as cursor:
+            # Migration tests can leave these objects in a retained test DB.
+            # TestCase rolls back this replacement, restoring the prior schema.
+            cursor.execute(module.REVERSE_SQL)
             cursor.execute(module.FORWARD_SQL)
         first = engage(self.player, self.mob('guard'))[0]
         second = engage(self.mob('commander', self.greek), self.mob('other guard'))[0]

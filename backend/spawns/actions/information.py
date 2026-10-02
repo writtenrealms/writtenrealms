@@ -177,7 +177,7 @@ class LookAction:
             raise ActionError("You don't see that here.", code="target_not_found")
 
         room_world = room.world or (world.context or world)
-        room_ids, _ = collect_map_room_ids(player, room_world, room)
+        room_ids = collect_map_room_ids(player, room_world, room)
         door_states = door_state_lookup(world, room_ids)
         map_rooms, room_key_lookup = build_map_payload(room_world, room_ids, door_states)
 
@@ -236,7 +236,7 @@ class InspectAction:
 
         actor_payload = serialize_actor(player, room)
         room_world = room.world or (world.context or world)
-        room_ids, _ = collect_map_room_ids(player, room_world, room)
+        room_ids = collect_map_room_ids(player, room_world, room)
         door_states = door_state_lookup(world, room_ids)
         _, room_key_lookup = build_map_payload(room_world, room_ids, door_states)
         room_payload = serialize_room(

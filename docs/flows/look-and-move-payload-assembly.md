@@ -89,6 +89,14 @@ it owns the actor. No snapshot survives into another command. Destination rooms
 already loaded with the actor are reused, with a separate read when a callback
 has moved the actor elsewhere and the response still needs the arrival room.
 
+Minimap selection combines visited, starting, and landmark room IDs in one
+authored-world-scoped query. Canonical character state is read before the legacy
+marks fallback, without eagerly loading unused marks. Player-only encounter
+effect queries omit the impossible mob-target branch while retaining database
+location and membership checks. Movement still reloads the player after the
+combat coordinator acquires its lock: a joined row's related-object snapshot
+can be stale when that lock had to wait for another movement transaction.
+
 ## Look Command Assembly
 
 ### Backend flow

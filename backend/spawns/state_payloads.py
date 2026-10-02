@@ -9,7 +9,7 @@ import json
 from datetime import timedelta
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from django.db.models import F, OuterRef, Prefetch, Subquery
+from django.db.models import F, OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
@@ -305,7 +305,6 @@ def get_player_with_related(player_id: int) -> Player:
                 ),
             ),
             "aliases",
-            "marks",
             "faction_assignments__faction",
             "clan_memberships__clan",
             Prefetch("inventory", queryset=inventory_qs),
@@ -705,27 +704,20 @@ def serialize_char_from_mob(
 
 def collect_map_room_ids(
     player: Player, room_world: World, current_room: Optional[Room]
-) -> Tuple[set[int], Optional[Room]]:
+) -> set[int]:
     """Return a set of room PKs to include on the minimap."""
-    room_ids: set[int] = set()
-    starting_room = None
-
+    world_config = player.world.config or room_world.config
+    starting_room_id = world_config.starting_room_id if world_config else None
+    room_ids = set(
+        room_world.rooms.filter(
+            Q(pk__in=player.viewed_rooms.values("pk"))
+            | Q(pk=starting_room_id)
+            | Q(is_landmark=True)
+        ).values_list("pk", flat=True)
+    )
     if current_room:
         room_ids.add(current_room.id)
-
-    world_config = player.world.config or room_world.config
-    if world_config and world_config.starting_room_id:
-        starting_room = world_config.starting_room
-        if starting_room and starting_room.world_id == room_world.id:
-            room_ids.add(starting_room.id)
-
-    visited_ids = player.viewed_rooms.filter(world=room_world).values_list("id", flat=True)
-    room_ids.update(visited_ids)
-
-    landmark_ids = room_world.rooms.filter(is_landmark=True).values_list("id", flat=True)
-    room_ids.update(landmark_ids)
-
-    return room_ids, starting_room
+    return room_ids
 
 
 def room_payload_key(room_id: int, relative_id: Optional[int]) -> str:
@@ -1370,7 +1362,7 @@ def build_state_sync(player: Player) -> StateSyncData:
     room_ids: set[int] = set()
     door_states: Dict[int, Dict[str, str]] = {}
     if room_world:
-        room_ids, _ = collect_map_room_ids(player, room_world, room)
+        room_ids = collect_map_room_ids(player, room_world, room)
         door_states = door_state_lookup(world, room_ids)
 
     map_rooms, room_key_lookup = (

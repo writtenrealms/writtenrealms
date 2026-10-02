@@ -404,7 +404,7 @@ class BuildMoveEventsAction:
         ).first()
 
         room_world = dest_room.world or (player.world.context or player.world)
-        room_ids, _ = collect_map_room_ids(player, room_world, dest_room)
+        room_ids = collect_map_room_ids(player, room_world, dest_room)
         door_states_all = door_state_lookup(player.world, room_ids)
         map_rooms, room_key_lookup = build_map_payload(room_world, room_ids, door_states_all)
 
