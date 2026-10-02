@@ -392,7 +392,11 @@ class BuildMoveEventsAction:
         follow_event_override: GameEvent | None = None,
     ) -> ActionResult:
         player = get_player_with_related(context.player_id)
-        dest_room = _movement_room(context.dest_room_id)
+        dest_room = (
+            player.room
+            if player.room_id == context.dest_room_id
+            else _movement_room(context.dest_room_id)
+        )
         origin_room = Room.objects.filter(pk=context.origin_room_id).only(
             "id",
             "relative_id",
@@ -404,6 +408,12 @@ class BuildMoveEventsAction:
         door_states_all = door_state_lookup(player.world, room_ids)
         map_rooms, room_key_lookup = build_map_payload(room_world, room_ids, door_states_all)
 
+        # A post-commit callback may already have relocated the player. Reuse
+        # this snapshot only when it still describes the movement destination.
+        actor_payload = (
+            serialize_actor(player, dest_room)
+            if player.room_id == context.dest_room_id else None
+        )
         room_payload = room_payload_override
         if room_payload is None:
             room_payload = serialize_room(
@@ -412,8 +422,10 @@ class BuildMoveEventsAction:
                 door_states_all,
                 viewer=player,
                 runtime_world=player.world,
+                actor_payload=actor_payload,
             ).model_dump()
-        actor_payload = serialize_actor(player, dest_room)
+        if actor_payload is None:
+            actor_payload = serialize_actor(player, dest_room)
 
         door_state_updates = []
         for room_id, states in door_states_all.items():
@@ -464,7 +476,7 @@ class BuildMoveEventsAction:
             origin_recipients = recipients_by_room[context.origin_room_id]
             dest_recipients = recipients_by_room[dest_room.id]
             actor_char = (
-                serialize_char_from_player(player).model_dump()
+                serialize_char_from_player(player, actor_payload=actor_payload).model_dump()
                 if origin_recipients or dest_recipients else None
             )
 

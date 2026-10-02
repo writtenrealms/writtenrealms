@@ -81,6 +81,14 @@ Room quest discovery checks source relevance before querying eligibility, and
 cooldowns load only their resolution timestamp. Quest pickup projections walk
 carried inventory only when a matching room item has an existing claim to check.
 
+Within a single response, actor serialization reads character effects once and
+uses that same snapshot for displayed effects and computed stats. Room and
+observer character summaries can reuse that actor's computed maximum health.
+The existing combat transaction's effect/stat cache remains authoritative when
+it owns the actor. No snapshot survives into another command. Destination rooms
+already loaded with the actor are reused, with a separate read when a callback
+has moved the actor elsewhere and the response still needs the arrival room.
+
 ## Look Command Assembly
 
 ### Backend flow

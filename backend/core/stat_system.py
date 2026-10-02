@@ -1160,10 +1160,11 @@ def _effect_is_active(effect: dict[str, Any]) -> bool:
         return False
 
 
-def _effect_stat_modifiers(actor: Any) -> list[dict[str, Any]]:
+def _effect_stat_modifiers(actor: Any, character_effects=None) -> list[dict[str, Any]]:
     modifiers: list[dict[str, Any]] = []
     applied_stack_keys: set[str] = set()
-    for effect in _active_effects(actor):
+    effects = _active_effects(actor) if character_effects is None else character_effects
+    for effect in effects:
         if not _effect_is_active(effect):
             continue
         stack_key = str(effect.get("stack_key") or "").strip().lower()
@@ -1180,10 +1181,10 @@ def _effect_stat_modifiers(actor: Any) -> list[dict[str, Any]]:
     return modifiers
 
 
-def _apply_active_stat_modifiers(stats: dict[str, float], actor: Any) -> None:
+def _apply_active_stat_modifiers(stats: dict[str, float], actor: Any, character_effects=None) -> None:
     additions: dict[str, float] = {}
     multipliers: dict[str, float] = {}
-    for modifier in _effect_stat_modifiers(actor):
+    for modifier in _effect_stat_modifiers(actor, character_effects):
         stat_key = str(modifier.get("stat") or "").strip()
         if stat_key not in stats:
             continue
@@ -1214,7 +1215,15 @@ def _apply_active_stat_modifiers(stats: dict[str, float], actor: Any) -> None:
 
 
 def compute_stats(level, archetype=None, char=None, boost_mob=False, is_mob=False,
-                  faction_level=0, world=None):
+                  faction_level=0, world=None, *, character_effects=None):
+    # A caller assembling one payload can reuse the effects it just read. An
+    # explicit snapshot, including an empty list, must not use or populate the
+    # combat cache, whose results represent its own locked effect state.
+    if character_effects is not None:
+        return _compute_stats(
+            level, archetype, char, boost_mob, is_mob, faction_level, world,
+            character_effects=character_effects,
+        )
     # Combat repeatedly serializes and resolves the same actors. Cache only
     # inside its transaction; effect and actor-stat writes invalidate the cache.
     from spawns.combat_encounters import current_context
@@ -1240,6 +1249,8 @@ def _compute_stats(
     is_mob=False,
     faction_level=0,
     world=None,
+    *,
+    character_effects=None,
 ):
     """
     Compute stats for a character against the world-authored stat
@@ -1383,7 +1394,7 @@ def _compute_stats(
     )
 
     if char is not None:
-        _apply_active_stat_modifiers(stats, char)
+        _apply_active_stat_modifiers(stats, char, character_effects)
 
     finalized: dict[str, int] = {}
     for key, value in stats.items():
@@ -1412,7 +1423,7 @@ def _compute_stats(
     return finalized
 
 
-def build_player_stat_payload(player) -> dict[str, Any]:
+def build_player_stat_payload(player, *, character_effects=None) -> dict[str, Any]:
     runtime_world = getattr(player, "world", None)
     stat_system = get_world_stat_system(runtime_world)
     stats = compute_stats(
@@ -1420,6 +1431,7 @@ def build_player_stat_payload(player) -> dict[str, Any]:
         player.archetype,
         char=player,
         world=runtime_world,
+        character_effects=character_effects,
     )
     attribute_order = get_attribute_order(stat_system)
     stat_order = list(stat_system["stat_display_order"])

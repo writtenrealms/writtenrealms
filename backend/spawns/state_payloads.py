@@ -301,7 +301,7 @@ def get_player_with_related(player_id: int) -> Player:
             Prefetch(
                 "room",
                 queryset=Room.objects.select_related(
-                    "merchant_profile", "trainer_profile"
+                    "zone", "world", "merchant_profile", "trainer_profile"
                 ),
             ),
             "aliases",
@@ -563,9 +563,24 @@ def serialize_char_from_player(
     *,
     viewer: Player | Mob | None = None,
     include_equipment: bool = False,
+    actor_payload: Actor | None = None,
 ) -> Char:
     keywords = getattr(player, "keywords", "") or f"{player.name.lower()} player {player.key}"
-    stat_payload = build_player_stat_payload(player)
+    if actor_payload is not None and actor_payload.id != player.id:
+        raise ValueError("The actor payload does not match the player.")
+    health_max = (
+        actor_payload.health_max
+        if actor_payload is not None
+        else build_player_stat_payload(player).get("health_max")
+    )
+    core_faction = (
+        actor_payload.factions.get("core")
+        if actor_payload is not None else None
+    )
+    if core_faction is None:
+        # Full Actor data omits unassigned factions; room Char data also uses
+        # the world's fallback core faction. Preserve that separate contract.
+        core_faction = (player.factions or {}).get("core")
     return Char(
         id=player.id,
         key=player.key,
@@ -573,13 +588,13 @@ def serialize_char_from_player(
         title=player.title,
         description=player.description,
         archetype=player.archetype,
-        core_faction=(player.factions or {}).get("core"),
+        core_faction=core_faction,
         room_description=safe_capitalize(player.name) + " is here.",
         state=player_state(player),
         stance="normal",
         health=player.health,
         health_max=int(
-            stat_payload.get("health_max")
+            health_max
             or getattr(player, "health_max", player.health)
             or 1
         ),
@@ -944,6 +959,7 @@ def serialize_room(
     *,
     viewer: Player | Mob | None = None,
     runtime_world: World | None = None,
+    actor_payload: Actor | None = None,
 ) -> RoomSchema:
     from spawns.triggers import get_room_action_labels_for_actor
 
@@ -997,7 +1013,17 @@ def serialize_room(
         quest_callout_data = room_quest_callouts(viewer, room.id)
 
     chars: List[Char] = []
-    chars.extend(serialize_char_from_player(p) for p in room_players)
+    chars.extend(
+        serialize_char_from_player(
+            p,
+            actor_payload=(
+                actor_payload
+                if actor_payload is not None and actor_payload.id == p.id
+                else None
+            ),
+        )
+        for p in room_players
+    )
     chars.extend(
         serialize_char_from_mob(
             m,
@@ -1102,7 +1128,18 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "state": player_state(player),
             "room": None,
         }
-    stat_payload = build_player_stat_payload(player)
+    character_effects = active_character_effects(player)
+    from spawns.combat_encounters import current_context
+
+    combat_context = current_context()
+    if combat_context is not None and player.key in combat_context.actors:
+        # Combat already owns an effect snapshot and computed-stat cache. Keep
+        # using that cache when this serializer participates in its transaction.
+        stat_payload = build_player_stat_payload(player)
+    else:
+        stat_payload = build_player_stat_payload(
+            player, character_effects=character_effects
+        )
     actor_data.update(stat_payload)
     actor_data.update(
         _combat_rating_percentages(
@@ -1125,7 +1162,7 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
             "known_abilities": _known_ability_slugs(player),
             "ability_hotkeys": _ability_hotkeys(player),
             "ability_cooldowns": _ability_cooldowns(player),
-            "active_effects": active_character_effects(player),
+            "active_effects": character_effects,
             "combat_effects": active_combat_effects(player),
         }
     )
@@ -1339,14 +1376,20 @@ def build_state_sync(player: Player) -> StateSyncData:
     map_rooms, room_key_lookup = (
         build_map_payload(room_world, room_ids, door_states) if room_world else ([], {})
     )
+    actor_payload = (
+        serialize_actor(player, room)
+        if player.room_id == getattr(room, "id", None) else None
+    )
     room_payload = serialize_room(
         room,
         room_key_lookup,
         door_states,
         viewer=player,
         runtime_world=world,
+        actor_payload=actor_payload,
     )
-    actor_payload = serialize_actor(player, room)
+    if actor_payload is None:
+        actor_payload = serialize_actor(player, room)
     world_payload = serialize_world(world)
     who_list = build_who_list(world, player)
 

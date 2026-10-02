@@ -247,7 +247,12 @@ def quest_room_item_projections_for_room(player, room_id: int | None) -> list[Qu
     player_owned_item_ids = None
     projections: list[QuestRoomItemProjection] = []
 
-    for quest_instance in active_instances_qs(player):
+    active_instances = (
+        active_instances_qs(player)
+        .select_related(None).prefetch_related(None)
+        .select_related("template__world")
+    )
+    for quest_instance in active_instances:
         step = get_step(quest_instance.template, quest_instance.current_step_id)
         if not step:
             continue

@@ -1,15 +1,18 @@
 """Payload loading stays bounded across world inheritance and room occupants."""
 
+from unittest.mock import patch
+
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
 from builders.models import Faction, ItemDefinition
 from config import constants as adv_consts
 from core.world_config import inherited_system_config
-from spawns.actions.movement import ResolveMoveAction
+from spawns.actions.movement import BuildMoveEventsAction, MoveContext, ResolveMoveAction
 from spawns.models import Item
 from spawns.state_payloads import (
     get_player_with_related,
+    room_payload_key_for,
     serialize_actor,
     serialize_room,
 )
@@ -177,3 +180,37 @@ class MovementQueryLoadingTests(WorldTestCase):
         ]
         self.assertTrue(world_reads(standalone_queries))
         self.assertEqual(world_reads(shared_queries), [])
+
+    def test_move_payload_reuses_loaded_destination(self):
+        destination = self.room.create_at(adv_consts.DIRECTION_EAST)
+        self.player.room = destination
+        self.player.save(update_fields=["room"])
+        context = MoveContext(
+            player_id=self.player.pk, direction="east",
+            origin_room_id=self.room.pk, dest_room_id=destination.pk,
+            trigger_world_id=self.world.pk, movement_cost=1,
+        )
+        with patch(
+            "spawns.actions.movement._movement_room",
+            side_effect=AssertionError("Destination should already be loaded"),
+        ):
+            result = BuildMoveEventsAction().execute(context)
+        self.assertEqual(result.events[0].data["room"]["id"], destination.pk)
+        self.assertEqual(result.events[0].data["room"]["zone"]["key"], destination.zone.key)
+
+    def test_move_payload_keeps_destination_when_post_commit_action_relocated_player(self):
+        destination = self.room.create_at(adv_consts.DIRECTION_EAST)
+        relocated_room = self.room.create_at(adv_consts.DIRECTION_NORTH)
+        self.player.room = relocated_room
+        self.player.save(update_fields=["room"])
+        context = MoveContext(
+            player_id=self.player.pk, direction="east",
+            origin_room_id=self.room.pk, dest_room_id=destination.pk,
+            trigger_world_id=self.world.pk, movement_cost=1,
+        )
+        result = BuildMoveEventsAction().execute(context)
+        move_data = result.events[0].data
+        self.assertEqual(move_data["room"]["id"], destination.pk)
+        self.assertEqual(move_data["actor"]["room"]["key"], room_payload_key_for(destination))
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.room_id, relocated_room.pk)

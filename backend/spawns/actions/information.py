@@ -187,6 +187,7 @@ class LookAction:
             door_states,
             viewer=player,
             runtime_world=world,
+            actor_payload=actor_payload,
         )
         data = {
             "actor": actor_payload.model_dump(),
@@ -244,6 +245,7 @@ class InspectAction:
             door_states,
             viewer=player,
             runtime_world=world,
+            actor_payload=actor_payload,
         )
         data = {
             "actor": actor_payload.model_dump(),

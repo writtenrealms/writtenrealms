@@ -131,11 +131,11 @@ class CharMixin(models.Model):
                 world=context_world,
                 type='core',
                 playable=True)
-            default_faction = core_factions.filter(is_default=True).first()
+            default_faction = core_factions.order_by(
+                '-is_default', *(Faction._meta.ordering or ('pk',))
+            ).first()
             if default_faction:
                 core = default_faction.code
-            elif core_factions:
-                core = core_factions.first().code
 
         factions = {'core': core} if core else {}
 

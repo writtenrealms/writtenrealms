@@ -32,8 +32,9 @@ def request_reconciliation(world_id, room_id, keys=(), *, observed=False):
     from spawns.instance_clock import gameplay_now, is_time_controlled
     now = gameplay_now(world_id)
     with transaction.atomic():
-        state, _ = CombatRoomState.objects.get_or_create(world_id=world_id, room_id=room_id)
-        state = CombatRoomState.objects.select_for_update().get(pk=state.pk)
+        state, _ = CombatRoomState.objects.select_for_update().get_or_create(
+            world_id=world_id, room_id=room_id,
+        )
         already_pending = state.next_run_ts is not None
         changed = sorted(set(state.changed_actors) | set(keys or ['*']))
         state.changed_actors = changed if len(changed) <= MAX_CHANGED and '*' not in changed else ['*']
