@@ -188,6 +188,10 @@ def load_player_escape_encounters(*, player, origin_room_id):
             if (encounter.status == 'finished' or not eligible(actor) or
                     (actor.world_id, actor.room_id) != (encounter.world_id, encounter.room_id)):
                 detach_actor(ctx, member.actor_key, reason='unavailable')
+        # The coordinator revalidated membership while holding this actor's
+        # row lock. An actor with no active membership has no escape opponents.
+        if player.key in ctx.actors and ctx.participant(player.key) is None:
+            return ()
     from django.db.models import Subquery
     own_side = CombatParticipant.objects.filter(player=player, is_active=True).values('side_id')[:1]
     opponents = CombatParticipant.objects.filter(encounter__participants__player=player,

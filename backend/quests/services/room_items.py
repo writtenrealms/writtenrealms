@@ -200,8 +200,6 @@ def _projection_from_spec(
     quest_instance: QuestInstance,
     step: dict[str, Any],
     room_item_spec: dict[str, Any],
-    *,
-    player_owned_item_ids: set[int],
 ) -> QuestRoomItemProjection | None:
     step_id = str(step.get("id") or "").strip()
     spec_id = str(room_item_spec.get("id") or "").strip()
@@ -231,9 +229,6 @@ def _projection_from_spec(
         (quest_instance.local_state or {}).get(QUEST_ROOM_ITEM_CLAIMS_STATE_KEY)
     )
     claim_item_ids = claims.get(_claim_key(step_id, spec_id), [])
-    if set(claim_item_ids) & player_owned_item_ids:
-        return None
-
     return _room_item_projection(
         quest_instance=quest_instance,
         step_id=step_id,
@@ -249,7 +244,7 @@ def quest_room_item_projections_for_room(player, room_id: int | None) -> list[Qu
     if not room_id:
         return []
 
-    player_owned_item_ids = _player_owned_item_ids(player)
+    player_owned_item_ids = None
     projections: list[QuestRoomItemProjection] = []
 
     for quest_instance in active_instances_qs(player):
@@ -261,10 +256,14 @@ def quest_room_item_projections_for_room(player, room_id: int | None) -> list[Qu
                 quest_instance,
                 step,
                 room_item_spec,
-                player_owned_item_ids=player_owned_item_ids,
             )
             if projection is None or projection.room_id != int(room_id):
                 continue
+            if projection.claim_item_ids:
+                if player_owned_item_ids is None:
+                    player_owned_item_ids = _player_owned_item_ids(player)
+                if set(projection.claim_item_ids) & player_owned_item_ids:
+                    continue
             projections.append(projection)
 
     return projections

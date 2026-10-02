@@ -494,8 +494,8 @@ def can_start_template(player, template: QuestTemplate) -> bool:
     if template.repeatability_mode == "never" and resolved_qs.exists():
         return False
     if template.repeatability_mode == "cooldown":
-        latest = resolved_qs.first()
-        if latest and latest.resolved_at:
+        latest_resolved_at = resolved_qs.values_list("resolved_at", flat=True).first()
+        if latest_resolved_at:
             from spawns.instance_clock import gameplay_now
 
             # The offer anchor follows the character's gameplay clock. The
@@ -503,7 +503,7 @@ def can_start_template(player, template: QuestTemplate) -> bool:
             anchor = QuestOfferState.objects.filter(
                 **offer_lookup(player, template),
             ).values_list('last_resolved_at', flat=True).first()
-            cooldown_until = (anchor or latest.resolved_at) + timedelta(
+            cooldown_until = (anchor or latest_resolved_at) + timedelta(
                 seconds=int(template.repeatability_cooldown_seconds or 0)
             )
             if cooldown_until > gameplay_now(player.world):

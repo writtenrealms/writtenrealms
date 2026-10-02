@@ -182,8 +182,6 @@ def available_room_prompt_opportunities_for_room(
     seen_template_ids: set[int] = set()
     templates = list(runtime_templates_qs(player))
     for template in templates:
-        if not _template_available(player, template):
-            continue
         matched_room_prompt = any(
             isinstance(source, dict)
             and _room_prompt_source_matches_room_id(
@@ -194,6 +192,8 @@ def available_room_prompt_opportunities_for_room(
             for source in (template.discovery_policy or {}).get("sources", [])
         )
         if not matched_room_prompt or template.id in seen_template_ids:
+            continue
+        if not _template_available(player, template):
             continue
         seen_template_ids.add(template.id)
         opportunities.append(serialize_opportunity(template, player=player))
@@ -213,23 +213,20 @@ def room_prompt_callouts_for_room(
     seen_callouts: set[tuple[int, str]] = set()
     templates = list(runtime_templates_qs(player))
     for template in templates:
-        if not _template_available(player, template):
+        # Eligibility reads quest history and offer state. Only a room source
+        # with visible text can contribute a callout to this room.
+        matching_callouts = [
+            callout_text
+            for source in (template.discovery_policy or {}).get("sources", [])
+            if isinstance(source, dict)
+            and (callout_text := _room_prompt_source_callout(source))
+            and _room_prompt_source_matches_room_id(
+                template, source, room_id=room_id
+            )
+        ]
+        if not matching_callouts or not _template_available(player, template):
             continue
-
-        for source in (template.discovery_policy or {}).get("sources", []):
-            if not isinstance(source, dict):
-                continue
-            if not _room_prompt_source_matches_room_id(
-                template,
-                source,
-                room_id=room_id,
-            ):
-                continue
-
-            callout_text = _room_prompt_source_callout(source)
-            if not callout_text:
-                continue
-
+        for callout_text in matching_callouts:
             dedupe_key = (template.id, callout_text)
             if dedupe_key in seen_callouts:
                 continue

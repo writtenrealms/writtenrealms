@@ -147,3 +147,33 @@ class MovementQueryLoadingTests(WorldTestCase):
         room_reads = [query["sql"] for query in captured if 'FROM "worlds_room"' in query["sql"]]
         self.assertTrue(room_reads)
         self.assertTrue(all(sql.count('JOIN "worlds_room"') <= 1 for sql in room_reads))
+
+    def test_room_reuses_supplied_runtime_without_changing_payload(self):
+        self._equip(self.player)
+        self._equip(self.create_player("Observer"))
+        viewer = get_player_with_related(self.player.pk)
+
+        def read_room(runtime_world):
+            with CaptureQueriesContext(connection) as queries:
+                payload = serialize_room(
+                    self.room,
+                    {self.room.pk: self.room.key},
+                    {},
+                    viewer=viewer,
+                    runtime_world=runtime_world,
+                ).model_dump()
+            return payload, queries
+
+        read_room(None)  # Warm trigger, ContentType, and room relation caches.
+        read_room(viewer.world)
+        standalone_payload, standalone_queries = read_room(None)
+        shared_payload, shared_queries = read_room(viewer.world)
+
+        self.assertEqual(shared_payload, standalone_payload)
+        self.assertLess(len(shared_queries), len(standalone_queries))
+        world_reads = lambda queries: [
+            query["sql"] for query in queries
+            if 'FROM "worlds_world"' in query["sql"]
+        ]
+        self.assertTrue(world_reads(standalone_queries))
+        self.assertEqual(world_reads(shared_queries), [])

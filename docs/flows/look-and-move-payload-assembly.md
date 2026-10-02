@@ -64,11 +64,22 @@ uses exit IDs and does not load neighboring room objects. Observer recipients
 are fetched together for the origin and destination within the player's runtime;
 the observer character payload is built only when at least one recipient needs
 it. These changes retain the full actor, room, and map response contract.
+When a room snapshot is scoped to a runtime world, its occupants share that
+world's loaded configuration graph rather than fetching it again. Movement also
+reuses the combat coordinator's verified absence of active membership for actors
+it has locked; positive memberships and calls outside that context retain their
+normal queries and checks.
 
 Ordinary-world instance-clock checks are reused only within the current
 `clock_guard`. Instance templates keep authoritative clock queries and locking,
 including when a run is created during an operation. No world or payload state
 is cached across commands.
+
+Effect payload reads use actor IDs and stored source metadata without joining
+the full actor records; encounter and spatial filters still run in the database.
+Room quest discovery checks source relevance before querying eligibility, and
+cooldowns load only their resolution timestamp. Quest pickup projections walk
+carried inventory only when a matching room item has an existing claim to check.
 
 ## Look Command Assembly
 

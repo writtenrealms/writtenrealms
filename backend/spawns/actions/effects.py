@@ -87,7 +87,6 @@ def active_character_effects(actor: Player | Mob) -> list[dict[str, Any]]:
     effects = list(
         _actor_effect_queryset(actor)
         .filter(scope=ActiveEffect.SCOPE_CHARACTER, remaining_rounds__gt=0)
-        .select_related("source_player", "source_mob", "target_player", "target_mob")
         .order_by("created_ts", "id")
     )
     payloads = [active_effect_payload(effect) for effect in effects]
@@ -108,7 +107,6 @@ def active_combat_effects(player: Player) -> list[dict[str, Any]]:
             remaining_rounds__gt=0,
         )
         .filter(_spatially_valid_encounter_effect_q())
-        .select_related("source_player", "source_mob", "target_player", "target_mob")
         .order_by("created_ts", "id")
     )
     return [

@@ -972,14 +972,22 @@ def serialize_room(
     room_players = room.players.filter(in_game=True).select_related(
         "user", "equipment", "core_faction"
     ).prefetch_related(
-        Prefetch("world", queryset=_payload_world_queryset()),
         "faction_assignments__faction",
     )
     room_mobs_qs = room.mobs.select_related("definition").order_by("id")
     if runtime_world is not None:
         room_players = room_players.filter(world=runtime_world)
         room_mobs_qs = room_mobs_qs.filter(world=runtime_world)
+    else:
+        room_players = room_players.prefetch_related(
+            Prefetch("world", queryset=_payload_world_queryset())
+        )
     room_players = list(room_players)
+    if runtime_world is not None:
+        # Every filtered player shares this runtime. Reuse its already-loaded
+        # inheritance/configuration graph within this room snapshot.
+        for player in room_players:
+            player.world = runtime_world
     _load_equipment_items(room_players)
     room_mobs = list(room_mobs_qs)
     quest_indicator_map: dict[int, dict[str, bool]] = {}
