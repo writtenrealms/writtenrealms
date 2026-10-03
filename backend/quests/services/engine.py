@@ -3,7 +3,6 @@ from __future__ import annotations
 from spawns.instance_clock import serialized_world
 
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any
 
 from django.db import transaction
@@ -27,6 +26,7 @@ from quests.services.journal import (
     serialize_objective_state,
 )
 from quests.services.predicates import evaluate_condition, resolve_value
+from quests.services.repeatability import repeatability_ready_at
 from quests.services.scope import instances_for_player, offer_lookup
 
 
@@ -493,20 +493,23 @@ def can_start_template(player, template: QuestTemplate) -> bool:
     resolved_qs = resolved_instances_qs(player).filter(template=template)
     if template.repeatability_mode == "never" and resolved_qs.exists():
         return False
-    if template.repeatability_mode == "cooldown":
+    if template.repeatability_mode in {"cooldown", "daily"}:
         latest_resolved_at = resolved_qs.values_list("resolved_at", flat=True).first()
         if latest_resolved_at:
             from spawns.instance_clock import gameplay_now
 
-            # The offer anchor follows the character's gameplay clock. The
-            # quest instance retains wall-clock history for sorting/auditing.
-            anchor = QuestOfferState.objects.filter(
-                **offer_lookup(player, template),
-            ).values_list('last_resolved_at', flat=True).first()
-            cooldown_until = (anchor or latest_resolved_at) + timedelta(
-                seconds=int(template.repeatability_cooldown_seconds or 0)
+            anchor = None
+            if template.repeatability_mode == "cooldown":
+                # Cooldowns follow the character's gameplay clock. Dailies use
+                # wall-clock completion history, never a rebased gameplay anchor.
+                anchor = QuestOfferState.objects.filter(
+                    **offer_lookup(player, template),
+                ).values_list('last_resolved_at', flat=True).first()
+            ready_at = repeatability_ready_at(
+                template, resolved_at=latest_resolved_at, cooldown_anchor=anchor,
             )
-            if cooldown_until > gameplay_now(player.world):
+            now = timezone.now() if template.repeatability_mode == "daily" else gameplay_now(player.world)
+            if ready_at > now:
                 return False
     return True
 

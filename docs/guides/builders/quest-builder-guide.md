@@ -186,8 +186,10 @@ supports, that difference is called out explicitly.
 | `scope`                          | `player`, `party`, `guild`, `world` | The runtime currently only runs `player`.                                                                               |
 | `status`                         | `draft`, `active`, `archived`       | Only `active` quests appear in runtime discovery.                                                                       |
 | `arc`                            | blank/omitted or quest arc slug     | The referenced arc must already exist in the same world.                                                                |
-| `repeatability.mode`             | `never`, `cooldown`, `always`       | See the repeatability rules below.                                                                                      |
+| `repeatability.mode`             | `never`, `cooldown`, `daily`, `always`       | See the repeatability rules below.                                                                                      |
 | `repeatability.cooldown_seconds` | integer `>= 0`                      | Only valid when `repeatability.mode: cooldown`.                                                                         |
+| `repeatability.reset_at`         | quoted `"HH:MM"` (24-hour time)      | Required with `daily`; local calendar reset time. |
+| `repeatability.timezone`         | IANA timezone, e.g. `America/New_York` | Required with `daily`; follows local daylight saving changes. |
 | `max_active`                     | integer `>= 0`                      | Stored on the template, but the current runtime still effectively enforces one active instance per player per template. |
 | `discovery`                      | mapping                             | Controls how the quest becomes visible or starts.                                                                       |
 | `slots`                          | mapping                             | Current runtime support is limited; see slot notes below.                                                               |
@@ -202,6 +204,7 @@ supports, that difference is called out explicitly.
 | -------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `never`              | The player may resolve the quest once in a non-abandoned state. A later `abandon` does not consume the quest.     |
 | `cooldown`           | After a non-abandoned resolution, the quest stays unavailable until `repeatability.cooldown_seconds` has elapsed. |
+| `daily`              | After a non-abandoned resolution, the quest stays unavailable until the next scheduled local daily reset. |
 | `always`             | The quest can be reacquired immediately whenever its discovery rules match and it is not currently active.        |
 
 
@@ -216,12 +219,72 @@ conditions still match.
   copied permanently onto each completed run. Changing `never` to `always`
   makes a previously completed quest immediately repeatable; changing it to
   `cooldown` measures the new duration from the player's latest non-abandoned
-  completion. Changing `always` or `cooldown` to `never` makes any prior
+  completion. Daily policies likewise use the latest completion and current
+  reset schedule. Changing any repeatable mode to `never` makes any prior
   non-abandoned completion final. Existing active runs are allowed to finish.
 - On a partial update, explicitly changing `repeatability.mode` to `never` or
-  `always` automatically clears an inherited `cooldown_seconds`. If a manifest
-  explicitly supplies a nonzero cooldown with either mode, validation still
-  rejects it. Changing to `cooldown` must supply the desired duration.
+  `always` or `daily` automatically clears an inherited `cooldown_seconds`.
+  Leaving `daily` automatically clears inherited `reset_at` and `timezone`.
+  Explicit incompatible fields are still rejected. Changing to `cooldown` must
+  supply the desired duration; changing to `daily` must supply its schedule.
+
+### Calendar Dailies and First-Completion Bonuses
+
+```yaml
+repeatability:
+  mode: daily
+  reset_at: "05:00"
+  timezone: America/New_York
+```
+
+This schedule resets at 5 a.m. New York time every day, including daylight saving
+changes. Calendar dailies use real-world time even while an instance's gameplay
+clock is paused; `cooldown` continues to use gameplay time. Quote `reset_at` to
+keep YAML from interpreting the value as a number. Both schedule fields are
+required for `daily` and must be omitted or empty in other modes. Unknown
+repeatability fields are rejected.
+
+A completion at 4:59 a.m. allows another attempt at 5 a.m. A completion exactly
+at 5 a.m. counts toward the new day. An unfinished attempt survives the reset;
+finishing it consumes the day in which it finishes. Abandoning an attempt does
+not consume a daily or erase previous completion history. Base-world limits are
+per character; instance-local quests retain their normal per-run scope.
+
+For timezones with clock changes at the configured reset time, an ambiguous time
+uses its earlier occurrence. A nonexistent time moves forward by the clock gap
+(for example, 02:30 becomes 03:30 during a one-hour spring jump). A reset happens
+only once on either kind of day. Use a time outside the transition, such as 05:00,
+when possible.
+
+To give a larger first reward, branch before resolution using the existing
+`quest_completed` condition. For an objective's final transition, use ordered
+transitions such as:
+
+```yaml
+transitions:
+  - when:
+      all:
+        - objective_complete: final-delivery
+        - quest_completed: athens-daily
+    goto: paid-repeat
+  - when:
+      objective_complete: final-delivery
+    goto: paid-first
+```
+
+Give `paid-first` and `paid-repeat` separate `resolution` steps with their own
+`grant_currency` effects (for example 200 and 50 Obols). Keep `rewards.complete`
+empty unless an additional reward should apply to both. The history condition
+must run before the resolution step, because that step records the current
+completion before applying its effects. First bonuses belong to each quest and
+character, have no calendar expiration, and are not restored by daily resets.
+
+Daily readiness is calculated when quests are read or accepted, using indexed
+completion history and the same boundary helper used by the Quest Log. There is
+no scheduled reset task, per-player sweep, or new database write at reset time.
+The log retains its bounded, prefetched projection rather than querying each
+card's history individually. Acceptance and completion remain serialized per
+player so concurrent requests cannot pay the same attempt twice.
 
 ### `spec.discovery`
 

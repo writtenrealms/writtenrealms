@@ -12,6 +12,7 @@ from quests.services.engine import (
     QuestRuntimeError,
     accept_template,
     can_start_template,
+    choose_for_instance,
 )
 from spawns.models import Player
 from worlds.models import World, WorldConfig
@@ -74,7 +75,7 @@ class TestQuestAcceptanceConcurrency(TransactionTestCase):
         # both workers exercise the quest eligibility boundary itself.
         QuestOfferState.objects.create(player=self.player, template=self.template)
 
-    def test_simultaneous_cooldown_accepts_resolve_and_reward_only_once(self):
+    def _assert_simultaneous_accepts_reward_once(self):
         eligibility_barrier = Barrier(2)
 
         def synchronized_can_start(player, template):
@@ -118,3 +119,54 @@ class TestQuestAcceptanceConcurrency(TransactionTestCase):
             self.player.inventory.filter(definition=self.seed_packet).count(),
             1,
         )
+
+    def test_simultaneous_cooldown_accepts_resolve_and_reward_only_once(self):
+        self._assert_simultaneous_accepts_reward_once()
+
+    def test_simultaneous_daily_accepts_resolve_and_reward_only_once(self):
+        self.template.repeatability_mode = 'daily'
+        self.template.repeatability_cooldown_seconds = 0
+        self.template.repeatability_reset_at = '05:00'
+        self.template.repeatability_timezone = 'America/New_York'
+        self.template.save()
+        self._assert_simultaneous_accepts_reward_once()
+
+    def test_simultaneous_first_completion_choices_reward_once(self):
+        self.template.repeatability_mode = 'daily'
+        self.template.repeatability_cooldown_seconds = 0
+        self.template.repeatability_reset_at = '05:00'
+        self.template.repeatability_timezone = 'America/New_York'
+        grant = {'type': 'grant_item', 'item_definition': self.seed_packet.slug}
+        self.template.reward_policy = {}
+        self.template.graph = {'steps': [
+            {'id': 'turn-in', 'kind': 'storylet', 'choices': [
+                {'id': 'finish', 'text': 'Finish', 'goto': 'repeat',
+                 'if': {'quest_completed': self.template.slug}},
+                {'id': 'finish', 'text': 'Finish', 'goto': 'first',
+                 'if': {'not': {'quest_completed': self.template.slug}}},
+            ]},
+            {'id': 'first', 'kind': 'resolution', 'effects': [grant]},
+            {'id': 'repeat', 'kind': 'resolution', 'effects': []},
+        ]}
+        self.template.save()
+        attempt = accept_template(self.player, self.template).quest_instance
+        barrier = Barrier(2)
+
+        def finish_in_separate_connection():
+            close_old_connections()
+            try:
+                player = Player.objects.get(pk=self.player.pk)
+                barrier.wait(timeout=5)
+                choose_for_instance(player, str(attempt.pk), 'finish')
+                return 'completed'
+            except QuestRuntimeError as exc:
+                return exc.code
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(lambda _: finish_in_separate_connection(), range(2)))
+        self.assertCountEqual(outcomes, ['completed', 'quest_not_found'])
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.current_step_id, 'first')
+        self.assertEqual(self.player.inventory.filter(definition=self.seed_packet).count(), 1)

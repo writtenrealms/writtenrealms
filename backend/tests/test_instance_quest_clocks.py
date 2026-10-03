@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as datetime_timezone
 from unittest.mock import patch
 
 from django.db import transaction
@@ -53,6 +53,25 @@ class TestInstanceQuestClocks(QuestLogTestCase):
         self.assertTrue(can_start_template(self.player, template))
         history.refresh_from_db()
         self.assertNotEqual(history.resolved_at, anchor)
+
+    def test_daily_reset_advances_while_instance_clock_is_paused(self):
+        template = self.create_quest('wall-daily', mode='daily')
+        template.repeatability_reset_at = '05:00'
+        template.repeatability_timezone = 'America/New_York'
+        template.save()
+        reset = datetime(2026, 10, 2, 9, tzinfo=datetime_timezone.utc)
+        history = self.create_instance(template, resolved_at=reset - timedelta(hours=1))
+        QuestOfferState.objects.create(
+            player=self.player, template=template, last_resolved_at=self.run.simulation_time,
+        )
+        for now, allowed in ((reset - timedelta(seconds=1), False), (reset, True)):
+            with patch('django.utils.timezone.now', return_value=now):
+                self.assertEqual(can_start_template(self.player, template), allowed)
+                payload = build_quest_log(self.player)
+                self.assertEqual(payload['wall_time'], now.isoformat())
+                self.assertEqual(payload['repeatable'][0]['repeatability']['remaining_seconds'], 0 if allowed else 1)
+        history.refresh_from_db()
+        self.assertEqual(history.resolved_at, reset - timedelta(hours=1))
 
     def test_resolution_preserves_audit_time_and_sets_gameplay_cooldown_anchor(self):
         template = self.create_quest('resolution-clock', mode='cooldown', cooldown_seconds=60)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
 
 import yaml
@@ -777,8 +779,12 @@ def _validate_quest_template_refs(
 
 
 class QuestRepeatabilitySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     mode: str = "never"
     cooldown_seconds: int = 0
+    reset_at: str = ""
+    timezone: str = ""
 
     @model_validator(mode="after")
     def validate_values(self):
@@ -788,6 +794,17 @@ class QuestRepeatabilitySpec(BaseModel):
             raise ValueError("cooldown_seconds must be >= 0")
         if self.mode != "cooldown" and self.cooldown_seconds:
             raise ValueError("cooldown_seconds is only valid when mode is 'cooldown'")
+        if self.mode == "daily":
+            if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", self.reset_at):
+                raise ValueError("daily reset_at must be a quoted HH:MM time in 24-hour format")
+            if not self.timezone or len(self.timezone) > 100:
+                raise ValueError("daily timezone must be a valid IANA timezone name")
+            try:
+                ZoneInfo(self.timezone)
+            except (ValueError, ZoneInfoNotFoundError):
+                raise ValueError("daily timezone must be a valid IANA timezone name")
+        elif self.reset_at or self.timezone:
+            raise ValueError("reset_at and timezone are only valid when mode is 'daily'")
         return self
 
 
@@ -953,6 +970,8 @@ class ParsedQuestManifest:
     arc: QuestArcTemplate | None
     repeatability_mode: str
     repeatability_cooldown_seconds: int
+    repeatability_reset_at: str
+    repeatability_timezone: str
     max_active: int
     discovery_policy: dict[str, Any]
     slot_schema: dict[str, Any]
@@ -1089,6 +1108,10 @@ def quest_template_to_manifest(quest: QuestTemplate) -> dict[str, Any]:
         "repeatability": {
             "mode": quest.repeatability_mode,
             "cooldown_seconds": int(quest.repeatability_cooldown_seconds),
+            **({
+                "reset_at": quest.repeatability_reset_at,
+                "timezone": quest.repeatability_timezone,
+            } if quest.repeatability_mode == "daily" else {}),
         },
         "max_active": int(quest.max_active),
         "discovery": quest.discovery_policy or {},
@@ -1338,13 +1361,17 @@ def parse_quest_manifest(*, world: World, manifest: dict[str, Any]) -> ParsedQue
     if isinstance(repeatability_patch, dict):
         patched_mode = repeatability_patch.get("mode")
         if (
-            patched_mode in {"never", "always"}
+            patched_mode in {"never", "always", "daily"}
             and "cooldown_seconds" not in repeatability_patch
         ):
             # A mode change supersedes the inherited cooldown value. Builders
             # can therefore update just the mode without having to know that a
             # previous cooldown quest stored a nonzero duration.
             merged_spec["repeatability"]["cooldown_seconds"] = 0
+        if patched_mode in {"never", "always", "cooldown"}:
+            for daily_field in ("reset_at", "timezone"):
+                if daily_field not in repeatability_patch:
+                    merged_spec["repeatability"].pop(daily_field, None)
 
     try:
         validated_spec = QuestSpec.model_validate(merged_spec)
@@ -1393,6 +1420,8 @@ def parse_quest_manifest(*, world: World, manifest: dict[str, Any]) -> ParsedQue
         arc=arc,
         repeatability_mode=validated_spec.repeatability.mode,
         repeatability_cooldown_seconds=validated_spec.repeatability.cooldown_seconds,
+        repeatability_reset_at=validated_spec.repeatability.reset_at,
+        repeatability_timezone=validated_spec.repeatability.timezone,
         max_active=validated_spec.max_active,
         discovery_policy=discovery_policy,
         slot_schema=slot_schema,
@@ -1521,6 +1550,8 @@ def apply_quest_manifest(parsed: ParsedQuestManifest) -> QuestTemplate:
         "arc": parsed.arc,
         "repeatability_mode": parsed.repeatability_mode,
         "repeatability_cooldown_seconds": parsed.repeatability_cooldown_seconds,
+        "repeatability_reset_at": parsed.repeatability_reset_at,
+        "repeatability_timezone": parsed.repeatability_timezone,
         "max_active": parsed.max_active,
         "discovery_policy": parsed.discovery_policy,
         "slot_schema": parsed.slot_schema,

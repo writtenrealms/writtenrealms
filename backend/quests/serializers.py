@@ -58,6 +58,8 @@ class QuestTemplateSerializer(serializers.ModelSerializer):
             'arc',
             'repeatability_mode',
             'repeatability_cooldown_seconds',
+            'repeatability_reset_at',
+            'repeatability_timezone',
             'max_active',
             'discovery_policy',
             'slot_schema',

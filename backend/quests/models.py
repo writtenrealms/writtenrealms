@@ -25,6 +25,7 @@ QUEST_TEMPLATE_STATUSES = [
 QUEST_REPEATABILITY_MODES = [
     'never',
     'cooldown',
+    'daily',
     'always',
 ]
 
@@ -113,6 +114,8 @@ class QuestTemplate(AdventBaseModel):
         default='never',
     )
     repeatability_cooldown_seconds = models.PositiveIntegerField(default=0)
+    repeatability_reset_at = models.CharField(max_length=5, blank=True, default="")
+    repeatability_timezone = models.CharField(max_length=100, blank=True, default="")
     max_active = models.PositiveIntegerField(default=1)
     # Schema: quests.manifests.QuestDiscoverySpec (QuestSpec.discovery).
     discovery_policy = models.JSONField(default=dict)

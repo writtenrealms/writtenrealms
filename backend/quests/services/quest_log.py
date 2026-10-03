@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import timedelta
 from math import ceil
 
 from django.db.models import Exists, OuterRef, Prefetch, Subquery
@@ -13,6 +12,7 @@ from quests.models import (
     QuestObjectiveState,
 )
 from quests.services.engine import get_step, serialize_instance
+from quests.services.repeatability import repeatability_ready_at
 from quests.services.scope import instances_for_player, offers_for_player
 
 
@@ -79,7 +79,7 @@ def _latest_completed_instances(player):
 def _completed_instances(player, *, repeatable: bool):
     qs = _latest_completed_instances(player)
     if repeatable:
-        qs = qs.filter(template__repeatability_mode__in=("always", "cooldown"))
+        qs = qs.filter(template__repeatability_mode__in=("always", "cooldown", "daily"))
         limit = QUEST_LOG_REPEATABLE_LIMIT
     else:
         qs = qs.filter(template__repeatability_mode="never")
@@ -97,7 +97,7 @@ def _serialize_datetime(value):
     return value.isoformat() if value else None
 
 
-def _repeatability_payload(instance: QuestInstance, *, now) -> dict:
+def _repeatability_payload(instance: QuestInstance, *, now, wall_now) -> dict:
     template = instance.template
     mode = template.repeatability_mode
     cooldown_seconds = int(template.repeatability_cooldown_seconds or 0)
@@ -109,6 +109,11 @@ def _repeatability_payload(instance: QuestInstance, *, now) -> dict:
         "remaining_seconds": None,
         "template_status": template.status,
     }
+    if mode == "daily":
+        payload.update(
+            reset_at=template.repeatability_reset_at,
+            timezone=template.repeatability_timezone,
+        )
 
     if instance.status == "active" or template.status != "active" or mode == "never":
         return payload
@@ -117,11 +122,16 @@ def _repeatability_payload(instance: QuestInstance, *, now) -> dict:
         payload.update(state="ready", remaining_seconds=0)
         return payload
 
-    if mode != "cooldown" or not instance.resolved_at:
+    if mode not in {"cooldown", "daily"} or not instance.resolved_at:
         return payload
 
-    ready_at = (getattr(instance, '_cooldown_anchor', None) or instance.resolved_at) + timedelta(seconds=cooldown_seconds)
-    remaining_seconds = max(0, ceil((ready_at - now).total_seconds()))
+    ready_at = repeatability_ready_at(
+        template,
+        resolved_at=instance.resolved_at,
+        cooldown_anchor=getattr(instance, '_cooldown_anchor', None),
+    )
+    readiness_now = wall_now if mode == "daily" else now
+    remaining_seconds = max(0, ceil((ready_at - readiness_now).total_seconds()))
     payload.update(
         state="waiting" if remaining_seconds else "ready",
         ready_at=_serialize_datetime(ready_at),
@@ -135,6 +145,7 @@ def _serialize_log_entry(
     *,
     player,
     now,
+    wall_now,
     shared_state_context=None,
 ) -> dict:
     state_context = None
@@ -146,7 +157,7 @@ def _serialize_log_entry(
         player=player,
         state_context=state_context,
     )
-    payload["repeatability"] = _repeatability_payload(instance, now=now)
+    payload["repeatability"] = _repeatability_payload(instance, now=now, wall_now=wall_now)
     return payload
 
 
@@ -177,7 +188,7 @@ def _rendering_context(player, instances):
     )
 
 
-def build_quest_log(player, *, now=None) -> dict:
+def build_quest_log(player, *, now=None, wall_now=None) -> dict:
     """Project current quest-log buckets from runtime history and live templates.
 
     Completed buckets contain at most one non-abandoned instance per template. The
@@ -187,6 +198,7 @@ def build_quest_log(player, *, now=None) -> dict:
     from spawns.instance_clock import gameplay_now
 
     now = now or gameplay_now(player.world)
+    wall_now = wall_now or timezone.now()
     active, active_truncated = _active_instances(player)
     repeatable, repeatable_truncated = _completed_instances(player, repeatable=True)
     resolved, resolved_truncated = _completed_instances(player, repeatable=False)
@@ -196,6 +208,7 @@ def build_quest_log(player, *, now=None) -> dict:
     )
     return {
         "server_time": _serialize_datetime(now),
+        "wall_time": _serialize_datetime(wall_now),
         "limits": {
             "active": {
                 "limit": QUEST_LOG_ACTIVE_LIMIT,
@@ -215,6 +228,7 @@ def build_quest_log(player, *, now=None) -> dict:
                 instance,
                 player=rendering_player,
                 now=now,
+                wall_now=wall_now,
                 shared_state_context=shared_state_context,
             )
             for instance in active
@@ -224,6 +238,7 @@ def build_quest_log(player, *, now=None) -> dict:
                 instance,
                 player=rendering_player,
                 now=now,
+                wall_now=wall_now,
                 shared_state_context=shared_state_context,
             )
             for instance in repeatable
@@ -233,6 +248,7 @@ def build_quest_log(player, *, now=None) -> dict:
                 instance,
                 player=rendering_player,
                 now=now,
+                wall_now=wall_now,
                 shared_state_context=shared_state_context,
             )
             for instance in resolved

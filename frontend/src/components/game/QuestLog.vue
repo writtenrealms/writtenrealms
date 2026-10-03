@@ -75,6 +75,7 @@
 import QuestCard from "@/components/game/QuestCard.vue";
 import { questInstanceCard, splitQuestLines } from "@/core/questPresentation";
 import { gameplayTimeMs } from "@/core/instanceTimeControl";
+import { questRemainingSeconds, questReadyAtTitle, type QuestRepeatability } from "@/core/questRepeatability";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useStore } from "vuex";
 import axios from "axios";
@@ -108,14 +109,7 @@ interface QuestInstance {
   latest_journal_entry?: {
     recap?: string;
   } | null;
-  repeatability: {
-    mode: "never" | "always" | "cooldown";
-    cooldown_seconds: number;
-    state: "waiting" | "ready" | "unavailable";
-    ready_at: string | null;
-    remaining_seconds: number | null;
-    template_status: string;
-  };
+  repeatability: QuestRepeatability;
 }
 
 type QuestLogTab = "active" | "repeatable" | "resolved";
@@ -131,6 +125,7 @@ interface QuestLogResponse {
   repeatable?: QuestInstance[];
   resolved?: QuestInstance[];
   server_time?: string;
+  wall_time?: string;
   limits?: Partial<Record<QuestLogTab, QuestLogLimit>>;
 }
 
@@ -158,6 +153,7 @@ const gameplayAtFetchMs = ref(Date.now());
 const offsetAtFetchMs = ref(0);
 const fetchedAtMs = ref(Date.now());
 const serverTimeAtFetchMs = ref<number | null>(null);
+const wallTimeAtFetchMs = ref<number | null>(null);
 let countdownTimer: number | null = null;
 
 const quests = computed(() => questGroups.value[selectedTab.value]);
@@ -165,7 +161,7 @@ const quests = computed(() => questGroups.value[selectedTab.value]);
 const questCards = computed(() => quests.value.map((quest) => {
   const card = questInstanceCard(quest);
   if (selectedTab.value === "repeatable") {
-    card.badges.push({ label: "repeatable", tone: "tone-type" });
+    card.badges.push({ label: quest.repeatability?.mode === "daily" ? "daily" : "repeatable", tone: "tone-type" });
   }
   if (quest.resolution) card.metaLines.push(`Resolution: ${quest.resolution}`);
   const lastRecap = splitQuestLines(quest.latest_journal_entry?.recap).join("\n");
@@ -202,6 +198,8 @@ const getQuests = async () => {
     nowMs.value = fetchedAtMs.value;
     const parsedServerTime = Date.parse(resp.data.server_time || "");
     serverTimeAtFetchMs.value = Number.isNaN(parsedServerTime) ? null : parsedServerTime;
+    const parsedWallTime = Date.parse(resp.data.wall_time || "");
+    wallTimeAtFetchMs.value = Number.isNaN(parsedWallTime) ? null : parsedWallTime;
     expanded.value = quests.value.length ? quests.value[0].id : null;
   } catch {
     loadError.value = true;
@@ -245,21 +243,18 @@ const onClickName = (quest: QuestInstance) => {
 
 const questDetailsId = (quest: QuestInstance) => `quest-log-details-${quest.id}`;
 
-const repeatabilityRemainingSeconds = (quest: QuestInstance) => {
-  const repeatability = quest.repeatability;
-  if (!repeatability || repeatability.state !== "waiting") return 0;
+const questClock = () => ({
+  control: store.state.game.instance_time_control,
+  nowMs: nowMs.value,
+  fetchedAtMs: fetchedAtMs.value,
+  gameplayAtFetchMs: gameplayAtFetchMs.value,
+  serverTimeAtFetchMs: serverTimeAtFetchMs.value,
+  wallTimeAtFetchMs: wallTimeAtFetchMs.value,
+  offsetAtFetchMs: offsetAtFetchMs.value,
+});
 
-  const elapsedMs = Math.max(0, gameplayTimeMs(store.state.game.instance_time_control, nowMs.value) - gameplayAtFetchMs.value);
-  const parsedReadyAt = Date.parse(repeatability.ready_at || "");
-  if (serverTimeAtFetchMs.value !== null && !Number.isNaN(parsedReadyAt)) {
-    const currentServerTime = serverTimeAtFetchMs.value + elapsedMs;
-    return Math.max(0, Math.ceil((parsedReadyAt - currentServerTime) / 1000));
-  }
-
-  const initialRemaining = Number(repeatability.remaining_seconds || 0);
-  const elapsed = Math.floor(elapsedMs / 1000);
-  return Math.max(0, initialRemaining - elapsed);
-};
+const repeatabilityRemainingSeconds = (quest: QuestInstance) =>
+  quest.repeatability ? questRemainingSeconds(quest.repeatability, questClock()) : 0;
 
 const formatDuration = (totalSeconds: number) => {
   const seconds = Math.max(0, Math.ceil(totalSeconds));
@@ -296,18 +291,8 @@ const repeatabilityStatusClass = (quest: QuestInstance) => {
   return repeatabilityRemainingSeconds(quest) > 0 ? "is-waiting" : "is-ready";
 };
 
-const repeatabilityReadyAtTitle = (quest: QuestInstance) => {
-  if (quest.repeatability?.state !== "waiting") return "";
-  if (store.state.game.instance_time_control?.paused) return "This cooldown advances with instance time.";
-
-  const readyAt = quest.repeatability.ready_at;
-  if (!readyAt) return "";
-
-  const offsetChange = (store.state.game.instance_time_control?.clock_offset_seconds || 0) * 1000 - offsetAtFetchMs.value;
-  const parsedReadyAt = new Date(Date.parse(readyAt) + offsetChange);
-  if (Number.isNaN(parsedReadyAt.getTime())) return "";
-  return `Ready at ${parsedReadyAt.toLocaleString()}`;
-};
+const repeatabilityReadyAtTitle = (quest: QuestInstance) =>
+  quest.repeatability ? questReadyAtTitle(quest.repeatability, questClock()) : "";
 
 const runQuestCommand = (command: string) => {
   if (!command) return;
@@ -321,7 +306,7 @@ const closeQuestLog = () => {
 
 onMounted(async () => {
   countdownTimer = window.setInterval(() => {
-    if (!store.state.game.instance_time_control?.paused) nowMs.value = Date.now();
+    nowMs.value = Date.now();
   }, 1000);
   await getQuests();
 });

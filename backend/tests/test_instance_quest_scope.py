@@ -99,6 +99,19 @@ class TestInstanceQuestScope(WorldTestCase):
         self.assertEqual(build_quest_log(self.player)['resolved'][0]['id'], first.pk)
         self.assertEqual(build_quest_log(self.player)['active'], [])
 
+    def test_daily_completion_is_scoped_to_the_instance_run(self):
+        self.quest.repeatability_mode = 'daily'
+        self.quest.repeatability_reset_at = '05:00'
+        self.quest.repeatability_timezone = 'America/New_York'
+        self.quest.save()
+        self.complete()
+        self.assertFalse(can_start_template(self.player, self.quest))
+        self.new_run()
+        self.assertTrue(can_start_template(self.player, self.quest))
+        self.assertEqual(build_quest_log(self.player)['repeatable'], [])
+        self.move_to(self.run.spawned_world)
+        self.assertFalse(can_start_template(self.player, self.quest))
+
     def test_old_active_attempt_cannot_block_or_be_manipulated_from_another_run(self):
         first = accept_template(self.player, self.quest).quest_instance
         first.local_state = {'progress': 7}

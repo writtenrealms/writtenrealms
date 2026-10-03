@@ -39,7 +39,14 @@ show when they will be ready again; **INFO** opens an active quest in the consol
 
 Quests belonging to an instance start fresh in each new run. Leaving hides
 that run's quests; returning to the same retained run resumes your progress.
-Base-world quests stay with your character. Adventures may separately record
+Base-world quests stay with your character. Some repeatable quests reset at a
+fixed real-world time each day. Their countdown continues while an instance is
+paused, and the Quest Log shows when they become available again. Unfinished
+dailies survive a reset; completing one uses the day in which you finish it.
+Abandoning one does not consume that day's completion. Some quests give extra
+pay on your first successful completion; that bonus does not return at reset.
+
+Adventures may separately record
 lasting outcomes, but an instance quest's completion does not carry into the
 next run.
 
