@@ -387,6 +387,20 @@ class TextCommandHandler(CommandHandler):
                     if handle_dynamic_ability_command(ctx, hotkey_ability=hotkey_ability):
                         return
 
+                    if ctx.actor_type == 'player':
+                        from quests.services.engine import QuestRuntimeError
+                        from quests.services.room_interactions import start_room_interaction
+                        from spawns.events import publish_events
+                        try:
+                            interaction = start_room_interaction(ctx.player, raw_text)
+                        except QuestRuntimeError as exc:
+                            ctx.publish({'type': 'cmd.quest.error', 'text': exc.message,
+                                         'data': {'code': exc.code, 'error': exc.message}})
+                            return
+                        if interaction is not None:
+                            publish_events(interaction.events, actor_key=ctx.player.key, connection_id=ctx.connection_id)
+                            return
+
                     if not ctx.payload.get("skip_triggers"):
                         trigger_result = execute_command_fallback_trigger(
                             actor=ctx.actor,

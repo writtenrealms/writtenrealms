@@ -44,7 +44,7 @@ QUEST_ARC_MANIFEST_KIND_ALIASES = {
 }
 MANIFEST_OPERATION_APPLY = "apply"
 MANIFEST_OPERATION_DELETE = "delete"
-STEP_KINDS = {"storylet", "objective", "branch", "timer", "resolution"}
+STEP_KINDS = {"storylet", "objective", "interaction", "branch", "timer", "resolution"}
 RESOLUTION_KEYS = ("complete", "compromised", "failed_forward", "expired")
 
 
@@ -713,6 +713,12 @@ def _validate_quest_template_refs(
     for step_index, step in enumerate(steps):
         if not isinstance(step, dict):
             continue
+        interaction = step.get("interaction")
+        if interaction:
+            prefix = f"spec.steps[{step_index}].interaction"
+            _validate_room_ref(world, interaction['room'], f"{prefix}.room")
+            _validate_condition_entity_refs(world, interaction.get('conditions'), f"{prefix}.conditions")
+            _validate_condition_room_refs(world, interaction.get('conditions'), f"{prefix}.conditions")
         _validate_step_room_items(
             world,
             step.get("room_items"),
@@ -853,6 +859,40 @@ class QuestRoomItemSpec(BaseModel):
         return self
 
 
+class QuestInteractionBeatSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    after_seconds: int = Field(default=0, ge=0, le=300, strict=True)
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class QuestInteractionSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    command: str
+    room: str
+    conditions: dict[str, Any] = Field(default_factory=dict)
+    beats: list[QuestInteractionBeatSpec] = Field(min_length=1, max_length=12)
+    goto: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_values(self):
+        from core.condition_dsl import validate_condition_payload
+        from spawns.handlers.registry import resolve_text_handler
+
+        self.command = " ".join(self.command.lower().split())
+        if not re.fullmatch(r"[a-z][a-z0-9]*(?: [a-z0-9]+)*", self.command) or len(self.command) > 80:
+            raise ValueError("interaction command must be a plain command of at most 80 characters")
+        if resolve_text_handler(self.command.split()[0], include_builder=True):
+            raise ValueError("interaction command cannot shadow a built-in command")
+        if not re.fullmatch(r"room@[1-9][0-9]*", self.room):
+            raise ValueError("interaction room must be a stable room@ reference")
+        validate_condition_payload(self.conditions, field_name="interaction.conditions")
+        if self.beats[0].after_seconds != 0:
+            raise ValueError("the first interaction beat must be immediate")
+        if sum(beat.after_seconds for beat in self.beats) > 900:
+            raise ValueError("an interaction may last at most 900 seconds")
+        return self
+
+
 class QuestStepSpec(BaseModel):
     model_config = ConfigDict(extra="allow")
     id: str
@@ -864,6 +904,7 @@ class QuestStepSpec(BaseModel):
     choices: list[dict[str, Any]] = Field(default_factory=list)
     transitions: list[dict[str, Any]] = Field(default_factory=list)
     effects: list[dict[str, Any]] = Field(default_factory=list)
+    interaction: QuestInteractionSpec | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -887,6 +928,13 @@ class QuestStepSpec(BaseModel):
         if normalized_kind not in STEP_KINDS:
             raise ValueError(f"step kind must be one of: {', '.join(sorted(STEP_KINDS))}")
         self.kind = normalized_kind
+        if self.kind == "interaction":
+            if self.interaction is None:
+                raise ValueError("interaction steps require an interaction definition")
+            if self.choices or self.objectives or self.transitions:
+                raise ValueError("interaction steps advance through interaction.goto")
+        elif self.interaction is not None:
+            raise ValueError("interaction is only valid on interaction steps")
         return self
 
 
@@ -937,6 +985,8 @@ class QuestSpec(BaseModel):
             step_ids.add(step.id)
 
         for step in self.steps:
+            if step.interaction and step.interaction.goto not in step_ids:
+                raise ValueError(f"step '{step.id}' interaction references unknown goto '{step.interaction.goto}'")
             for choice in step.choices:
                 goto = str(choice.get("goto") or "").strip()
                 if goto and goto not in step_ids:
@@ -1015,6 +1065,7 @@ def _sanitize_step_payloads(steps: list[dict[str, Any]] | None) -> list[dict[str
                 key: value
                 for key, value in step.items()
                 if key not in {"lead", "stakes"}
+                and not (key == "interaction" and value is None)
             }
         )
     return sanitized_steps

@@ -153,7 +153,7 @@ test("Room Config saves only the selected profile id or null", () => {
 
 test("direct room providers add LIST and OFFER ambient actions", () => {
   assert.match(lookRoomSource, /getRoomMerchantProvider\(room\.value\)/);
-  assert.match(lookRoomSource, /roomActionsForMerchantProvider\(room\.value\)/);
+  assert.match(lookRoomSource, /roomActionsForMerchantProvider\(roomTrainingContext\.value\)/);
   assert.match(lookRoomSource, /merchantProviderTarget\(roomMerchantProvider\.value\)/);
   assert.match(lookRoomSource, /`\$\{directMerchantAction\} \$\{merchantTarget\}`/);
   assert.doesNotMatch(lookRoomSource, /`shop \$\{merchantTarget\}`/);

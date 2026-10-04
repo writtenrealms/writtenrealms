@@ -51,11 +51,15 @@ const groupedRows = (html) => Array.from(
   (match) => match[1].split(/\s+/),
 ).filter((classes) => classes.includes("message"))
   .map((classes) => classes.includes("grouped"));
+const responseRows = (html) => Array.from(html.matchAll(/<div[^>]*class="([^"]+)"[^>]*>/g),
+  (match) => match[1].split(/\s+/)).filter((classes) => classes.includes("message"))
+  .map((classes) => classes.includes("command-response"));
 
 test("quest acceptance pairs with its command and keeps follow-up narration separate", async () => {
   for (const mobile of [false, true]) {
     const html = await render([echo(), started, narration], mobile);
     assert.deepEqual(groupedRows(html), [false, true, false]);
+    assert.deepEqual(responseRows(html), [false, true, false]);
     assert.match(html, /has started\./);
     assert.match(html, /class="quest-inline quest-inline-started"/);
   }
@@ -73,6 +77,7 @@ test("quest info and progress replies do not add their own leading spacer", asyn
   ]) {
     const html = await render([echo(command), reply]);
     assert.deepEqual(groupedRows(html), [false, true]);
+    assert.deepEqual(responseRows(html), [false, true]);
     const classes = Array.from(html.matchAll(/class="([^"]+)"/g),
       (match) => match[1].split(/\s+/)).find((classes) => classes.includes(contentClass));
     assert.ok(classes);
@@ -84,6 +89,7 @@ test("ordinary command successes and errors remain paired with their input", asy
   for (const type of ["cmd.talk.success", "cmd.move.error", "cmd.quest.error"]) {
     const html = await render([echo(), { type, text: "Command response.", data: { code: "usage" } }]);
     assert.deepEqual(groupedRows(html), [false, true]);
+    assert.deepEqual(responseRows(html), [false, true]);
   }
 });
 
@@ -99,4 +105,5 @@ test("explicit groups still join related output without a command echo", async (
     type: "room_write", text, group: index < 2 ? "scene" : "another-scene",
   }));
   assert.deepEqual(groupedRows(await render(messages)), [false, true, false]);
+  assert.deepEqual(responseRows(await render(messages)), [false, false, false]);
 });

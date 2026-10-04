@@ -27,15 +27,32 @@ be scrolled. The world continues running while the introduction is visible.
 
 Commands appear directly above their first response, including quest
 confirmations. Follow-up narration and separate events have paragraph spacing
-to keep each exchange easy to scan.
+to keep each exchange easy to scan. A uniform small gap separates commands from
+their first response, whether that response is text or a quest card.
 
 ## Quest Log
+
+Some quests offer work directly in the room, such as **WASH CLAY**. Click the
+room button or type its command. You will see short narrated updates while the
+work runs, followed by the next available action. Stay in the room until that
+action finishes: leaving interrupts the current work, but keeps completed quest
+steps. Repeating the command does not start a second copy. These work sequences
+follow instance time when playing in a paused adventure.
+The same work button appears in `quest info`, quest update cards, and the Quest
+Log while the action is available in your current room. It disappears while
+the work runs or when you leave, so you do not need to issue `look` to use it.
 
 Open **QUESTS** in the sidebar, or **Quest Log** in the mobile menu, to browse
 Active, Repeatable, and Resolved quests. Each entry uses the same card as
 `quest info <slug>`, with a status badge, story text, recap, and objective
 progress. Click a title to expand or collapse its details. Repeatable quests
 show when they will be ready again; **INFO** opens an active quest in the console.
+**ABANDON**, beside **INFO** on active quests, ends the current attempt using
+the same command as `quest abandon <slug>`.
+Click the highlighted quest name in acceptance, progress, or abandonment
+messages to display its info in the console.
+The log keeps the same size when switching tabs. Longer lists scroll below the
+tabs, keeping the title and tab buttons in place.
 
 Quests belonging to an instance start fresh in each new run. Leaving hides
 that run's quests; returning to the same retained run resumes your progress.
@@ -51,6 +68,10 @@ lasting outcomes, but an instance quest's completion does not carry into the
 next run.
 
 ## Clearing the Console
+
+The console follows new output and changing room actions while you are at the
+bottom. Scroll up to read earlier messages without being pulled back down. On
+desktop, **JUMP TO BOTTOM** returns to the latest output and resumes following.
 
 Type `clear` on its own to empty the game console on desktop or mobile. New
 messages appear normally afterward. Your character, map, combat, and separate

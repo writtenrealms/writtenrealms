@@ -14,7 +14,7 @@ const server = await createServer({
 after(() => server.close());
 const { default: QuestCard } = await server.ssrLoadModule("/src/components/game/QuestCard.vue");
 const { default: QuestMessage } = await server.ssrLoadModule("/src/components/game/console/QuestMessage.vue");
-const { questInstanceCard } = await server.ssrLoadModule("/src/core/questPresentation.ts");
+const { questInstanceCard, questInfoActions, questRoomActions } = await server.ssrLoadModule("/src/core/questPresentation.ts");
 
 const quest = {
   id: 27, status: "active",
@@ -32,9 +32,9 @@ const quest = {
 const renderCard = (card = questInstanceCard(quest), props = {}) => (
   renderToString(createSSRApp(QuestCard, { card, ...props }))
 );
-const renderMessage = (message, latest = false) => {
+const renderMessage = (message, latest = false, context = {}) => {
   const store = createStore({ state: { game: {
-    last_message: latest ? { [message.type]: message } : {}, world: {},
+    last_message: latest ? { [message.type]: message } : {}, world: {}, ...context,
   } } });
   const renderedMessage = latest ? store.state.game.last_message[message.type] : message;
   return renderToString(createSSRApp(QuestMessage, { message: renderedMessage }).use(store));
@@ -100,6 +100,37 @@ test("console actions remain available only on the latest message", async () => 
   assert.equal(questInstanceCard(choiceQuest).choiceRows[0].command, "quest choose athens-intro stay");
 });
 
+test("quest work buttons use live room availability, not command words in the recap", async () => {
+  const work = { ...quest, current_step: { ...quest.current_step,
+    room_action: { command: 'wash clay', room_key: 'room.114', world_id: 24 },
+  } };
+  const room = { key: 'room.114', actions: ['craft', 'wash clay'] };
+  assert.deepEqual(questRoomActions(work, room, 24), [
+    { label: 'WASH CLAY', command: 'wash clay', tone: 'primary' },
+  ]);
+  for (const [candidate, currentRoom, worldId] of [
+    [work, { ...room, actions: [] }, 24], // Busy or no longer eligible.
+    [work, { ...room, actions: ['strain clay'] }, 24], // Step advanced.
+    [work, { ...room, key: 'room.115' }, 24],
+    [work, room, 25],
+    [work, undefined, 24],
+    [{ ...work, status: 'resolved' }, room, 24],
+    [{ ...quest, current_step: { recap: 'WASH CLAY in the basin.' } }, room, 24],
+  ]) {
+    assert.deepEqual(questRoomActions(candidate, currentRoom, worldId), []);
+  }
+  const message = { type: 'cmd.quest.success', data: { subcommand: 'info', quest: work } };
+  const context = { room, world: { id: 24 } };
+  assert.match(await renderMessage(message, true, context), />WASH CLAY<\/button>/);
+  assert.doesNotMatch(await renderMessage(message, false, context), />WASH CLAY<\/button>/);
+  assert.doesNotMatch(await renderMessage(message, true, {
+    ...context, room: { ...room, actions: [] },
+  }), />WASH CLAY<\/button>/);
+  const update = await renderMessage({ type: 'quest.instance.updated', data: { quest: work } }, true, context);
+  assert.match(update, />WASH CLAY<\/button>/);
+  assert.match(update, />INFO<\/button>/);
+});
+
 test("resolved quests retain their badge, outcome, and optional log actions", async () => {
   const card = questInstanceCard({ ...quest, status: "resolved" });
   card.badges.push({ label: "repeatable", tone: "tone-type" });
@@ -110,6 +141,31 @@ test("resolved quests retain their badge, outcome, and optional log actions", as
   assert.match(html, />repeatable<\/span>/);
   assert.match(html, /Resolution: complete/);
   assert.match(html, />INFO<\/button>/);
+  const abandoned = await renderMessage({ type: 'quest.instance.resolved',
+    data: { quest: { ...quest, status: 'resolved', resolution: 'abandoned' } },
+  });
+  assert.match(abandoned, /You abandon <span[^>]*class="quest-link"[^>]*>A Debt to Athens<\/span>\./);
+  assert.doesNotMatch(abandoned, /<article|>ABANDON<\/button>/);
+});
+
+test("active quest info controls pair INFO with ABANDON, including after work actions", async () => {
+  assert.deepEqual(questInfoActions(quest), [
+    { label: 'INFO', command: 'quest info athens-intro', tone: 'secondary' },
+    { label: 'ABANDON', command: 'quest abandon 27', tone: 'secondary' },
+  ]);
+  assert.deepEqual(questInfoActions({ ...quest, template: {} }), []);
+  assert.deepEqual(questInfoActions({ ...quest, status: 'resolved' }).map(action => action.label), ['INFO']);
+  const active = { ...quest, current_step: { ...quest.current_step,
+    room_action: { command: 'wash clay', room_key: 'room.114', world_id: 24 },
+  } };
+  const context = { room: { key: 'room.114', actions: ['wash clay'] }, world: { id: 24 } };
+  const update = { type: 'quest.instance.updated', data: { quest: active } };
+  const html = await renderMessage(update, true, context);
+  const labels = Array.from(html.matchAll(/>(WASH CLAY|INFO|ABANDON)<\/button>/g), match => match[1]);
+  assert.deepEqual(labels, ['WASH CLAY', 'INFO', 'ABANDON']);
+  assert.doesNotMatch(await renderMessage(update, false, context), />ABANDON<\/button>/);
+  assert.doesNotMatch(await renderMessage({ type: 'quest.instance.resolved',
+    data: { quest: { ...quest, status: 'resolved' } } }, true), />ABANDON<\/button>/);
 });
 
 test("quest log uses the same presentation and card component as console info", async () => {

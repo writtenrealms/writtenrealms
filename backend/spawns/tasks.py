@@ -293,8 +293,11 @@ def prune_death_resolution_receipts(
 @shared_task(name="spawns.tasks.run_scheduled_trigger_steps", ignore_result=True)
 def run_scheduled_trigger_steps(limit: int = 100):
     from spawns.trigger_steps import process_due_trigger_runs
+    from quests.services.room_interactions import process_due_interactions
 
-    return process_due_trigger_runs(limit=limit)
+    result = process_due_trigger_runs(limit=limit)
+    result['quest_interactions'] = process_due_interactions(limit=limit)['processed']
+    return result
 
 
 @shared_task(

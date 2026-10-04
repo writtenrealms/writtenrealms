@@ -17,6 +17,7 @@ export interface QuestCardSource {
   status?: string;
   template?: { name?: string; slug?: string; quest_type?: string };
   current_step?: {
+    room_action?: { command: string; room_key: string; world_id: number | string } | null;
     text?: { body?: string };
     recap?: string;
     objectives?: {
@@ -36,6 +37,29 @@ export const buildQuestBadges = (questType?: string, status?: string) => {
   if (status === "active") badges.push({ label: "active", tone: "tone-active" });
   if (status === "resolved") badges.push({ label: "resolved", tone: "tone-resolved" });
   return badges;
+};
+
+export const questRoomActions = (
+  quest: QuestCardSource,
+  room: { key?: string; actions?: string[] } | null | undefined,
+  worldId?: number | string,
+): QuestCardData["actions"] => {
+  const action = quest.current_step?.room_action;
+  if (quest.status !== "active" || !action?.command
+    || String(action.world_id) !== String(worldId)
+    || action.room_key !== room?.key || !room?.actions?.includes(action.command)) return [];
+  return [{ label: action.command.toUpperCase(), command: action.command, tone: "primary" }];
+};
+
+export const questInfoActions = (quest: QuestCardSource): QuestCardData["actions"] => {
+  const slug = quest.template?.slug;
+  if (!slug) return [];
+  const actions = [{ label: "INFO", command: `quest info ${slug}`, tone: "secondary" }];
+  if (quest.status === "active") {
+    // Keep a stale card from abandoning a later attempt of the same quest.
+    actions.push({ label: "ABANDON", command: `quest abandon ${quest.id || slug}`, tone: "secondary" });
+  }
+  return actions;
 };
 
 export const questInstanceCard = (quest: QuestCardSource): QuestCardData => {

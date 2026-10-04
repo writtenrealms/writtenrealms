@@ -1,8 +1,8 @@
 <template>
   <div id="console-wrapper">
-    <div id="console" @scroll="onScroll">
+    <div id="console" ref="consoleElement" @scroll="onScroll">
       <div class="buffer" :style="{ height: scrollHeight + 'px' }"></div>
-      <div class="messages">
+      <div class="messages" ref="messageList">
         <component
           v-for="(message, index) in messages"
           :key="message.message_id"
@@ -13,6 +13,7 @@
           class="message"
           :class="[message.type, {
             grouped: isGrouped(message, messages[index - 1]),
+            'command-response': isCommandResponse(message, messages[index - 1]),
           }]"
           :distanceToBottom="distanceToBottom"
           @scrollDown="scrollToBottom"
@@ -30,7 +31,7 @@
 <script lang="ts" setup>
 import { computed, onMounted, onUnmounted, onUpdated, ref } from 'vue';
 import { useStore } from 'vuex';
-import _ from "lodash";
+import { createConsoleScrollFollower } from '@/core/consoleScroll';
 import BuilderStats from "@/components/game/console/BuilderStats.vue";
 import AbilityCastMessage from "@/components/game/console/AbilityCastMessage.vue";
 import AbilityTrainingList from "@/components/game/console/AbilityTrainingList.vue";
@@ -67,6 +68,11 @@ const store = useStore();
 
 const scrollHeight = ref(0);
 const distanceToBottom = ref(0);
+const consoleElement = ref<HTMLElement | null>(null);
+const messageList = ref<HTMLElement | null>(null);
+let scrollFollower: ReturnType<typeof createConsoleScrollFollower> | undefined;
+let resizeObserver: ResizeObserver | undefined;
+let layoutFrame: number | null = null;
 
 const consoleMessage = (message) => {
   const type = message.type;
@@ -117,6 +123,8 @@ const consoleMessage = (message) => {
     return SalvageList;
   }
 
+  if (type === "quest.interaction.narration") return Message;
+
   if (type === "cmd.quest.success" || type === "cmd.quest.error" || type.startsWith("quest.")) {
     return QuestMessage;
   }
@@ -161,19 +169,17 @@ const messages = computed(() => {
   return store.getters["game/consoleMessages"];
 });
 
-const isGrouped = (message, prevMessage) => {
-  if (!prevMessage) return false;
-
-  // Pair the first command response with its echo. Quest replies use their own
-  // event namespace, including the confirmation for `quest accept`.
-  if (
-    prevMessage.echo &&
+// Quest replies include the confirmation for `quest accept`.
+const isCommandResponse = (message, prevMessage) => Boolean(
+    prevMessage?.echo &&
     !message.echo &&
     typeof message.type === "string" &&
     (message.type.startsWith("cmd.") || message.type.startsWith("quest."))
-  ) {
-    return true;
-  }
+);
+
+const isGrouped = (message, prevMessage) => {
+  if (!prevMessage) return false;
+  if (isCommandResponse(message, prevMessage)) return true;
 
   // Other multi-message units should share an explicit group; combat rounds
   // receive one automatically from their round_id in the game store.
@@ -184,42 +190,41 @@ const isGrouped = (message, prevMessage) => {
 };
 
 onMounted(() => {
-  const el = document.getElementById("console") as HTMLElement;
-  // const el = this.$refs.console as HTMLElement;
+  const el = consoleElement.value;
+  if (!el) return;
   scrollHeight.value = el.scrollHeight;
+  scrollFollower = createConsoleScrollFollower(el, distance => {
+    distanceToBottom.value = distance;
+  });
+  // Child-only updates (such as the next room action) do not update Console.
+  // Observe two containers, not every message, and coalesce work per frame.
+  resizeObserver = new ResizeObserver(scheduleLayoutFollow);
+  resizeObserver.observe(el);
+  if (messageList.value) resizeObserver.observe(messageList.value);
   scrollToBottom();
   EventBus.on("scroll-down", scrollToBottom);
 });
 
 onUnmounted(() => {
   EventBus.off("scroll-down", scrollToBottom);
+  resizeObserver?.disconnect();
+  if (layoutFrame !== null) cancelAnimationFrame(layoutFrame);
+  scrollFollower = undefined;
 });
 
-onUpdated(() => {
-  if (distanceToBottom.value < 5) {
-    scrollToBottom();
-  } else {
-    updateScroll();
-  }
-});
+onUpdated(() => scheduleLayoutFollow());
 
-const scrollToBottom = () => {
-    const el = document.getElementById("console") as HTMLElement;
-    if (!el) {
-      return;
-    }
-    el.scrollTop = el.scrollHeight + 1000;
-    distanceToBottom.value = 0;
-  }
-
-const updateScroll = () => {
-    const el = document.getElementById("console") as HTMLElement;
-    if (!el) {
-      return;
-    }
-    distanceToBottom.value = el.scrollHeight - el.clientHeight - el.scrollTop;
+function scheduleLayoutFollow() {
+  if (layoutFrame !== null) return;
+  layoutFrame = requestAnimationFrame(() => {
+    layoutFrame = null;
+    scrollFollower?.onLayoutChange();
+  });
 }
-const onScroll = _.debounce(updateScroll, 250);
+
+const scrollToBottom = () => scrollFollower?.scrollToBottom();
+// Record deliberate scrolling immediately, before a pending layout follow.
+const onScroll = () => scrollFollower?.onScroll();
 </script>
 
 <style lang="scss">
@@ -260,6 +265,11 @@ const onScroll = _.debounce(updateScroll, 250);
       // responses opt out through the .grouped class.
       &:not(:first-child):not(.grouped) {
         margin-top: 1rem;
+      }
+
+      // Text and bordered panels share one command-to-response gap.
+      &.command-response {
+        margin-top: 0.25rem;
       }
 
       // Chat, yell, and world/zone/game writes have a prominent color.

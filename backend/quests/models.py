@@ -159,6 +159,8 @@ class QuestInstance(AdventBaseModel):
     current_step_id = models.TextField(**optional)
     slot_bindings = models.JSONField(default=dict)
     local_state = models.JSONField(default=dict)
+    interaction_state = models.JSONField(default=dict, blank=True)
+    interaction_due_at = models.DateTimeField(null=True, blank=True)
     visible_objective_ids = models.JSONField(default=list)
     resolved_at = models.DateTimeField(**optional)
     expires_at = models.DateTimeField(**optional)
@@ -167,6 +169,12 @@ class QuestInstance(AdventBaseModel):
     class Meta(AdventBaseModel.Meta):
         ordering = ['-modified_ts', '-created_ts']
         indexes = [
+            models.Index(fields=['interaction_due_at', 'id'],
+                         condition=models.Q(interaction_due_at__isnull=False),
+                         name='quests_interaction_due'),
+            models.Index(fields=['world', 'interaction_due_at'],
+                         condition=models.Q(interaction_due_at__isnull=False),
+                         name='quests_world_interaction_due'),
             models.Index(fields=['player', 'status']),
             models.Index(fields=['template', 'status']),
             models.Index(fields=['world', 'status']),

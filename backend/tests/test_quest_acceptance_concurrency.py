@@ -1,10 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, BrokenBarrierError
 from unittest.mock import patch
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.db import close_old_connections
 from django.test import TransactionTestCase
+from django.utils import timezone
 
 from builders.models import ItemDefinition
 from quests.models import QuestInstance, QuestOfferState, QuestTemplate
@@ -169,4 +171,50 @@ class TestQuestAcceptanceConcurrency(TransactionTestCase):
         self.assertCountEqual(outcomes, ['completed', 'quest_not_found'])
         attempt.refresh_from_db()
         self.assertEqual(attempt.current_step_id, 'first')
+        self.assertEqual(self.player.inventory.filter(definition=self.seed_packet).count(), 1)
+
+    def test_interaction_concurrent_starts_and_due_workers_reward_once(self):
+        from quests.services.room_interactions import start_room_interaction, process_due_interactions
+        self.template.graph = {'steps': [
+            {'id': 'wash', 'kind': 'interaction', 'interaction': {
+                'command': 'wash clay', 'room': f'room@{self.player.room.relative_id}',
+                'conditions': {}, 'goto': 'resolved',
+                'beats': [{'after_seconds': 0, 'text': 'Starting.'}, {'after_seconds': 5, 'text': 'Done.'}],
+            }},
+            {'id': 'resolved', 'kind': 'resolution', 'resolution': 'complete'},
+        ]}
+        self.template.save()
+        attempt = accept_template(self.player, self.template).quest_instance
+        barrier = Barrier(2)
+
+        def start():
+            close_old_connections()
+            try:
+                player = Player.objects.get(pk=self.player.pk)
+                barrier.wait(timeout=5)
+                start_room_interaction(player, 'wash clay')
+                return 'started'
+            except QuestRuntimeError as exc:
+                return exc.code
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(lambda _: start(), range(2)))
+        self.assertCountEqual(outcomes, ['started', 'interaction_running'])
+        barrier = Barrier(2)
+
+        def finish():
+            close_old_connections()
+            try:
+                barrier.wait(timeout=5)
+                return process_due_interactions(now=timezone.now() + timedelta(seconds=10))['processed']
+            finally:
+                close_old_connections()
+
+        with patch('quests.services.room_interactions.flush_game_event_outbox'):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                self.assertEqual(sum(executor.map(lambda _: finish(), range(2))), 1)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, 'resolved')
         self.assertEqual(self.player.inventory.filter(definition=self.seed_packet).count(), 1)

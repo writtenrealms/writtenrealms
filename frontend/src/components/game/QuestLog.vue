@@ -4,7 +4,7 @@
       <span aria-hidden="true">&#10006;</span>
     </button>
 
-    <div class="my-4">
+    <div class="quest-log-content my-4">
       <h1 class="mb-4">Quest Log</h1>
 
       <div v-if="loading" class="quest-log-message" role="status">
@@ -37,6 +37,7 @@
         </div>
 
         <div
+          :key="selectedTab"
           :id="panelId()"
           class="quest-tab-panel"
           role="tabpanel"
@@ -73,7 +74,7 @@
 
 <script lang="ts" setup>
 import QuestCard from "@/components/game/QuestCard.vue";
-import { questInstanceCard, splitQuestLines } from "@/core/questPresentation";
+import { questInstanceCard, questInfoActions, questRoomActions, splitQuestLines, type QuestCardSource } from "@/core/questPresentation";
 import { gameplayTimeMs } from "@/core/instanceTimeControl";
 import { questRemainingSeconds, questReadyAtTitle, type QuestRepeatability } from "@/core/questRepeatability";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
@@ -100,6 +101,7 @@ interface QuestInstance {
     quest_type: string;
   };
   current_step: {
+    room_action?: NonNullable<QuestCardSource["current_step"]>["room_action"];
     recap: string;
     text: {
       body?: string;
@@ -160,6 +162,7 @@ const quests = computed(() => questGroups.value[selectedTab.value]);
 // Card content depends on the fetched quests, not the one-second cooldown tick.
 const questCards = computed(() => quests.value.map((quest) => {
   const card = questInstanceCard(quest);
+  card.actions = questRoomActions(quest, store.state.game.room, store.state.game.world?.id);
   if (selectedTab.value === "repeatable") {
     card.badges.push({ label: quest.repeatability?.mode === "daily" ? "daily" : "repeatable", tone: "tone-type" });
   }
@@ -169,7 +172,7 @@ const questCards = computed(() => quests.value.map((quest) => {
     card.metaLines.push(`Last change: ${lastRecap}`);
   }
   if (quest.status === "active" && card.slug) {
-    card.actions.push({ label: "INFO", command: `quest info ${card.slug}`, tone: "secondary" });
+    card.actions.push(...questInfoActions(quest));
   }
   return { quest, card };
 }));
@@ -320,8 +323,31 @@ onBeforeUnmount(() => {
 @import "@/styles/colors.scss";
 
 #quest_log {
+  display: flex;
+  flex-direction: column;
+  height: min(640px, calc(100dvh - 32px));
   padding: 15px;
   position: relative;
+
+  .quest-log-content {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  h1,
+  .tabs-view {
+    flex-shrink: 0;
+  }
+
+  .quest-tab-panel {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
 
   .close-button {
     appearance: none;
@@ -337,6 +363,7 @@ onBeforeUnmount(() => {
 
   .quest-tabs {
     overflow-x: auto;
+    overflow-y: hidden;
     padding: 0;
 
     .tab-item {
@@ -345,6 +372,7 @@ onBeforeUnmount(() => {
       border: 2px solid transparent;
       flex: 0 0 auto;
       font: inherit;
+      top: 0;
       white-space: nowrap;
 
       &.activeTab {

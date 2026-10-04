@@ -1076,6 +1076,7 @@ def serialize_room(
         chars=chars,
         actions=actions,
         merchant_provider=merchant_provider,
+        actions_revision=timezone.now().timestamp(),
         training_provider=training_provider,
         x=room.x,
         y=room.y,

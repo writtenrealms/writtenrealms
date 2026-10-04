@@ -44,7 +44,7 @@ def _shift(queryset, fields, delta):
 
 def _rebase_timers(run, delta):
     from builders.models import SpawnPlanRun
-    from quests.models import QuestOfferState
+    from quests.models import QuestInstance, QuestOfferState
     from spawns.models import (
         ActiveEffect, CombatEncounter, CombatRoomState, InstanceClockWork,
         MerchantRuntime, PreparedGameAction, ScheduledTriggerRun,
@@ -56,6 +56,8 @@ def _rebase_timers(run, delta):
     _shift(ScheduledTriggerRun.objects.filter(runtime_world_id=world, status='active'),
            ['next_run_ts', 'started_ts'], delta)
     _shift(PreparedGameAction.objects.filter(runtime_world_id=world, status='pending'), ['run_at'], delta)
+    _shift(QuestInstance.objects.filter(world_id=world, interaction_due_at__isnull=False),
+           ['interaction_due_at'], delta)
     _shift(InstanceClockWork.objects.filter(world_id=world, due_at__isnull=False), ['due_at'], delta)
     _shift(MerchantRuntime.objects.filter(world_id=world), ['next_restock_ts', 'last_restocked_ts'], delta)
     _shift(ZoneDoorResetSchedule.objects.filter(world_id=world), ['next_reset_ts'], delta)

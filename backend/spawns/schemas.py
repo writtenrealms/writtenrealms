@@ -409,6 +409,7 @@ class Room(BaseModel):
     inventory: List[Item] = Field(default_factory=list)
     chars: List[Char] = Field(default_factory=list)
     actions: List[str] = Field(default_factory=list)
+    actions_revision: float = 0
     merchant_provider: Optional[MerchantProvider] = None
     training_provider: Optional[TrainingProvider] = None
 

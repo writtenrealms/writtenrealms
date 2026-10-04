@@ -54,7 +54,7 @@ test("instance ID follows enter and precedes the greeting once, in every entry m
       assert.equal(html.match(/Instance ID: orientation-run/g)?.length, 1);
       assert.ok(html.indexOf(">enter<") < html.indexOf("Instance ID:"));
       assert.ok(html.indexOf("Instance ID:") < html.indexOf("The watchman greets you."));
-      assert.match(html, /class="message cmd\.enter\.success grouped"/);
+      assert.match(html, /class="[^\"]*\bmessage\b[^\"]*\bcmd\.enter\.success\b[^\"]*\bgrouped\b[^\"]*"/);
       assert.equal(store.state.game.messages.at(-1).instance_ref_announced, true);
       assert.equal(incoming.instance_ref_announced, undefined);
       assert.equal(store.state.game.pending_instance_entry, null);

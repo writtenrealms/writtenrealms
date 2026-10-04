@@ -172,6 +172,9 @@ class MovementQueryLoadingTests(WorldTestCase):
         standalone_payload, standalone_queries = read_room(None)
         shared_payload, shared_queries = read_room(viewer.world)
 
+        # Fresh projections carry their own action-ordering timestamp.
+        self.assertGreaterEqual(shared_payload.pop('actions_revision'),
+                                standalone_payload.pop('actions_revision'))
         self.assertEqual(shared_payload, standalone_payload)
         self.assertLess(len(shared_queries), len(standalone_queries))
         world_reads = lambda queries: [

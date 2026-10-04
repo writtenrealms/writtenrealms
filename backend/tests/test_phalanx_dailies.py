@@ -20,6 +20,7 @@ from quests.services.engine import (
     choose_for_instance, get_step, progress_active_instance_for_event,
 )
 from quests.services.predicates import evaluate_condition
+from quests.services.room_interactions import start_room_interaction, process_due_interactions
 from spawns.merchants import buy_item, list_merchant_stock
 from spawns.models import Mob, MerchantStockEntry
 from spawns.wallet import balance_map
@@ -146,7 +147,18 @@ class TestPhalanxDailies(WorldTestCase):
                 self.assertEqual(attempt.resolution, "complete")
                 return attempt
             step = get_step(template, attempt.current_step_id)
-            if step["kind"] == "storylet":
+            if step['kind'] == 'interaction':
+                spec = step['interaction']
+                self._move(int(spec['room'].split('@')[1]), player)
+                start_room_interaction(player, spec['command'])
+                attempt.refresh_from_db()
+                for _ in range(12):
+                    if not attempt.interaction_due_at:
+                        break
+                    process_due_interactions(now=attempt.interaction_due_at, world_id=player.world_id)
+                    attempt.refresh_from_db()
+                self.assertIsNone(attempt.interaction_due_at)
+            elif step["kind"] == "storylet":
                 selected = None
                 for relative_id in ROOMS:
                     self._move(relative_id, player)
@@ -208,10 +220,9 @@ class TestPhalanxDailies(WorldTestCase):
         self._at_giver(template)
         attempt = accept_template(self.player, template).quest_instance
         step = get_step(template, attempt.current_step_id)
-        choice = step["choices"][0]
         self._move(165)
         with self.assertRaises(QuestRuntimeError):
-            choose_for_instance(self.player, str(attempt.pk), choice["id"])
+            start_room_interaction(self.player, step['interaction']['command'])
         attempt.refresh_from_db()
         self.assertEqual(attempt.current_step_id, step["id"])
         abandon_instance(self.player, str(attempt.pk))

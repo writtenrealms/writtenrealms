@@ -111,7 +111,10 @@ class PayloadStatReuseTests(WorldTestCase):
         arguments = (player.room, {player.room_id: player.room.key}, {})
         ordinary = serialize_room(*arguments, viewer=player, runtime_world=player.world)
         reused = serialize_room(*arguments, viewer=player, runtime_world=player.world, actor_payload=actor)
-        self.assertEqual(reused.model_dump(), ordinary.model_dump())
+        # Fresh projections carry their own action-ordering timestamp.
+        self.assertGreaterEqual(reused.actions_revision, ordinary.actions_revision)
+        self.assertEqual(reused.model_dump(exclude={'actions_revision'}),
+                         ordinary.model_dump(exclude={'actions_revision'}))
         chars = {char.id: char for char in reused.chars}
         self.assertEqual(chars[player.pk].health_max, actor.health_max)
         self.assertEqual(chars[player.pk].health_max, chars[observer.pk].health_max + 7)

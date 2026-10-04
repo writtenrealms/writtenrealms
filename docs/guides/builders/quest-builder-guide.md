@@ -67,8 +67,9 @@ The Quest Log and `quest info <slug>` use the same card layout: quest title and
 slug, status badge, authored text, divided recap, and objective progress rows.
 Click a quest title in the log to collapse or expand its details. Repeatable
 quests retain their cooldown beneath the heading, and **INFO** opens the quest
-in the console. A last-change recap appears only when it adds information
-beyond the current step's recap.
+in the console. Active quest cards pair **INFO** with **ABANDON**, which ends
+that attempt through the ordinary abandon command. A last-change recap appears
+only when it adds information beyond the current step's recap.
 
 The player-facing Quest Log projects quest history into three groups:
 
@@ -131,6 +132,7 @@ Builders can rely on these pieces today:
 - Step kinds:
   - `storylet`
   - `objective`
+  - `interaction`
   - `resolution`
 - Common objective tracker events:
   - `cmd.look.success`
@@ -415,7 +417,7 @@ Common step fields:
 | Field     | Values                                | Notes                                                                                        |
 | --------- | ------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `id`      | non-empty string                      | Must be unique within the quest.                                                             |
-| `kind`    | `storylet`, `objective`, `resolution` | The manifest schema also accepts `branch` and `timer`, but the current runtime rejects them. |
+| `kind`    | `storylet`, `objective`, `interaction`, `resolution` | The manifest schema also accepts `branch` and `timer`, but the current runtime rejects them. |
 | `recap`   | string                                | Used heavily in quest info output and journal output.                                        |
 | `text`    | mapping                               | `text.body` is the common authored field for player-facing pitch/body text.                  |
 | `room_items` | list of room item mappings         | Viewer-specific quest pickups for the active step. They render in the room with `[ * ]` and are claimed with normal `get <item>`. |
@@ -428,11 +430,9 @@ lines while wrapping text to fit the available width:
 ```yaml
 text:
   body: |
-    "The company commander needs defenders," the watchman says through the bars.
+    A watchman says, 'The company commander needs defenders.'
 
-    Accept this quest with quest accept a-debt-to-athens.
-
-    After accepting, follow the watchman's directions to enter the practice court.
+    A watchman says, 'If you are willing, I can send you to the practice court.'
 ```
 
 
@@ -443,8 +443,78 @@ Fields commonly used on specific step kinds:
 | ------------ | -------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `storylet`   | `choices`                        | Used for explicit player choice branches.                                                                 |
 | `objective`  | `objectives`, `transitions`      | Objectives progress from runtime events, then transitions move to the next step.                          |
+| `interaction` | `interaction` | A contextual room command starts timed narration and then advances through `interaction.goto`. |
 | `resolution` | optional `resolution`, `effects` | `resolution` defaults to `complete`. Matching reward bucket effects are then applied from `spec.rewards`. |
 
+
+### Room interactions and RP quests
+
+The current interaction also appears in the action row of `quest info`, quest
+update cards, and the Quest Log when the room action is available. These buttons
+use the same live room availability and server validation as the room button;
+they disappear during work or when the player leaves. No additional manifest
+fields are needed.
+
+An `interaction` step gives the eligible player an ordinary command and matching
+room action button. It suits work such as washing clay, tending a shrine, or
+examining a mechanism. Progress belongs to the individual quest attempt.
+
+```yaml
+- id: wash-clay
+  kind: interaction
+  recap: WASH CLAY at the yard.
+  text:
+    body: A clay washer sets a basket of rough clay beside the settling basin.
+  interaction:
+    command: wash clay
+    room: room@114
+    conditions:
+      mob_present: mobdefinition.athens-clay-washer
+    beats:
+    - after_seconds: 0
+      text: You lower the rough clay into the shallow basin.
+    - after_seconds: 5
+      text: Fine clay clouds the water as you work out the stones.
+    - after_seconds: 5
+      text: The last lump breaks apart. A wicker sieve rests beside the basin.
+    goto: strain-clay
+```
+
+`command` is an exact, case-insensitive phrase, with whitespace normalized.
+Use a distinctive verb and object. Built-in commands cannot be overridden;
+abilities retain dispatch precedence, so avoid ability names as well. If two
+eligible quests offer the same phrase in the same room, execution reports the
+ambiguity instead of advancing either quest. Quest interactions take precedence
+over room fallback Triggers and dynamic socials with the same phrase.
+
+`room` must be a stable `room@` reference in the quest's authored world.
+`conditions` uses the normal condition framework and is checked both when
+displaying and when executing the action, including subsequent beats. The
+quest's active step supplies the progress gate; separate phase flags and room
+Triggers are unnecessary. Interaction steps cannot also have choices, objectives,
+or transitions; `goto` must name another step in the same quest graph.
+
+The first beat must have `after_seconds: 0`. Subsequent delays are relative to
+the preceding beat and use gameplay time, including instance pause/advance.
+Each interaction supports 1–12 beats, at most 300 seconds per delay and 900
+seconds in total. Text is private to the worker. A one-beat interaction can
+complete immediately. Rewards and other effects use the destination step and
+the existing quest reward policy; beats themselves contain narration only.
+
+While work runs, its button disappears and repeating the command reports that
+the action is underway. The next action appears automatically when the work
+finishes. Leaving interrupts that action, even if the player returns before its
+next beat; completed quest steps remain. Disconnecting alone does not move the
+character or cancel work. An abandoned attempt cannot complete later. Editing
+the active interaction definition cancels its old pending sequence on the next
+scheduled check; the player can restart with the new definition.
+
+The saved cursor survives worker restarts. An overdue beat resumes with the
+remaining spacing intact, so server delays do not dump all the narration at
+once. Indexed due-work batches share the existing scheduler and event outbox;
+there are no sleeping commands or per-player polling tasks. Room projection
+loads active quest templates in one query; additional authored condition checks
+have their normal evaluation costs.
 
 ### Objective Specs
 
@@ -780,8 +850,23 @@ The authoring pattern is:
 `discovery.sources: [{type: npc_dialogue, mob_definition: <slug>}]`.
 - If the player should commit to the quest, keep acceptance explicit with
 `quest accept <slug>`.
-- Put the NPC’s actual ask in the first step’s `text.body`.
-- Put the memory aid and immediate player-facing summary in `recap`.
+- Write the first step's `text.body` as a short scene with natural dialogue,
+  gestures, and narration. For example: `"The wheel wants clean clay, not
+  pebbles," the clay washer says.` A small physical action can ground the scene.
+  Keep paragraphs short and the prose within the fiction; matching the exact
+  format of a SAY or EMOTE command is optional. Keep command syntax, reset
+  schedules, and other mechanical explanations out of the RP body.
+- Keep `recap` to the shortest clear summary of the immediate task, such as
+  `WASH CLAY in the settling basin.` When there is one obvious command to use
+  next, include its exact words in ALL CAPS, naturally within the sentence.
+  Capitalize only the command words; prefer `WASH CLAY in the settling basin.`
+  to a separate instruction such as `Type WASH CLAY.`
+- Keep timed narration within the fiction too; the next step's recap can carry
+  its command cue. A completed quest's recap summarizes the outcome and payment
+  without inventing another action for the player.
+- Let the available-action section present ACCEPT, choice buttons, and any
+  available contextual work command. The room also presents that work command.
+  Do not repeat those controls as instructions in the RP body.
 - For item turn-ins, progress from `quest.item.delivered`.
 - For report-back steps, progress from `cmd.talk.success`.
 - Use definition slugs whenever possible. The runtime accepts ids too, but

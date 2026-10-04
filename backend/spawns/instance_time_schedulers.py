@@ -4,6 +4,8 @@ from spawns.actions.base import ActionError
 from spawns.actions.doors import process_due_prepared_door_actions
 from spawns.models import PreparedGameAction, ScheduledTriggerRun
 from spawns.trigger_steps import process_due_trigger_runs
+from quests.models import QuestInstance
+from quests.services.room_interactions import process_due_interactions
 
 
 MAX_DUE_WORK_PER_ADVANCE = 2048
@@ -39,7 +41,10 @@ def drain_due_schedulers(run, drain_reactions):
             status=PreparedGameAction.STATUS_PENDING,
             run_at__lte=run.simulation_time,
         ).exists()
-        if not trigger_due and not door_due:
+        quest_due = QuestInstance.objects.filter(
+            world_id=run.spawned_world_id, interaction_due_at__lte=run.simulation_time,
+        ).exists()
+        if not trigger_due and not door_due and not quest_due:
             return {"processed": processed_this_call}
         remaining = MAX_DUE_WORK_PER_ADVANCE - count
         if remaining <= 0:
@@ -61,6 +66,13 @@ def drain_due_schedulers(run, drain_reactions):
                 now=run.simulation_time, world_id=run.spawned_world_id,
             )
             processed += result["processed"]
+            remaining -= result["processed"]
+        if quest_due and remaining:
+            result = process_due_interactions(
+                limit=min(DUE_WORK_BATCH_SIZE, remaining),
+                now=run.simulation_time, world_id=run.spawned_world_id,
+            )
+            processed += result['processed']
         if not processed:
             raise ActionError(
                 "The instance could not finish its pending timers. Try advancing again.",

@@ -31,7 +31,7 @@ from quests.services.scope import instances_for_player, offer_lookup
 
 
 RUNTIME_TEMPLATE_TYPES = {"quest"}
-RUNTIME_STEP_KINDS = {"storylet", "objective", "resolution"}
+RUNTIME_STEP_KINDS = {"storylet", "objective", "interaction", "resolution"}
 
 
 class QuestRuntimeError(Exception):
@@ -313,6 +313,16 @@ def _build_step_payload(
             quest_instance=quest_instance,
             state_context=state_context,
         )
+    # Describe the step's command without re-querying or re-evaluating room
+    # eligibility per card. The live room action projection gates its button.
+    interaction = step.get("interaction") if step.get("kind") == "interaction" else None
+    room_action = None
+    if interaction and quest_instance.status == "active":
+        room_action = {
+            "command": interaction["command"],
+            "room_key": interaction["room"].replace("room@", "room.", 1),
+            "world_id": player.world_id,
+        }
     return {
         "id": str(step.get("id") or ""),
         "kind": str(step.get("kind") or ""),
@@ -335,6 +345,7 @@ def _build_step_payload(
             state_context=state_context,
         ),
         "objectives": objective_states,
+        "room_action": room_action,
     }
 
 
@@ -593,8 +604,12 @@ def enter_step(
 
     with transaction.atomic():
         quest_instance = instances_for_player(player).select_for_update(of=("self",)).get(pk=quest_instance.pk)
+        previous_step = get_step(quest_instance.template, quest_instance.current_step_id) or {}
+        refresh_actions = step_kind == 'interaction' or previous_step.get('kind') == 'interaction'
         quest_instance.current_step_id = str(step.get("id") or "").strip()
-        quest_instance.save(update_fields=["current_step_id", "modified_ts"])
+        quest_instance.interaction_state = {}
+        quest_instance.interaction_due_at = None
+        quest_instance.save(update_fields=["current_step_id", "interaction_state", "interaction_due_at", "modified_ts"])
 
         if step_kind == "objective":
             _sync_objective_state_for_step(quest_instance, step)
@@ -690,6 +705,9 @@ def enter_step(
         if event_type == "quest.instance.started"
         else [*effect_events, quest_event]
     )
+    if refresh_actions:
+        from quests.services.room_interactions import room_actions_event
+        events.append(room_actions_event(player))
     return QuestTransitionResult(quest_instance=refreshed, events=events)
 
 
@@ -823,7 +841,9 @@ def abandon_instance(player, identity: str) -> QuestTransitionResult:
         quest_instance.status = "resolved"
         quest_instance.resolution = "abandoned"
         quest_instance.resolved_at = timezone.now()
-        quest_instance.save(update_fields=["status", "resolution", "resolved_at", "modified_ts"])
+        quest_instance.interaction_state = {}
+        quest_instance.interaction_due_at = None
+        quest_instance.save(update_fields=["status", "resolution", "resolved_at", "interaction_state", "interaction_due_at", "modified_ts"])
         append_journal_entry(
             quest_instance,
             entry_type="resolved",
@@ -850,6 +870,7 @@ def abandon_instance(player, identity: str) -> QuestTransitionResult:
             f"{info_text}\nRemoved quest item{'s' if removed_item_count != 1 else ''}: "
             f"{removed_item_count}"
         )
+    from quests.services.room_interactions import room_actions_event
     return QuestTransitionResult(
         quest_instance=quest_instance,
         events=[
@@ -858,7 +879,8 @@ def abandon_instance(player, identity: str) -> QuestTransitionResult:
                 event_type="quest.instance.resolved",
                 text=f"Quest abandoned: {quest_instance.template.name}\n{info_text}",
                 data={"quest": payload},
-            )
+            ),
+            *([room_actions_event(player)] if (get_step(template, quest_instance.current_step_id) or {}).get('kind') == 'interaction' else []),
         ],
     )
 

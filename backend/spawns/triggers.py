@@ -1401,6 +1401,10 @@ def get_room_action_labels_for_actor(actor: Player | Mob | None, room: Room | No
                 labels.append(action_label)
                 normalized_labels.add(action_label)
 
+    if isinstance(actor, Player):
+        from quests.services.room_interactions import room_interaction_labels
+        labels.extend(label for label in room_interaction_labels(actor, room) if label not in labels)
+
     # Room.transfer_to is the authored base-room -> instance-room link.
     if isinstance(actor, Player) and room.transfer_to_id and "enter" not in labels:
         labels.append("enter")

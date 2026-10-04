@@ -54,6 +54,31 @@ class TestInstanceQuestClocks(QuestLogTestCase):
         history.refresh_from_db()
         self.assertNotEqual(history.resolved_at, anchor)
 
+    def test_interaction_waits_for_gameplay_advance(self):
+        from quests.services.room_interactions import start_room_interaction, process_due_interactions
+        from spawns.instance_time_schedulers import drain_due_schedulers
+        template = self.create_quest('instance-work', mode='always')
+        template.world = self.player.room.world
+        template.graph['steps'][0] = {
+            'id': 'offer', 'kind': 'interaction', 'interaction': {
+                'command': 'wash clay', 'room': f'room@{self.player.room.relative_id}',
+                'conditions': {}, 'goto': 'resolved',
+                'beats': [{'after_seconds': 0, 'text': 'Starting.'}, {'after_seconds': 5, 'text': 'Working.'}, {'after_seconds': 5, 'text': 'Finished.'}],
+            },
+        }
+        template.save()
+        with transaction.atomic(), simulation_scope(self.run):
+            instance = accept_template(self.player, template).quest_instance
+            start_room_interaction(self.player, 'wash clay')
+        instance.refresh_from_db()
+        self.assertEqual(instance.interaction_due_at, self.run.simulation_time + timedelta(seconds=5))
+        self.assertEqual(process_due_interactions(now=timezone.now())['processed'], 0)
+        with transaction.atomic(), simulation_scope(self.run):
+            self.run.simulation_time += timedelta(seconds=10)
+            self.assertEqual(drain_due_schedulers(self.run, lambda: None)['processed'], 2)
+        instance.refresh_from_db()
+        self.assertEqual(instance.status, 'resolved')
+
     def test_daily_reset_advances_while_instance_clock_is_paused(self):
         template = self.create_quest('wall-daily', mode='daily')
         template.repeatability_reset_at = '05:00'
@@ -115,6 +140,10 @@ class TestInstanceQuestClocks(QuestLogTestCase):
         from tests.utils import create_active_effect
         template = self.create_quest('resume-clock', mode='cooldown', cooldown_seconds=120)
         self.create_instance(template, resolved_at=timezone.now())
+        work_template = self.create_quest('resume-interaction', mode='always')
+        work = self.create_instance(work_template, status='active')
+        work.interaction_due_at = self.run.simulation_time + timedelta(seconds=5)
+        work.save(update_fields=['interaction_due_at'])
         offer = QuestOfferState.objects.create(
             player=self.player, template=template,
             last_resolved_at=self.run.simulation_time - timedelta(seconds=30),
@@ -132,6 +161,8 @@ class TestInstanceQuestClocks(QuestLogTestCase):
             self.assertEqual(build_quest_log(self.player)['repeatable'][0]['repeatability']['remaining_seconds'], 90)
         offer.refresh_from_db()
         effect.refresh_from_db()
+        work.refresh_from_db()
+        self.assertEqual(work.interaction_due_at, resumed_at + timedelta(seconds=5))
         self.assertEqual(offer.snoozed_until, resumed_at + timedelta(seconds=45))
         self.assertEqual(effect.next_tick_ts, resumed_at + timedelta(seconds=2))
         self.assertEqual(effect.last_tick_ts, resumed_at)

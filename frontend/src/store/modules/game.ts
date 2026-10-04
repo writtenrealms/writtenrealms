@@ -27,6 +27,7 @@ import { applyWorldEntry, initialWorldEntryState } from "@/core/worldEntryMessag
 import { playerRoundEffectSnapshot } from "@/core/roundEffects";
 import { applyCombatSnapshot, currentCombatTarget, initialCombatState } from "@/core/combatState";
 import { applyInstanceTimeControl, pendingTurnCommandState, simulationTimeMs } from "@/core/instanceTimeControl";
+import { applyRoomActions } from "@/core/roomActions";
 import _ from "lodash";
 import router from "@/router";
 
@@ -486,6 +487,7 @@ const receiveMessage = async ({
   }
 
   const skip_messages = [
+    "notification.room.actions_changed",
     "notification.shorttic",
     "notification.longtic",
     "notification.who",
@@ -660,6 +662,10 @@ const receiveMessage = async ({
     message_data.data
   ) {
     commit("trigger_items_changed_apply", message_data.data);
+  }
+  if (message_data.type === 'notification.room.actions_changed') {
+    commit('room_actions_update', message_data.data);
+    return;
   }
   if (
     message_data.type === TRIGGER_MOBS_CHANGED_MESSAGE &&
@@ -1583,6 +1589,9 @@ const updateInstanceTimeControl = (state, snapshot) => {
 };
 
 const mutations = {
+  room_actions_update: (state, payload) => {
+    state.room = applyRoomActions(state.room, state.world?.id, payload);
+  },
   instance_time_control_set: (state, snapshot) => {
     updateInstanceTimeControl(state, snapshot);
   },

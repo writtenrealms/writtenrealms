@@ -175,7 +175,7 @@ const roomTrainingContext = computed(() => (
 ));
 const roomActions = computed(() => roomActionsForTrainingProvider(
   roomTrainingContext.value,
-  roomActionsForMerchantProvider(room.value),
+  roomActionsForMerchantProvider(roomTrainingContext.value),
 ));
 const penaltyDisplay = computed(() => {
   const penaltyText = String(props.message?.data?.penalty_text || "").trim();

@@ -40,9 +40,9 @@
       </div>
     </div>
 
-    <div v-else-if="abandonedQuest">
+    <div v-else-if="abandonedQuest" class="quest-inline-abandoned">
       <span>
-        You abandon <span class="quest-link">{{ abandonedQuest.name }}</span>.
+        You abandon <span class="quest-link" @click="runCommand(abandonedQuest.infoCommand)">{{ abandonedQuest.name }}</span>.
       </span>
     </div>
 
@@ -75,7 +75,7 @@
 import { computed } from "vue";
 import { useStore } from "vuex";
 import QuestCard from "@/components/game/QuestCard.vue";
-import { buildQuestBadges as buildBadges, questInstanceCard, splitQuestLines as splitLines } from "@/core/questPresentation";
+import { buildQuestBadges as buildBadges, questInstanceCard, questInfoActions, questRoomActions, splitQuestLines as splitLines } from "@/core/questPresentation";
 import { formatMoney } from "@/core/economy.ts";
 
 const store = useStore();
@@ -213,6 +213,7 @@ const abandonedQuest = computed(() => {
 
   return {
     name: questName.value,
+    infoCommand: questSlug.value ? `quest info ${questSlug.value}` : "",
   };
 });
 
@@ -239,8 +240,11 @@ const cards = computed(() => {
     const quest = questPayload.value;
     const card = questInstanceCard(quest);
     card.rewardLines = rewardLines.value;
+    if (isLastMessage.value) {
+      card.actions = questRoomActions(quest, store.state.game.room, store.state.game.world?.id);
+    }
     if (quest.status === "active" && card.slug && !singleQuestInfoMessage.value) {
-      card.actions = [{ label: "INFO", command: `quest info ${card.slug}`, tone: "secondary" }];
+      card.actions.push(...questInfoActions(quest));
     }
     return [card];
   }
@@ -250,7 +254,7 @@ const cards = computed(() => {
       const card = questInstanceCard(quest);
       card.body = "";
       card.choiceRows = [];
-      if (card.slug) card.actions = [{ label: "INFO", command: `quest info ${card.slug}`, tone: "secondary" }];
+      card.actions = questInfoActions(quest);
       return card;
     });
   }
