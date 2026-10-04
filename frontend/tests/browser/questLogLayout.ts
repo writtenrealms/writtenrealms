@@ -10,10 +10,10 @@ import '../../src/styles/app.scss';
 
 const quest = (id: number) => ({
   id, status: 'resolved', resolution: 'complete',
-  template: { slug: `received-barley-seeds-${id}`, name: 'Received Barley Seeds', quest_type: 'quest' },
+  template: { slug: `garden-supplies-${id}`, name: 'Supplies for the Garden', quest_type: 'quest' },
   current_step: {
-    text: { body: '"Blessings upon you, seeker. You stand before the Altar of Demeter, where the soil is sacred and blessed by the goddess herself."\n\n"To truly honor Demeter, one must plant the barley seeds, which carry her essence, and nurture them to fruition."\n\n"If your heart is pure and your intentions are true, you may request seeds to partake in this revered ritual."' },
-    recap: 'Priestess Callista has entrusted you with a packet of sacred barley seeds.',
+    text: { body: '"The garden needs a little care before the next rain," the gardener says. "There is space for another row along the sunny wall."\n\nShe lays a packet of seeds on the table and points toward a shelf of empty pots, each one scrubbed and ready for planting.\n\n"Take these to the prepared bed, cover them lightly, and give the soil a gentle watering. We will see what grows."' },
+    recap: 'The gardener has given you seeds for the new planting bed.',
     objectives: [],
   },
   repeatability: { mode: 'always', state: 'ready' },
@@ -21,12 +21,12 @@ const quest = (id: number) => ({
 
 const showActive = new URLSearchParams(location.search).has('active');
 const activeQuest = {
-  ...quest(34), status: 'active', resolution: null,
-  template: { slug: 'athens-clay-for-the-wheel', name: 'Clay for the Wheel', quest_type: 'quest' },
+  ...quest(7), status: 'active', resolution: null,
+  template: { slug: 'workshop-supplies', name: 'Supplies for the Workshop', quest_type: 'quest' },
   current_step: {
-    text: { body: '"The wheel wants clean clay, not pebbles," the clay washer says. "Wash a basket, strain it, and take it to the potter in the Kiln Court. He\'ll put it aside for tomorrow."\n\nHe sets a basket of rough clay beside the settling basin.' },
-    recap: 'WASH CLAY in the settling basin.', objectives: [],
-    room_action: { command: 'wash clay', room_key: 'room.114', world_id: 24 },
+    text: { body: '"Straight boards on the left, short pieces on the right," the carpenter says. "Sort this bundle, then carry the usable timber to the bench."\n\nShe clears a space beside the stack and sets down a pair of gloves.' },
+    recap: 'SORT TIMBER beside the workbench.', objectives: [],
+    room_action: { command: 'sort timber', room_key: 'room.10', world_id: 1 },
   },
 };
 const commands: string[] = [];
@@ -37,13 +37,13 @@ const responseReady = new Promise<void>(resolve => { releaseResponse = resolve; 
 axios.defaults.adapter = async config => {
   await responseReady;
   return { config, status: 200, statusText: 'OK', headers: {}, data: {
-    active: showActive ? [activeQuest] : [], repeatable: [quest(31)],
+    active: showActive ? [activeQuest] : [], repeatable: [quest(8)],
     resolved: Array.from({ length: 20 }, (_, index) => quest(100 + index)),
   } };
 };
 const store = createStore({ state: {
-  game: { player: { id: 16, is_builder: true }, instance_time_control: null,
-    world: { id: 24 }, room: { key: 'room.114', actions: ['wash clay'] } },
+  game: { player: { id: 1, is_builder: true }, instance_time_control: null,
+    world: { id: 1 }, room: { key: 'room.10', actions: ['sort timber'] } },
   ui: { modal: { component: markRaw(QuestLog), props: {}, options: {} } },
 }, actions: {
   'game/cmd': (_context, command: string) => { commands.push(command); },
@@ -108,11 +108,11 @@ async function run() {
     element('#quest-log-tab-active').click();
     await frame();
     const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('.quest-actions button'));
-    check(buttons.map(button => button.textContent!.trim()).join(',') === 'WASH CLAY,INFO,ABANDON',
+    check(buttons.map(button => button.textContent!.trim()).join(',') === 'SORT TIMBER,INFO,ABANDON',
       'Abandon must be immediately after Info');
     buttons[2].click();
     await frame();
-    check(commands.length === 1 && commands[0] === 'quest abandon 34', 'Abandon targeted the wrong quest attempt');
+    check(commands.length === 1 && commands[0] === 'quest abandon 7', 'Abandon targeted the wrong quest attempt');
     check(closed, 'Abandon did not close the Quest Log');
   }
   disclosure.click();
