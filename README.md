@@ -114,7 +114,7 @@ docker compose up -d --build
 ## Documentation
 
 Builder and player guides are published at
-[docs.writtenrealms.com](https://docs.writtenrealms.com). The public guide
+[core.writtenrealms.com/docs/](https://core.writtenrealms.com/docs/). The public guide
 sources live in `docs/guides/` and are built with VitePress:
 
 ```bash
@@ -123,17 +123,17 @@ make docs-build
 ```
 
 `make docs` installs the pinned package set when needed and serves the guides
-at `http://localhost:5174`. Override the port with
+at `http://localhost:5174/docs/`. Override the port with
 `DOCS_PORT=5180 make docs`. Use `make docs-install` to force a clean reinstall.
 
-Pushes to `main` that change `docs/` deploy through
-[the GitHub Pages workflow](.github/workflows/docs.yml). Initial repository
-setup still requires selecting **GitHub Actions** as the Pages source, setting
-the custom domain to `docs.writtenrealms.com`, and pointing the `docs` DNS
-CNAME to `writtenrealms.github.io`.
+Core releases build and serve the guides from the same source revision as the
+game. Pushes to `main` that change `docs/` update
+[GitHub Pages redirects](https://writtenrealms.github.io/writtenrealms/)
+through [the documentation workflow](.github/workflows/docs.yml).
+`docs.writtenrealms.com` continues to serve the separate WR1/Alpha manual.
 
 See [Documentation Deployment](docs/dev/documentation-deployment.md) for the
-cutover, verification, rollback, and legacy Doctrine retirement checklist.
+build, redirect, and verification workflow.
 
 For engineering setup, architecture, and troubleshooting, see:
 

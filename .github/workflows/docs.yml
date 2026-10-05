@@ -1,4 +1,4 @@
-name: Deploy documentation
+name: Deploy documentation redirects
 
 on:
   push:
@@ -39,7 +39,10 @@ jobs:
         working-directory: docs
 
       - name: Build documentation
-        run: npm run build
+        run: |
+          npm test
+          npm run build
+          npm run build:redirects
         working-directory: docs
 
       - name: Configure GitHub Pages
@@ -48,7 +51,7 @@ jobs:
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
-          path: docs/.vitepress/dist
+          path: docs/.vitepress/pages-redirects
 
   deploy:
     environment:

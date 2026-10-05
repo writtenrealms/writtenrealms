@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "vitepress dev",
     "build": "vitepress build && node scripts/generate-legacy-redirects.mjs",
+    "build:redirects": "node scripts/generate-pages-redirects.mjs",
+    "test": "node --test scripts/redirects.test.mjs",
     "preview": "vitepress preview"
   },
   "devDependencies": {

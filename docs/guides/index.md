@@ -13,8 +13,8 @@ hero:
       text: Player guides
       link: /players/
     - theme: alt
-      text: Open Written Realms
-      link: https://writtenrealms.com
+      text: Open Written Realms Core
+      link: https://core.writtenrealms.com
 
 features:
   - icon: 🏰

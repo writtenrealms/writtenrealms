@@ -1,59 +1,74 @@
-# Documentation Deployment
+# Documentation deployment
 
-Builder and player guides are built from `docs/guides/` with VitePress and
-deployed by `.github/workflows/docs.yml`. The deployment stays in the main
-Written Realms repository; no separate documentation repository is required.
+The canonical WR2 builder and player guides are at
+[core.writtenrealms.com/docs/](https://core.writtenrealms.com/docs/).
+VitePress builds only `docs/guides/`; engineering and architecture notes outside
+that directory are not part of the published site.
 
-## Local Verification
+Core's web image builds the guides from the same Git revision as the application
+and serves the static output through Caddy. Documentation requests need no
+Django, database, or worker processing. Guide changes become live with a Core
+release, so the public manual follows the deployed game rather than unreleased
+changes on `main`.
+
+## Local verification
 
 ```bash
 make docs-install
+npm --prefix docs test
 make docs-build
 npm --prefix docs run preview
 ```
 
-The production output is `docs/.vitepress/dist/`. The build also generates
-static HTML redirects for every route served by the former Doctrine docs app.
+Open `http://localhost:4173/docs/` for the production preview. `make docs`
+instead runs the development server at `http://localhost:5174/docs/`.
+The `/docs/` base is configured in `docs/.vitepress/config.mts`; the production
+output is `docs/.vitepress/dist/`.
 
-## First-Time GitHub Pages Setup
+Check the home page, a builder guide, a player guide, search, and a section
+bookmark. Styles, scripts, links, and search results must all stay under
+`/docs/`. The host must resolve clean guide URLs to their generated `.html`
+files, redirect `/docs` to `/docs/`, and return 404 for missing docs rather than
+fall through to the game frontend.
 
-1. In the `writtenrealms/writtenrealms` repository settings, open **Pages**.
-2. Select **GitHub Actions** as the publishing source.
-3. If GitHub requests organization-domain verification, add its TXT challenge
-   for `writtenrealms.com` and wait for verification.
-4. Set the Pages custom domain to `docs.writtenrealms.com` before changing DNS.
-5. Run the **Deploy documentation** workflow from the Actions tab or merge a
-   docs change to `main`.
+## GitHub Pages redirects
 
-GitHub requires custom domains for Actions-based Pages deployments to be set
-through repository settings or the API; a committed `CNAME` file does not
-perform that setup. See GitHub's [custom workflow](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
-and [custom domain](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site)
-documentation.
+[writtenrealms.github.io/writtenrealms/](https://writtenrealms.github.io/writtenrealms/)
+contains redirects to the canonical Core site. It does not host a second copy
+of the guides. The Pages custom domain must remain unset; select **GitHub
+Actions** as the Pages source and leave HTTPS enforcement enabled.
 
-## DNS Cutover
+The `.github/workflows/docs.yml` workflow tests and builds the docs, then runs:
 
-1. Confirm the Pages deployment completed successfully.
-2. Replace the existing `docs.writtenrealms.com` A record with this CNAME:
+```bash
+npm --prefix docs run build:redirects
+```
 
-   ```text
-   docs CNAME writtenrealms.github.io.
-   ```
+Only `docs/.vitepress/pages-redirects/` is uploaded to GitHub Pages. The generator
+creates redirects for every built guide and legacy route, including clean,
+`.html`, and directory forms. A custom `404.html` forwards future guide paths
+that are not yet represented in the redirect artifact. Query strings and
+section bookmarks are preserved by JavaScript; a meta refresh and visible
+canonical link also work without JavaScript.
 
-   The repository name does not belong in the CNAME target.
-3. Wait for GitHub's DNS check and TLS certificate provisioning to complete.
-4. Enable **Enforce HTTPS** in the Pages settings.
-5. Verify the home page, a builder guide, a player guide, and representative
-   old routes such as `/building/conditions` and
-   `/building/worlds/publishing`.
+Verify redirects from the Pages home, a nested builder page with `#section`,
+a player guide, and a legacy route such as `/building/conditions`.
+The workflow runs on docs changes to `main` and supports manual dispatch.
+Publishing new redirects does not release new guide content on Core; links to
+newer guides become usable when Core is updated to include them.
 
-## Retiring Doctrine
+## WR1/Alpha stays separate
 
-Keep the legacy Doctrine ingress, service, and deployment available until DNS,
-TLS, canonical pages, and legacy redirects have been verified from outside the
-cluster. Then remove those resources from the infrastructure repository.
+[docs.writtenrealms.com](https://docs.writtenrealms.com/) remains the WR1/Alpha
+manual. Core deployment does not change that domain, its DNS, or its hosting.
+The compatibility routes generated inside the Core docs and Pages redirect
+site point to the corresponding WR2 guides; they do not replace the Alpha site.
 
-If validation fails before Doctrine is retired, restore the previous DNS
-record while the Pages configuration is corrected. DNS rollback is no longer
-available after the legacy service is removed, so retire it only after the new
-site has been observed working reliably.
+## Release and recovery
+
+Use the private Core operations runbook and deployment helper for production
+releases. Deploy and verify Core's `/docs/` before publishing Pages redirects
+to it. Preserve the previous release and follow the same compatibility checks
+as an application rollback. A rollback to a release predating `/docs/` removes
+the redirect destination, so recover the docs route or retain a docs-enabled
+release before rolling back.

@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { redirectDocument } from "./redirects.mjs";
 
 const legacyRoutes = {
   "/playing": "/players/",
@@ -40,43 +41,6 @@ const legacyRoutes = {
 
 const docsDirectory = fileURLToPath(new URL("..", import.meta.url));
 const outputDirectory = resolve(docsDirectory, ".vitepress/dist");
-const siteOrigin = "https://docs.writtenrealms.com";
-
-const escapeHtml = (value) => value
-  .replaceAll("&", "&amp;")
-  .replaceAll("<", "&lt;")
-  .replaceAll(">", "&gt;")
-  .replaceAll('"', "&quot;")
-  .replaceAll("'", "&#039;");
-
-const redirectDocument = (destination) => {
-  const canonicalUrl = new URL(destination, siteOrigin).href;
-  const escapedUrl = escapeHtml(canonicalUrl);
-
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="refresh" content="0; url=${escapedUrl}">
-    <link rel="canonical" href="${escapedUrl}">
-    <title>Guide moved | Written Realms</title>
-    <script>
-      (() => {
-        const target = new URL(${JSON.stringify(destination)}, window.location.origin);
-        if (window.location.search) target.search = window.location.search;
-        if (window.location.hash) target.hash = window.location.hash;
-        window.location.replace(target.href);
-      })();
-    </script>
-  </head>
-  <body>
-    <p>This guide moved to <a href="${escapedUrl}">${escapedUrl}</a>.</p>
-  </body>
-</html>
-`;
-};
-
 for (const [legacyRoute, destination] of Object.entries(legacyRoutes)) {
   const routeSegments = legacyRoute.split("/").filter(Boolean);
   const routeDirectory = resolve(outputDirectory, ...routeSegments);
