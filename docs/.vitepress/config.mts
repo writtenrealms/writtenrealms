@@ -1,4 +1,5 @@
 import { defineConfig, type DefaultTheme } from "vitepress";
+import { guideUrl } from "../scripts/redirects.mjs";
 
 const builderSidebar: DefaultTheme.SidebarItem[] = [
   { text: "Builder home", link: "/builders/" },
@@ -86,6 +87,7 @@ const playerSidebar: DefaultTheme.SidebarItem[] = [
 ];
 
 export default defineConfig({
+  base: "/docs/",
   srcDir: "guides",
   lang: "en-US",
   title: "Written Realms Guides",
@@ -98,6 +100,11 @@ export default defineConfig({
   head: [
     ["meta", { name: "theme-color", content: "#191a1c" }],
   ],
+  transformHead({ pageData }) {
+    if (pageData.relativePath === "404.md") return [];
+    const route = pageData.relativePath.replace(/(^|\/)index\.md$/, "$1").replace(/\.md$/, "");
+    return [["link", { rel: "canonical", href: guideUrl(route) }]];
+  },
   markdown: {
     lineNumbers: true,
     config(markdown) {
@@ -115,7 +122,7 @@ export default defineConfig({
       { text: "Home", link: "/" },
       { text: "Builder Guides", link: "/builders/" },
       { text: "Player Guides", link: "/players/" },
-      { text: "Written Realms", link: "https://writtenrealms.com" },
+      { text: "Written Realms Core", link: "https://core.writtenrealms.com" },
     ],
     sidebar: {
       "/builders/": builderSidebar,
