@@ -231,6 +231,11 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 CELERY_BROKER_URL = 'amqp://rabbitmq:5672'
 CELERY_RESULT_BACKEND = 'redis://redis-celery:6379/0'
 
+# Keep communication available for moderation for three days. A bounded Celery
+# sweep removes expired records each minute; existing rows keep their expiry.
+COMMUNICATION_RETENTION_DAYS = os.environ.get('COMMUNICATION_RETENTION_DAYS', '3')
+COMMUNICATION_PRUNE_BATCH_SIZE = os.environ.get('COMMUNICATION_PRUNE_BATCH_SIZE', '10000')
+
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
 
 #FORCE_SCRIPT_NAME = '/forge'

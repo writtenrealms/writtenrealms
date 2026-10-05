@@ -78,6 +78,11 @@ app.conf.beat_schedule = {
         'task': 'users.tasks.cleanup_stale_connections',
         'schedule': crontab(minute='*/5'),  # Runs every 5 minutes
     },
+    'prune-communication-messages': {
+        'task': 'spawns.tasks.prune_communication_messages',
+        'schedule': crontab(minute='*'),
+        'options': {'expires': 55},
+    },
     'prune-crafting-action-receipts': {
         'task': 'spawns.tasks.prune_crafting_action_receipts',
         'schedule': crontab(hour='4', minute='20'),

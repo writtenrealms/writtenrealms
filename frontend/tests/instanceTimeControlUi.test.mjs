@@ -73,6 +73,15 @@ test("empty Enter still repeats the last command during ordinary timing", async 
   }
 });
 
+test("empty Enter never repeats a question, answer, or whisper", async () => {
+  for (const command of ['ask Where?', 'answer 3 East.', 'whisper Mira Hello.']) {
+    const { commands, submit } = await inputHarness({ instance_time_control: null });
+    submit(command);
+    submit('');
+    assert.deepEqual(commands, [{ action: 'game/cmd', payload: command }]);
+  }
+});
+
 test("blocked empty Enter neither advances nor replays the previous command", async () => {
   for (const state of [
     { is_connected: false },

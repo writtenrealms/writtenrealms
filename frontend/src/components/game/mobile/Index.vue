@@ -78,6 +78,10 @@ const onTap = (selected: string) => {
   }
 };
 
+watch(() => store.state.game.command_draft, (draft) => {
+  if (draft) onTap("type");
+});
+
 watch(() => player.value.state, (player_state) => {
   if (player_state === "combat") {
     onTap("info");

@@ -48,6 +48,7 @@ const builderSidebar: DefaultTheme.SidebarItem[] = [
       { text: "Room actions", link: "/builders/room-actions" },
       { text: "Builder slash commands", link: "/builders/builder-command-reference" },
       { text: "Socials", link: "/builders/social-builder-guide" },
+      { text: "Communication and moderation", link: "/builders/communication-builder-guide" },
     ],
   },
   {
@@ -70,6 +71,7 @@ const builderSidebar: DefaultTheme.SidebarItem[] = [
 
 const playerSidebar: DefaultTheme.SidebarItem[] = [
   { text: "Player home", link: "/players/" },
+  { text: "Asking for help and communication", link: "/players/communication" },
   { text: "Map", link: "/players/map" },
   { text: "Following", link: "/players/following" },
   { text: "Doors and keys", link: "/players/doors-and-keys" },

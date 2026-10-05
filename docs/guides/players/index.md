@@ -3,6 +3,34 @@
 These guides cover the player-facing systems currently available in Written
 Realms Core.
 
+## First Steps: Ask for Help
+
+Unsure where to go or how something works? Type `ask` followed by your question
+in the command input, then press Enter:
+
+```text
+ask I'm new here. What should I do first?
+```
+
+Players listening to the **ask** channel in your world will hear your question
+and can reply. New characters listen automatically, and **any player listening
+can answer**. When someone answers your question, you see a message such as
+`Alden answers you 'Try the harbor merchant.'`
+
+To help another player, use `answer <message>` for the latest question. To
+answer a specific question, click its gray number, such as `[ 3 ]`, to prepare
+`answer 3 `, then type your reply and press Enter.
+
+Use `listen ask off` if you want to stop hearing other players' questions.
+You can still use `ask` and receive replies to your own questions while online
+in that world. Use `listen ask on` to hear and answer questions again.
+
+See [Asking for Help and Communication](communication.md) for the full command
+reference, other chat channels, and private messages.
+
+## Explore the Guides
+
+- [Asking for Help and Communication](communication.md)
 - [Map](map.md)
 - [Following](following.md)
 - [Doors and Keys](doors-and-keys.md)

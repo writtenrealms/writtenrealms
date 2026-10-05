@@ -29,7 +29,7 @@ features:
     linkText: Open the manifest guide
   - icon: 🧭
     title: Player guides
-    details: Learn movement, combat, crafting, currencies, socials, and scripted interactions.
+    details: Start by asking other players for help, then learn movement, combat, crafting, and more.
     link: /players/
     linkText: Browse player guides
 ---

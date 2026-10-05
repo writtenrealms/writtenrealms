@@ -1235,7 +1235,9 @@ class ExtractPlayerSerializer(serializers.ModelSerializer):
             'effects',
             'wallet_revision',
         ]
-        read_only_fields = ['wallet_revision']
+        # Channel preferences are persisted directly by WR2's listen command.
+        # A stale extraction snapshot must not undo a newer preference change.
+        read_only_fields = ['wallet_revision', 'channels']
 
 
 class ExtractEquipmentSerializer(serializers.ModelSerializer):

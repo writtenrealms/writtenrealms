@@ -111,27 +111,15 @@
         <div class="group-title">Communication</div>
         <div class="cmds">
           <div class="cmd" @click="cmdHelp('say')">say</div>
+          <div class="cmd" @click="cmdHelp('ask')">ask</div>
+          <div class="cmd" @click="cmdHelp('answer')">answer</div>
           <div class="cmd" @click="cmdHelp('chat')">chat</div>
           <div class="cmd" @click="cmdHelp('gossip')">gossip</div>
+          <div class="cmd" @click="cmdHelp('listen')">listen</div>
           <div class="cmd" @click="cmdHelp('emote')">emote</div>
           <div class="cmd" @click="cmdHelp('tell')">tell</div>
-          <div class="cmd" @click="cmdHelp('reply')">reply</div>
+          <div class="cmd" @click="cmdHelp('whisper')">whisper</div>
           <div class="cmd" @click="cmdHelp('yell')">yell</div>
-          <div class="cmd" @click="cmdHelp('mute')">mute</div>
-        </div>
-      </div>
-
-      <div class="cmd-group clan-commands">
-        <div class="group-title">Clan Commands</div>
-        <div class="cmds">
-          <div class="cmd" @click="cmdHelp('cc')">cc</div>
-          <div class="cmd" @click="cmdHelp('cjoin')">cjoin</div>
-          <div class="cmd" @click="cmdHelp('cquit')">cquit</div>
-          <div class="cmd" @click="cmdHelp('cregister')">cregister</div>
-          <div class="cmd" @click="cmdHelp('cpassword')">cpassword</div>
-          <div class="cmd" @click="cmdHelp('cmembers')">cmembers</div>
-          <div class="cmd" @click="cmdHelp('cpromote')">cpromote</div>
-          <div class="cmd" @click="cmdHelp('ckick')">ckick</div>
         </div>
       </div>
 

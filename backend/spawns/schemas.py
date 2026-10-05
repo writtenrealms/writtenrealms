@@ -290,7 +290,7 @@ class Actor(BaseModel):
 
     # Communication
     mute_list: Optional[str] = None
-    channels: Optional[str] = None
+    channels: Optional[str] = 'ask'
 
     # Effects & cooldowns
     effects: Dict[str, Any] = Field(default_factory=dict)
@@ -1127,7 +1127,7 @@ def build_mock_state_sync(
         marks={"visited_castle": True, "met_king": False},
         clan={"name": "Silver Blades", "rank": "Member"},
         mute_list=None,
-        channels="chat global",
+        channels="ask",
         effects={},
         cooldowns={},
         user_id=1,

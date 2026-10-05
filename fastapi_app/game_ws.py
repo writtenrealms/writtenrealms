@@ -15,6 +15,8 @@ import json
 import logging
 import os
 import uuid
+from itertools import islice
+from typing import Iterable
 
 from backend.core.access_policy import environment_allowlist, token_is_allowed
 
@@ -32,6 +34,9 @@ JWT_ALGORITHM = "HS256"
 REDIS_HOST = os.getenv('CHANNEL_REDIS_HOST', '127.0.0.1')
 REDIS_PORT = int(os.getenv('CHANNEL_REDIS_PORT', '6379'))
 GAME_PUBSUB_CHANNEL = "game:pub"
+GAME_BULK_RECIPIENT_LIMIT = 250
+GAME_BULK_SEND_CONCURRENCY = 32
+GAME_BULK_SEND_TIMEOUT_SECONDS = 5
 
 # Celery configuration - for dispatching commands to Django workers
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'amqp://rabbitmq:5672')
@@ -163,6 +168,9 @@ class GameConnectionManager:
 
     async def _handle_pub(self, data: dict):
         """Handle a publication message from Redis."""
+        if 'player_keys' in data:
+            await self._handle_shared_pub(data)
+            return
         player_key = data.get('player_key')
         message = data.get('message')
         connection_id = data.get('connection_id')
@@ -176,6 +184,51 @@ class GameConnectionManager:
             return
 
         await self.send_to_player(player_key, message)
+
+    async def _handle_shared_pub(self, data: dict):
+        """Deliver one shared message only to its locally connected audience."""
+        player_keys = data.get('player_keys')
+        message = data.get('message')
+        if (
+            not isinstance(player_keys, list)
+            or len(player_keys) > GAME_BULK_RECIPIENT_LIMIT
+            or not all(isinstance(key, str) for key in player_keys)
+            or not isinstance(message, dict)
+            or not message
+            or data.get('connection_id')
+        ):
+            logger.warning('Invalid shared game pub message')
+            return
+        local_keys = list(dict.fromkeys(
+            key for key in player_keys if key in self.active_connections
+        ))
+        # Bound active send tasks and isolate slow/broken sockets. Await each
+        # group before processing another Redis envelope to preserve order.
+        for offset in range(0, len(local_keys), GAME_BULK_SEND_CONCURRENCY):
+            await asyncio.gather(*(
+                self._send_shared_to_player(key, message)
+                for key in local_keys[offset:offset + GAME_BULK_SEND_CONCURRENCY]
+            ))
+
+    async def _send_shared_to_player(self, player_key: str, message: dict):
+        websocket = self.active_connections.get(player_key)
+        if websocket is None:
+            return
+        try:
+            await asyncio.wait_for(
+                websocket.send_json(message), timeout=GAME_BULK_SEND_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            logger.debug('Unable to deliver shared game message to %s', player_key,
+                         exc_info=True)
+            # Close only the captured socket. Keep registration until the
+            # websocket handler's finally block queues its usual world exit
+            # and disconnects; removing it here would bypass that cleanup.
+            try:
+                await asyncio.wait_for(websocket.close(), timeout=1)
+            except Exception:
+                logger.debug('Unable to close failed game socket for %s', player_key,
+                             exc_info=True)
 
 
 # Global connection manager for gameplay
@@ -208,6 +261,26 @@ def publish_to_player(player_key: str, message: dict, connection_id: str | None 
 
     r = _get_sync_redis()
     r.publish(GAME_PUBSUB_CHANNEL, json.dumps(payload))
+
+
+def publish_to_players(player_keys: Iterable[str], message: dict):
+    """Publish shared channel output in bounded envelopes on one connection."""
+    recipients = iter(player_keys)
+    batch = list(islice(recipients, GAME_BULK_RECIPIENT_LIMIT))
+    if not batch:
+        return
+    redis = _get_sync_redis()
+    try:
+        with redis.pipeline(transaction=False) as pipeline:
+            while batch:
+                pipeline.publish(GAME_PUBSUB_CHANNEL, json.dumps({
+                    'player_keys': batch,
+                    'message': message,
+                }))
+                batch = list(islice(recipients, GAME_BULK_RECIPIENT_LIMIT))
+            pipeline.execute()
+    finally:
+        redis.close()
 
 
 def _verify_token(token: str) -> int | None:

@@ -37,6 +37,63 @@ from spawns.deletion import deactivate_combat_actor
 lifecycle_logger = logging.getLogger('lifecycle')
 
 
+class CommunicationSession(models.Model):
+    """A world's question counter, independent of gameplay row locks."""
+
+    world = models.OneToOneField(
+        'worlds.World', on_delete=models.CASCADE,
+        related_name='communication_session', primary_key=True,
+    )
+    generation = models.UUIDField(default=uuid.uuid4, editable=False)
+    next_question_number = models.PositiveBigIntegerField(default=1)
+
+
+class CommunicationMessage(models.Model):
+    """Short-lived audit snapshots, retained even after actors/worlds disappear."""
+
+    created_ts = models.DateTimeField(default=timezone.now, editable=False)
+    expires_at = models.DateTimeField()
+    # Scalar identities deliberately avoid deletion cascades and sender/target
+    # lookups on the hot path. Moderation can still correlate accounts and runs.
+    world_id = models.PositiveBigIntegerField()
+    room_id = models.PositiveBigIntegerField(null=True, blank=True)
+    channel = models.CharField(max_length=32)
+    sender_type = models.CharField(max_length=16)
+    sender_id = models.PositiveBigIntegerField()
+    sender_user_id = models.PositiveBigIntegerField(null=True, blank=True)
+    sender_name = models.TextField()
+    target_type = models.CharField(max_length=16, blank=True)
+    target_id = models.PositiveBigIntegerField(null=True, blank=True)
+    target_user_id = models.PositiveBigIntegerField(null=True, blank=True)
+    target_name = models.TextField(blank=True)
+    text = models.TextField()
+    session = models.UUIDField(null=True, blank=True)
+    question_number = models.PositiveBigIntegerField(null=True, blank=True)
+    answer_to_question_number = models.PositiveBigIntegerField(null=True, blank=True)
+    in_reply_to_id = models.PositiveBigIntegerField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-created_ts', '-id']
+        indexes = [
+            models.Index(fields=['expires_at', 'id'], name='comm_expiry_idx'),
+            models.Index(fields=['-created_ts', '-id'], name='comm_time_idx'),
+            models.Index(fields=['world_id', '-created_ts'], name='comm_world_time_idx'),
+            models.Index(fields=['world_id', 'channel', '-created_ts'], name='comm_channel_time_idx'),
+            models.Index(fields=['sender_user_id', '-created_ts'], name='comm_sender_user_time_idx'),
+            models.Index(fields=['target_user_id', '-created_ts'], name='comm_target_user_time_idx'),
+            models.Index(fields=['sender_type', 'sender_id', '-created_ts'], name='comm_sender_time_idx'),
+            models.Index(fields=['target_type', 'target_id', '-created_ts'], name='comm_target_time_idx'),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['world_id', 'session', 'question_number'],
+                condition=models.Q(channel='ask'),
+                name='comm_world_session_question_uniq',
+            ),
+        ]
+
+
 class Equipment(AdventBaseModel):
 
     weapon = models.ForeignKey(
@@ -194,7 +251,7 @@ class Player(CharMixin, AdventBaseModel):
     mute_list = models.TextField(**optional)
     # Space delimited, lowercase list of channels the player is
     # listening to.
-    channels = models.TextField(default='chat', blank=True)
+    channels = models.TextField(default='ask', blank=True)
 
     cooldowns = models.TextField(**optional)
     effects = models.TextField(**optional)

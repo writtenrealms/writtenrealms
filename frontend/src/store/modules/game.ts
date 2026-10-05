@@ -36,6 +36,16 @@ import router from "@/router";
 // Running one more test
 
 const MESSAGE_LIMIT = 200;
+const COMMUNICATION_MESSAGES = new Set([
+  "cmd.ask.success", "notification.cmd.ask.success",
+  "cmd.answer.success", "notification.cmd.answer.success",
+  "cmd.chat.success", "notification.cmd.chat.success",
+  "cmd.gossip.success", "notification.cmd.gossip.success",
+  "cmd.tell.success", "notification.cmd.tell.success",
+  "cmd.whisper.success", "notification.cmd.whisper.success",
+  "cmd.cchat.success", "notification.cmd.cchat.success",
+  "notification.tell", "cmd.reply.success", "notification.reply",
+]);
 const TRIGGER_ITEMS_CHANGED_MESSAGE = "notification.trigger.items_changed";
 const TRIGGER_MOBS_CHANGED_MESSAGE = "notification.trigger.mobs_changed";
 const ABILITY_PREPARATIONS_UPDATE_MESSAGE = "player.ability_preparations.update";
@@ -305,6 +315,7 @@ const set_initial_state = () => {
 
     who_list: [],
     com_list: [],
+    command_draft: null,
     factions: [],
     room_chars: [],
     motd: '',
@@ -470,19 +481,7 @@ const receiveMessage = async ({
   }
 
   // Keep track of communication messages for the coms log
-  const com_messages = [
-    "cmd.chat.success",
-    "notification.cmd.chat.success",
-    "cmd.tell.success",
-    "notification.tell",
-    "cmd.reply.success",
-    "notification.reply",
-    "cmd.cchat.success",
-    "notification.cmd.cchat.success",
-    "cmd.gossip.success",
-    "notification.cmd.gossip.success",
-  ];
-  if (com_messages.indexOf(message_data.type) != -1) {
+  if (COMMUNICATION_MESSAGES.has(message_data.type)) {
     commit("com_list_add", message_data);
   }
 
@@ -1589,6 +1588,11 @@ const updateInstanceTimeControl = (state, snapshot) => {
 };
 
 const mutations = {
+  command_draft_set: (state, text: string) => {
+    // A new object also focuses the input when the same reply is selected again.
+    state.command_draft = { text };
+  },
+  command_draft_clear: (state) => { state.command_draft = null; },
   room_actions_update: (state, payload) => {
     state.room = applyRoomActions(state.room, state.world?.id, payload);
   },
@@ -2318,7 +2322,10 @@ const mutations = {
   },
 
   com_list_add: (state, com) => {
-    state.com_list.push(com);
+    state.com_list.push(_.cloneDeep(com));
+    if (state.com_list.length > MESSAGE_LIMIT) {
+      state.com_list.splice(0, state.com_list.length - MESSAGE_LIMIT);
+    }
   },
 
   motd_set: (state, motd) => {

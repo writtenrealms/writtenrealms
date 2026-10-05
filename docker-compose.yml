@@ -35,6 +35,8 @@ services:
       - CHANNEL_REDIS_HOST=${CHANNEL_REDIS_HOST:-redis}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-amqp://rabbitmq:5672}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis-celery:6379/0}
+      - COMMUNICATION_RETENTION_DAYS=${COMMUNICATION_RETENTION_DAYS:-3}
+      - COMMUNICATION_PRUNE_BATCH_SIZE=${COMMUNICATION_PRUNE_BATCH_SIZE:-10000}
     depends_on:
       db:
         condition: service_healthy
@@ -72,6 +74,8 @@ services:
       - CHANNEL_REDIS_HOST=${CHANNEL_REDIS_HOST:-redis}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-amqp://rabbitmq:5672}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis-celery:6379/0}
+      - COMMUNICATION_RETENTION_DAYS=${COMMUNICATION_RETENTION_DAYS:-3}
+      - COMMUNICATION_PRUNE_BATCH_SIZE=${COMMUNICATION_PRUNE_BATCH_SIZE:-10000}
     depends_on:
       db:
         condition: service_healthy
@@ -109,6 +113,8 @@ services:
       - CHANNEL_REDIS_HOST=${CHANNEL_REDIS_HOST:-redis}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-amqp://rabbitmq:5672}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis-celery:6379/0}
+      - COMMUNICATION_RETENTION_DAYS=${COMMUNICATION_RETENTION_DAYS:-3}
+      - COMMUNICATION_PRUNE_BATCH_SIZE=${COMMUNICATION_PRUNE_BATCH_SIZE:-10000}
     depends_on:
       db:
         condition: service_healthy

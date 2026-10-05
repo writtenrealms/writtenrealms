@@ -42,6 +42,7 @@ content between worlds, then use the system guides for field-by-field examples.
 - [Room Actions](room-actions.md)
 - [Builder Slash Commands](builder-command-reference.md)
 - [Socials](social-builder-guide.md)
+- [Communication and Moderation](communication-builder-guide.md)
 - [Instances](instance-builder-guide.md)
 
 ## Quests And Examples

@@ -4,6 +4,7 @@
       <div class="form-group" :class="{ 'with-action': !!$slots.action }">
         <input
           id="console-input"
+          ref="inputElement"
           type="text"
           v-model="input"
           @blur="onBlur"
@@ -21,7 +22,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { useStore } from 'vuex';
 import { getMovementDirectionFromArrowKey } from '@/core/keyboard';
 import { advanceTurnCommand, pendingTurnCommandState } from '@/core/instanceTimeControl';
@@ -29,11 +30,22 @@ import { advanceTurnCommand, pendingTurnCommandState } from '@/core/instanceTime
 const store = useStore();
 
 const input = ref("");
+const inputElement = ref<HTMLInputElement | null>(null);
 const focused = ref(false);
+
+watch(() => store.state.game.command_draft, async (draft) => {
+  if (!draft) return;
+  input.value = draft.text;
+  store.commit('game/command_draft_clear');
+  await nextTick();
+  inputElement.value?.focus();
+  inputElement.value?.setSelectionRange(input.value.length, input.value.length);
+}, { immediate: true });
 
 const communicationCommands = [
   'CHAT', 'CHA', 'CH', 'TELL', 'TEL', 'TE', 'REPLY', 'REPL', 'REP', 'SAY', 'SA',
-  'CCHAT', 'CCHA', 'CCH', 'CC', 'GOSSIP', 'GOSSI', 'GOSS', 'GOS', 'GO'
+  'CCHAT', 'CCHA', 'CCH', 'CC', 'GOSSIP', 'GOSSI', 'GOSS', 'GOS', 'GO',
+  'ASK', 'ANSWER', 'WHISPER'
 ];
 
 let last_sent = '';

@@ -11,6 +11,7 @@ from spawns.models import (
     Alias,
     CombatEncounter,
     CombatParticipant,
+    CommunicationMessage,
     DuelMatch,
     DuelParticipant,
     PlayerEvent,
@@ -28,6 +29,33 @@ class PlayerAdmin(BaseAdmin):
     # Detail
     exclude = ['equipment', 'viewed_rooms']
     raw_id_fields = ['world', 'room', 'equipment', 'user', 'config']
+
+
+class CommunicationMessageAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'created_ts', 'world_id', 'channel', 'sender_name',
+        'target_name', 'question_number', 'message_preview',
+    )
+    list_filter = ('channel', 'created_ts')
+    search_fields = ('sender_name', 'target_name', 'text')
+    readonly_fields = tuple(field.name for field in CommunicationMessage._meta.fields)
+    ordering = ('-created_ts', '-id')
+    list_per_page = 50
+    show_full_result_count = False
+    actions = None
+
+    @admin.display(description='Message')
+    def message_preview(self, message):
+        return message.text[:120]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 def eq_for(eq):
@@ -162,6 +190,7 @@ admin.site.register(DuelMatch, DuelMatchAdmin)
 admin.site.register(DuelParticipant, DuelParticipantAdmin)
 admin.site.register(CombatEncounter, CombatEncounterAdmin)
 admin.site.register(CombatParticipant, CombatParticipantAdmin)
+admin.site.register(CommunicationMessage, CommunicationMessageAdmin)
 admin.site.register(Player, PlayerAdmin)
 admin.site.register(Equipment, EquipmentAdmin)
 admin.site.register(Item, ItemAdmin)

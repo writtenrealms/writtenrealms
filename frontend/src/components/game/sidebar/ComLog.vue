@@ -2,9 +2,9 @@
   <ModalView id="coms_log">
     <h1 class="mb-6">Communication Log</h1>
     <template v-if="log_entries.length">
-      <div v-for="(entry, index) in log_entries" :key="index">{{ entry.text }}</div>
+      <Chat v-for="(entry, index) in log_entries" :key="index" :message="entry" class="mb-3" />
     </template>
-    <div v-else>No communication entries. You can send game-wide messages with the 'chat' command.</div>
+    <div v-else>No communication entries yet. Use 'ask' to ask a question, or 'listen' to see available channels.</div>
   </ModalView>
 </template>
 
@@ -12,6 +12,7 @@
 import { computed } from "vue";
 import { useStore } from "vuex";
 import ModalView from "@/components/ui/ModalView.vue";
+import Chat from "@/components/game/console/Chat.vue";
 
 const store = useStore();
 

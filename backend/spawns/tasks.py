@@ -249,6 +249,13 @@ def propagate_follow_movement(
 
 
 @shared_task(ignore_result=True)
+def prune_communication_messages(batch_size=None) -> int:
+    from spawns.communications import prune_communication_messages as prune
+
+    return prune(batch_size=batch_size)
+
+
+@shared_task(ignore_result=True)
 def prune_crafting_action_receipts(retention_days: int = 7) -> int:
     """Bound idempotency storage while keeping a generous client retry window."""
     try:

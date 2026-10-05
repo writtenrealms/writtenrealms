@@ -97,9 +97,10 @@ $color-red-70: #8b2b2e;
   color: $color-green;
 }
 
-// Extra UI colors taken from the map
+// Communication text uses lighter tones for contrast on the console background.
 $color-blue-chat: #4798c4;
-$color-green-chat: #26986d; // better contrast
+$color-green-chat: #84c9aa;
+$color-private-chat: #e69292;
 
 .color-blue-chat {
   color: $color-blue-chat;

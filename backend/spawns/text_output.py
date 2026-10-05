@@ -455,6 +455,68 @@ def _render_say_text(event_type: str, data: dict) -> str | None:
     return f"{actor_name} says '{text}'"
 
 
+def _render_channel_text(event_type: str, data: dict, *, viewer_id: int | None = None) -> str | None:
+    text = data.get("text")
+    if not text:
+        return None
+    command = event_type.split(".")[-2]
+    verb = "clan chat" if command == "cchat" else command
+    if event_type.startswith("cmd."):
+        line = f"You {verb} '{text}'"
+    else:
+        actor_name = _capfirst((data.get("actor") or {}).get("name"))
+        if not actor_name:
+            return None
+        target_name = ""
+        if command == "answer":
+            target = data.get("target") or {}
+            target_name = (
+                "you" if viewer_id is not None and viewer_id == target.get("id")
+                else _capfirst(target.get("name"))
+            )
+        target_suffix = f" {target_name}" if target_name else ""
+        line = f"{actor_name} {verb}s{target_suffix} '{text}'"
+    question_id = data.get("question_id")
+    if event_type == "notification.cmd.ask.success" and type(question_id) is int and question_id > 0:
+        line += f" [ {question_id} ]"
+    return line
+
+
+def _render_private_message_text(event_type: str, data: dict) -> str | None:
+    text = data.get("text")
+    if not text:
+        return None
+    command = event_type.split(".")[-2]
+    if event_type.startswith("cmd."):
+        target_name = _capfirst((data.get("target") or {}).get("name"))
+        if not target_name:
+            return None
+        verb = "whisper to" if command == "whisper" else "tell"
+        return f"You {verb} {target_name} '{text}'"
+    actor_name = _capfirst((data.get("actor") or {}).get("name"))
+    if not actor_name:
+        return None
+    verb = "whispers to" if command == "whisper" else "tells"
+    return f"{actor_name} {verb} you '{text}'"
+
+
+def _render_listen_text(data: dict) -> str:
+    channel = data.get("channel")
+    if channel:
+        if data.get("listening"):
+            return f"You now listen to the {channel} channel."
+        return f"You no longer listen to the {channel} channel."
+    channels = data.get("channels") or []
+    if not channels:
+        status = "You are not currently listening to any channels."
+    else:
+        status = "You are currently listening to: " + ", ".join(channels) + "."
+    return (
+        status + "\nAvailable channels: ask, chat, gossip."
+        "\nUse listen <channel> [on|off] to join or leave."
+    )
+
+
 def _render_emote_text(data: dict) -> str | None:
     text = data.get("text")
     if not text:
@@ -520,6 +582,7 @@ def render_event_text(
     data: dict,
     *,
     viewer: Player | None = None,
+    viewer_id: int | None = None,
 ) -> str | None:
     if event_type == "cmd.look.success":
         target_type = data.get("target_type")
@@ -570,6 +633,26 @@ def render_event_text(
         "notification.cmd.yell.success",
     ):
         return _render_say_text(event_type, data)
+
+    if event_type in (
+        "cmd.ask.success", "notification.cmd.ask.success",
+        "cmd.answer.success", "notification.cmd.answer.success",
+        "cmd.chat.success", "notification.cmd.chat.success",
+        "cmd.gossip.success", "notification.cmd.gossip.success",
+        "cmd.cchat.success", "notification.cmd.cchat.success",
+    ):
+        return _render_channel_text(
+            event_type, data, viewer_id=viewer.pk if viewer is not None else viewer_id,
+        )
+
+    if event_type in (
+        "cmd.tell.success", "notification.cmd.tell.success",
+        "cmd.whisper.success", "notification.cmd.whisper.success",
+    ):
+        return _render_private_message_text(event_type, data)
+
+    if event_type == "cmd.listen.success":
+        return _render_listen_text(data)
 
     if event_type in ("cmd.emote.success", "notification.cmd.emote.success"):
         return _render_emote_text(data)

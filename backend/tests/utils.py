@@ -58,9 +58,15 @@ def capture_game_messages() -> Generator[list[dict], None, None]:
             }
         )
 
+    def _capture_shared(player_keys, message):
+        for player_key in player_keys:
+            _capture(player_key, message)
+
     with patch("spawns.events.publish_to_player", side_effect=_capture), patch(
         "spawns.handlers.base.publish_to_player",
         side_effect=_capture,
+    ), patch(
+        "spawns.events.publish_to_players", side_effect=_capture_shared,
     ):
         yield messages
 

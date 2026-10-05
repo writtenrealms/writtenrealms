@@ -3,7 +3,10 @@
     <div id="console" ref="console" class="testing">
       <div class="message" v-for="message in messages" :key="message.request_id">
         <div v-if="message" class="mt-4">
-          <div v-for="(line, index) in getLines(message)" :key="index">{{ line }}</div>
+          <Chat v-if="message.type === 'notification.cmd.ask.success'" :message="message" />
+          <template v-else>
+            <div v-for="(line, index) in getLines(message)" :key="index">{{ line }}</div>
+          </template>
         </div>
       </div>
       <div id="console-bottom"></div>
@@ -18,6 +21,7 @@ import TimeControl from "@/components/game/TimeControl.vue";
 import { watch, nextTick, computed } from 'vue';
 import { useStore } from 'vuex';
 import Input from './Input.vue';
+import Chat from './console/Chat.vue';
 
 const store = useStore();
 

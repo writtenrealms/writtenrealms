@@ -144,7 +144,11 @@ const consoleMessage = (message) => {
       type === "cmd./jump.success" ||
       type === "affect.death") return LookRoom;
 
-  if (type === "notification.cmd.chat.success" ||
+  if (type === "cmd.ask.success" ||
+      type === "notification.cmd.ask.success" ||
+      type === "cmd.answer.success" ||
+      type === "notification.cmd.answer.success" ||
+      type === "notification.cmd.chat.success" ||
       type === "cmd.chat.success" ||
       type === "cmd./chat.success" ||
       type === "cmd.cchat.success" ||
@@ -275,6 +279,10 @@ const onScroll = () => scrollFollower?.onScroll();
       // Chat, yell, and world/zone/game writes have a prominent color.
       &.notification\.cmd\.yell\.success,
       &.notification\.cmd\.chat\.success,
+      &.notification\.cmd\.ask\.success,
+      &.notification\.cmd\.answer\.success,
+      &.cmd\.ask\.success,
+      &.cmd\.answer\.success,
       &.cmd\.chat\.success,
       &.cmd\.yell\.success,
       &.room_write,
@@ -284,9 +292,12 @@ const onScroll = () => scrollFollower?.onScroll();
       }
 
       &.cmd\.tell\.success,
+      &.notification\.cmd\.tell\.success,
+      &.cmd\.whisper\.success,
+      &.notification\.cmd\.whisper\.success,
       &.notification\.tell,
       &.cmd\.reply\.success {
-        color: $color-red;
+        color: $color-private-chat;
       }
 
       &.cmd\.cchat\.success,

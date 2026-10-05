@@ -49,6 +49,12 @@ state into WR2.
 
 Current required mappings:
 
+- Omit player channel subscriptions, communication history, and ask counters:
+  these are runtime state, outside every manifest contract. New WR2 characters
+  listen to `ask` by default; `chat` and `gossip` are opt-in. WR1's default `chat`
+  subscription is not an authored-world setting and must not be carried into a
+  converted world.
+
 - Emit authored mob assistance as `spec.combat.assist`: `none` by default,
   `same_spawn_cohort` only when the old content's intent is same-spawn allied
   assistance, or `allies` for explicit faction-allied assistance. The legacy

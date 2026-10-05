@@ -17,7 +17,7 @@ from core.trigger_steps import (
     SCRIPT_COMMAND_DEPTH_KEY,
     SCRIPT_COMMAND_PROVENANCE_KEY,
 )
-from fastapi_app.game_ws import publish_to_player
+from fastapi_app.game_ws import publish_to_player, publish_to_players
 from spawns.request_segments import normalize_request_segment
 
 
@@ -36,6 +36,10 @@ FOLLOW_HAS_FOLLOWERS_KEY = "_follow_has_followers"
 COMMAND_REQUEST_COMPLETED_EVENT_TYPE = "cmd.request.completed"
 COMMAND_RECEIPT_STATUS_COMPLETED = "completed"
 COMMAND_RECEIPT_STATUS_FAILED = "failed"
+SHARED_CHANNEL_EVENT_TYPES = frozenset({
+    f"notification.cmd.{channel}.success"
+    for channel in ("ask", "answer", "chat", "gossip", "cchat")
+})
 _TRIGGER_REQUEST_EVENT_TYPES = frozenset({
     "cmd.trigger.accepted",
     "cmd.trigger.completed",
@@ -688,26 +692,39 @@ def publish_events(
             public_data.pop(FOLLOW_HAS_FOLLOWERS_KEY, None)
             public_data.pop(FOLLOW_OUTBOX_EVENT_ID_KEY, None)
             message["data"] = public_data
-        for recipient in event.recipients:
-            from spawns.combat_publication import project_message
+        shared_channel_event = (
+            event_type in SHARED_CHANNEL_EVENT_TYPES
+            and not event.connection_id
+            and not (actor_key and connection_id and actor_key in event.recipients)
+            and '_combat_awards' not in message['data']
+            and '_combat_narration' not in message['data']
+        )
+        if shared_channel_event:
+            # Channel notifications have identical public data for everyone.
+            # Actor receipts and recipient-specific projections retain their
+            # existing single-recipient path below.
+            publish_to_players(event.recipients, message)
+        else:
+            for recipient in event.recipients:
+                from spawns.combat_publication import project_message
 
-            recipient_message = project_message(message, recipient)
-            recipient_connection_id = event.connection_id
-            if (
-                recipient_connection_id is None
-                and actor_key
-                and connection_id
-                and recipient == actor_key
-            ):
-                recipient_connection_id = connection_id
-            publish_to_player(
-                recipient,
-                correlate_actor_command_message(
-                    recipient_message,
-                    actor_key=recipient,
-                ),
-                connection_id=recipient_connection_id,
-            )
+                recipient_message = project_message(message, recipient)
+                recipient_connection_id = event.connection_id
+                if (
+                    recipient_connection_id is None
+                    and actor_key
+                    and connection_id
+                    and recipient == actor_key
+                ):
+                    recipient_connection_id = connection_id
+                publish_to_player(
+                    recipient,
+                    correlate_actor_command_message(
+                        recipient_message,
+                        actor_key=recipient,
+                    ),
+                    connection_id=recipient_connection_id,
+                )
 
         # Speech/social output forced by a Trigger is not voluntary player
         # input. Structural transfer events are different: the character
