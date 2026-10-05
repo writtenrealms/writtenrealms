@@ -1,4 +1,5 @@
 import { defineConfig, type DefaultTheme } from "vitepress";
+import { existsSync } from "node:fs";
 import { guideUrl } from "../scripts/redirects.mjs";
 
 const builderSidebar: DefaultTheme.SidebarItem[] = [
@@ -94,7 +95,8 @@ export default defineConfig({
   titleTemplate: ":title | Written Realms Guides",
   description: "Builder and player guides for Written Realms.",
   cleanUrls: true,
-  lastUpdated: true,
+  // Production releases use git archive, which does not include Git metadata.
+  lastUpdated: existsSync(new URL("../../.git", import.meta.url)),
   appearance: "dark",
   ignoreDeadLinks: false,
   head: [

@@ -12,7 +12,7 @@
         <template v-if="isAuthenticated">
           <router-link to="/lobby" :class="{ 'selected': isActive('lobby') }">Worlds</router-link>
           <a href="#" @click.prevent="editAccount" v-if="!isTemporary">Account</a>
-          <a href="https://docs.writtenrealms.com">Docs</a>
+          <a href="https://core.writtenrealms.com/docs/">Docs</a>
           <a href="#" @click.prevent="logout">Log Out</a>
         </template>
 

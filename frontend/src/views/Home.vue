@@ -212,7 +212,7 @@
             <img src="@/assets/frontpage/Discord-Logo-Color.svg" width="24px" />
           </a>
           <router-link to="/about">About</router-link>
-          <a href="https://docs.writtenrealms.com">Help</a>
+          <a href="https://core.writtenrealms.com/docs/">Help</a>
           <a href="https://blog.writtenrealms.com">Blog</a>
 
           <a href="https://twitter.com/Written_Realms">

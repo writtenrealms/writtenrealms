@@ -13,7 +13,7 @@
             <a href="#" @click.prevent="onClickMap">World Map</a>
           </div>
           <div class="action" @click="onClickDocumentation">
-            <a href="https://docs.writtenrealms.com" target="_blank">Documentation</a>
+            <a href="https://core.writtenrealms.com/docs/" target="_blank">Documentation</a>
           </div>
           <div class="action" @click="onClickChatOnDiscord">
             <a href="https://discord.gg/a3u82tR" target="_blank">Chat on Discord</a>
@@ -55,7 +55,7 @@ const user: any = computed(() => store.state.auth.user);
 
 const onClickDocumentation = () => {
   emit('close');
-  window.open("https://docs.writtenrealms.com", "_blank");
+  window.open("https://core.writtenrealms.com/docs/", "_blank");
 }
 
 const onClickChatOnDiscord = () => {

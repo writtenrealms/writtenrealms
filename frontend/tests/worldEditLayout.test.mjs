@@ -30,7 +30,7 @@ test("World Edit keeps concise batch guidance without an inline kind catalog", (
   assert.doesNotMatch(editWorldSource, /class="manifest-input"/);
   assert.match(
     editorMatch.groups.editor,
-    /href="https:\/\/docs\.writtenrealms\.com\/builders\/yaml-manifests"/,
+    /href="https:\/\/core\.writtenrealms\.com\/docs\/builders\/yaml-manifests"/,
   );
   assert.match(editorMatch.groups.editor, /View supported kinds and examples\./);
 });

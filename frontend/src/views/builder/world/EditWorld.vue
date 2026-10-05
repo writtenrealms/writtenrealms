@@ -16,7 +16,7 @@
           <div class="definition-meta color-text-60">
             Paste one or more YAML manifests. Each YAML document is applied in order.
             <a
-              href="https://docs.writtenrealms.com/builders/yaml-manifests"
+              href="https://core.writtenrealms.com/docs/builders/yaml-manifests"
               target="_blank"
               rel="noopener noreferrer"
             >View supported kinds and examples.</a>
@@ -30,7 +30,7 @@
       <div class="definition-meta color-text-60">
         Paste one or more YAML manifests. Each YAML document is applied in order.
         <a
-          href="https://docs.writtenrealms.com/builders/yaml-manifests"
+          href="https://core.writtenrealms.com/docs/builders/yaml-manifests"
           target="_blank"
           rel="noopener noreferrer"
         >View supported kinds and examples.</a>

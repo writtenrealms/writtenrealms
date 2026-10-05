@@ -13,10 +13,10 @@ const sources = await Promise.all([
 const combinedSource = sources.join("\n");
 
 test("builder help links use the published VitePress guide routes", () => {
-  assert.doesNotMatch(combinedSource, /docs\.writtenrealms\.com\/(?:building|playing)\//);
-  assert.match(combinedSource, /docs\.writtenrealms\.com\/builders\/yaml-manifests/);
-  assert.match(combinedSource, /docs\.writtenrealms\.com\/builders\/condition-builder-guide/);
-  assert.match(combinedSource, /docs\.writtenrealms\.com\/builders\/social-builder-guide/);
-  assert.match(combinedSource, /docs\.writtenrealms\.com\/builders\/room-actions/);
-  assert.match(combinedSource, /docs\.writtenrealms\.com\/builders\/world-publishing/);
+  assert.doesNotMatch(combinedSource, /docs\.writtenrealms\.com/);
+  assert.match(combinedSource, /core\.writtenrealms\.com\/docs\/builders\/yaml-manifests/);
+  assert.match(combinedSource, /core\.writtenrealms\.com\/docs\/builders\/condition-builder-guide/);
+  assert.match(combinedSource, /core\.writtenrealms\.com\/docs\/builders\/social-builder-guide/);
+  assert.match(combinedSource, /core\.writtenrealms\.com\/docs\/builders\/room-actions/);
+  assert.match(combinedSource, /core\.writtenrealms\.com\/docs\/builders\/world-publishing/);
 });
