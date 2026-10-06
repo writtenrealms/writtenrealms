@@ -40,8 +40,10 @@ export const createConsoleScrollFollower = (
       || current.visible !== previous.visible;
     // Shrinking content/a larger viewport can clamp scrollTop upward. Only
     // upward movement beyond that clamp indicates scrolling during a reflow.
+    // A duplicate queued event without movement does not change follow intent.
     const clampedPreviousTop = Math.min(previous.top, current.maximum);
-    if (!layoutChanged || current.top < clampedPreviousTop - BOTTOM_TOLERANCE) {
+    if ((!layoutChanged && current.top !== previous.top)
+      || current.top < clampedPreviousTop - BOTTOM_TOLERANCE) {
       following = current.gap <= BOTTOM_TOLERANCE;
     }
     previous = current;

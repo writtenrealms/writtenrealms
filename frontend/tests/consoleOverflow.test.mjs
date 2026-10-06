@@ -7,6 +7,12 @@ const consoleSource = await readFile(
   "utf8",
 );
 
+test("native scroll anchoring is disabled only while following console output", () => {
+  assert.match(consoleSource, /:class="\{ 'following-output': distanceToBottom === 0 \}"/);
+  assert.match(consoleSource, /&\.following-output\s*\{\s*overflow-anchor:\s*none;\s*\}/);
+  assert.equal(consoleSource.match(/overflow-anchor:/g)?.length, 1);
+});
+
 test("console messages do not become nested vertical scroll containers", () => {
   const messageRule = consoleSource.match(
     /\.message\s*\{(?<rule>[\s\S]*?)\/\/ Standalone console entries/,

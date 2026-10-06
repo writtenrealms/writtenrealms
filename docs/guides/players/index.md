@@ -98,7 +98,9 @@ next run.
 ## Clearing the Console
 
 The console follows new output and changing room actions while you are at the
-bottom. Scroll up to read earlier messages without being pulled back down. On
+bottom, including replies from **TALK** and other popup actions. It keeps
+following as older messages leave the 200-message history. Scroll up to read
+earlier messages without being pulled back down. On
 desktop, **JUMP TO BOTTOM** returns to the latest output and resumes following.
 
 Type `clear` on its own to empty the game console on desktop or mobile. New

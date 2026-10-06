@@ -1,6 +1,7 @@
 <template>
   <div id="console-wrapper">
-    <div id="console" ref="consoleElement" @scroll="onScroll">
+    <div id="console" ref="consoleElement" @scroll="onScroll"
+      :class="{ 'following-output': distanceToBottom === 0 }">
       <div class="buffer" :style="{ height: scrollHeight + 'px' }"></div>
       <div class="messages" ref="messageList">
         <component
@@ -254,6 +255,14 @@ const onScroll = () => scrollFollower?.onScroll();
     flex-direction: column;
 
     -webkit-overflow-scrolling: touch;
+
+    // The browser otherwise anchors old text when the 200-message history
+    // drops its first entry, moving scrollTop upward as new output arrives.
+    // Let our follower own the position at the bottom; retain native anchoring
+    // while the player reads scrollback.
+    &.following-output {
+      overflow-anchor: none;
+    }
 
     .message {
       // `hidden` on only one axis makes the other axis compute to `auto`,

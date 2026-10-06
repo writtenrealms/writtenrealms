@@ -44,6 +44,31 @@ test('late layout growth follows without a new message or a scroll event', () =>
   assert.deepEqual(distances, [0]);
 });
 
+test('duplicate queued scroll events after growth do not abandon bottom following', () => {
+  const { viewport, follower, distances } = fixture();
+  viewport.scrollHeight += 220;
+  follower.onScroll();
+  follower.onScroll();
+  follower.onLayoutChange();
+  assert.equal(viewport.scrollTop, 820);
+  assert.deepEqual(distances, [0]);
+});
+
+test('pruning old messages while adding replies keeps following through native clamping', () => {
+  const { viewport, follower, distances } = fixture();
+  // At the history limit, replacing a tall room with a short command shrinks
+  // the transcript, then the reply may grow it. Native anchoring is disabled
+  // while following, so the browser only clamps to the new maximum.
+  for (const delta of [-84, -65, 220, 0]) {
+    viewport.scrollHeight += delta;
+    follower.onScroll();
+    follower.onScroll();
+    follower.onLayoutChange();
+    assert.equal(viewport.scrollTop, viewport.scrollHeight - viewport.clientHeight);
+  }
+  assert.deepEqual(distances, [0]);
+});
+
 test('scrolling up before a pending follow preserves the readers position', () => {
   const { viewport, follower, distances } = fixture();
   viewport.scrollTop -= 120;
