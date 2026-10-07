@@ -1,8 +1,6 @@
 @import "colors";
 @import "fonts";
 @import "layout";
-@import "modals";
-@import "ui";
 
 // START RESET
 html,
@@ -111,12 +109,6 @@ section {
 body {
   line-height: 1;
 }
-ol,
-ul {
-  &.list {
-    list-style: show;
-  }
-}
 blockquote,
 q {
   quotes: none;
@@ -196,6 +188,13 @@ body {
       }
     }
   }
+}
+
+// Keyboard focus ring for interactive controls. Mouse and touch focus don't
+// match :focus-visible, so this only appears when navigating by keyboard.
+:is(a, button, [role="button"], [tabindex], summary):focus-visible {
+  outline: 2px solid $color-secondary;
+  outline-offset: 2px;
 }
 
 // Make links the primary color, and add an underline when hovering or clicking
@@ -288,15 +287,14 @@ ul.list {
   }
 }
 
-.help-text {
-  color: $color-text-hex-50;
-}
-
+// Inline code: commands, references and keys mentioned in running text.
 code {
+  @include font-mono;
+  font-size: 0.9em;
+  padding: 0 5px;
   border: 1px solid $color-background-very-light;
-  padding: 10px 15px;
-  word-spacing: 0.4em;
-  display: inline-block;
+  border-radius: 2px;
+  overflow-wrap: anywhere;
 }
 
 /* Useful class mixins */
@@ -380,8 +378,4 @@ code {
       width: 8px;
     }
   }
-}
-
-.min-line-height {
-  min-height: 14px;
 }

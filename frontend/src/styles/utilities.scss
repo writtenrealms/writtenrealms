@@ -1,0 +1,30 @@
+@import "colors";
+@import "fonts";
+@import "layout";
+
+// Single-purpose classes, emitted once globally from app.scss.
+//
+// Each selector repeats its class to double its specificity. These classes
+// used to be compiled into every component that imported colors.scss, where
+// scoping gave them the same specificity; doubling keeps that behavior so a
+// utility still beats general rules such as `.form-group label`, while a
+// component's own scoped rule for the same element still wins.
+
+// Text colors
+.color-text.color-text { color: $color-text; }
+.color-text-30.color-text-30 { color: $color-text-hex-30; }
+.color-text-50.color-text-50 { color: $color-text-hex-50; }
+.color-text-60.color-text-60 { color: $color-text-hex-60; }
+.color-text-70.color-text-70 { color: $color-text-hex-70; }
+.color-text-red.color-text-red { color: $color-red; }
+.color-primary.color-primary { color: $color-primary; }
+.color-secondary.color-secondary { color: $color-secondary; }
+
+// Fonts
+.font-text-regular.font-text-regular { @include font-text-regular; }
+.font-text-light.font-text-light { @include font-text-light; }
+
+// Layout
+@media ($mobile-site) {
+  .mobile-hidden.mobile-hidden { display: none; }
+}

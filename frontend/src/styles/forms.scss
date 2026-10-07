@@ -34,14 +34,6 @@
     }
   }
 
-  // So that the label and the input box are on the same line, for example
-  // with the ID field in builder
-  &.inline {
-    label {
-      display: inline-block;
-    }
-  }
-
   input,
   textarea,
   select {
@@ -83,6 +75,11 @@
     &:focus {
       background-color: $color-form-background;
     }
+
+    // Fields have no outline, so focus shows on the border instead.
+    &:focus:not(.error) {
+      border-color: $color-text-hex-60;
+    }
   }
 
   input,
@@ -112,10 +109,6 @@
     resize: vertical;
   }
 
-  .dark-text {
-    @include font-text-light;
-    opacity: 0.5;
-  }
 }
 
 .form-subsection {
@@ -145,24 +138,12 @@
     //     input { width: 90%;}
     // }
 
-    &.quad {
-      .form-group {
-        flex-basis: 25%;
-        flex-grow: 0;
-        flex-shrink: 0;
-
-        input {
-          width: 90%;
-        }
-      }
-    }
   }
 }
 
 /*          Buttons         */
 
 button {
-  outline: none;
   display: inline-block;
   &:hover {
     cursor: pointer;
@@ -189,7 +170,7 @@ a[role="button"].btn-small {
     box-shadow: none;
   }
 
-  &[disabled="disabled"] {
+  &:disabled {
     color: $color-text-hex-50;
     border-color: $color-text-hex-50;
     &:hover {
@@ -230,11 +211,21 @@ a[role="button"].btn-medium {
   padding: 0.75rem 1.5rem;
   font-weight: 700;
   letter-spacing: 1.2px;
-  outline: none;
 
   &:hover {
     cursor: pointer;
     background-color: $color-primary-70;
+  }
+
+  // Secondary action next to a primary btn-medium
+  &.button-gray {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px $color-text-hex-60;
+    color: $color-text;
+
+    &:hover {
+      background-color: $color-background-very-light;
+    }
   }
 }
 
@@ -290,7 +281,6 @@ a[role="button"].btn-add {
   &:active,
   &:focus {
     color: $color-primary;
-    outline: none;
   }
 }
 
@@ -305,19 +295,6 @@ a[role="button"].btn-thin {
 
   &:hover {
     text-decoration: underline;
-  }
-}
-
-button.btn-small,
-button.btn-medium,
-button.btn-large,
-button.btn-add {
-  &.btn-gray {
-    color: $color-text-hex-70;
-    border-color: $color-text-hex-70;
-    &:hover {
-      background-color: #333;
-    }
   }
 }
 
