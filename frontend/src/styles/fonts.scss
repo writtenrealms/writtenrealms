@@ -1,3 +1,5 @@
+// Font tokens and mixins only; see the note in colors.scss.
+
 $font-text: "Roboto Slab";
 $font-title: "brandon-grotesque";
 $font-mono: "Roboto Mono";
@@ -25,19 +27,6 @@ $font-mono: "Roboto Mono";
 }
 
 @mixin font-mono {
-  font-family: $font-mono;
+  font-family: $font-mono, monospace;
   font-size: 0.98em;
-}
-
-.font-text-regular {
-  @include font-text-regular;
-}
-.font-text-light {
-  @include font-text-light;
-}
-.font-title-regular {
-  @include font-title-regular;
-}
-.font-title-light {
-  @include font-title-light;
 }

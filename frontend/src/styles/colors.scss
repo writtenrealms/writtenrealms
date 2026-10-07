@@ -1,3 +1,7 @@
+// Color tokens. This file must only define variables: it is imported into
+// most component style blocks, so any CSS rule here would be duplicated in
+// each of them. Utility classes live in utilities.scss.
+
 $color-transparent-rgba: rgba(0, 0, 0, 0);
 
 /* Background colors */
@@ -53,59 +57,7 @@ $color-green-70: #266962; // equiv of .7 opacity of green
 $color-red: #c13434;
 $color-red-70: #8b2b2e;
 
-.color-text {
-  color: $color-text;
-}
-
-.color-text-red {
-  color: $color-red;
-}
-
-.color-text-30 {
-  color: $color-text-hex-30;
-}
-
-.color-text-40 {
-  color: $color-text-hex-40;
-}
-
-.color-text-50 {
-  color: $color-text-hex-50;
-}
-
-.color-text-60 {
-  color: $color-text-hex-60;
-}
-
-.color-text-70 {
-  color: $color-text-hex-70;
-}
-
-.color-primary {
-  color: $color-primary;
-}
-
-.color-secondary {
-  color: $color-secondary;
-}
-
-.color-red {
-  color: $color-red;
-}
-
-.color-green {
-  color: $color-green;
-}
-
 // Communication text uses lighter tones for contrast on the console background.
 $color-blue-chat: #4798c4;
 $color-green-chat: #84c9aa;
 $color-private-chat: #e69292;
-
-.color-blue-chat {
-  color: $color-blue-chat;
-}
-
-.color-green-chat {
-  color: $color-green-chat;
-}

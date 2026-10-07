@@ -19,8 +19,12 @@ import { useStore } from 'vuex';
 import Notification from '@/components/ui/Notification.vue';
 import Modal from '@/components/ui/Modal.vue';
 import Header from '@/components/Header.vue'
+import { setLucideProps } from '@lucide/vue';
 
 const route = useRoute();
+
+// Defaults for every @lucide/vue icon in the app; pass :size to override.
+setLucideProps({ size: 18, strokeWidth: 1.75 });
 const store = useStore();
 
 const notification = computed(() => store.state.ui.notification);
