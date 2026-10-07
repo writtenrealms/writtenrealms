@@ -10,7 +10,7 @@ class IntroConfigAdmin(BaseAdmin):
 
 
 class SiteControlAdmin(BaseAdmin):
-    list_display = ('name', 'maintenance_mode')
+    list_display = ('name', 'maintenance_mode', 'main_world_id')
 
 
 class EdeusUniquesAdmin(BaseAdmin):

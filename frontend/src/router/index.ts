@@ -28,8 +28,8 @@ const routes = [
   { path: '/ws', name: 'fastapi_ws', component: () => import('@/views/Ws.vue'), beforeEnter: ifAuthenticated },
 
   // Home
-  { path: '/', name: 'home', component: () => import('@/views/Home.vue') },
-  { path: '/home', name: 'homedirect', component: () => import('@/views/Home.vue') },
+  { path: '/', name: 'home', component: () => import('@/views/SiteEntry.vue') },
+  { path: '/home', name: 'homedirect', component: () => import('@/views/SiteEntry.vue') },
   { path: '/about', name: 'about', component: () => import('@/views/About.vue') },
   { path: '/terms', name: 'terms', component: () => import('@/views/Terms.vue') },
   { path: '/privacy', name: 'privacy', component: () => import('@/views/Privacy.vue') },
@@ -46,7 +46,7 @@ const routes = [
   { path: '/login-link/:token', name: 'loginlink', component: () => import('@/views/auth/LoginLink.vue') },
 
   // Lobby
-  { path: '/lobby', name: 'lobby', component: () => import('@/views/lobby/Lobby.vue'), beforeEnter: ifAuthenticated },
+  { path: '/lobby', name: 'lobby', component: () => import('@/views/SiteEntry.vue') },
   { path: '/lobby/:section', name: 'lobby_section', component: () => import('@/views/lobby/LobbySection.vue'), beforeEnter: ifAuthenticated },
   { path: '/create', name: 'world-create', component: () => import('@/views/lobby/WorldCreate.vue'), beforeEnter: ifAuthenticated },
 

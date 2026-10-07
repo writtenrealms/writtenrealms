@@ -59,6 +59,7 @@ api_v1_urls = [
     path('staff/nexus/<pk>/data/', system_views.NexusData.as_view(), name='staff-nexus-data'),
 
     # Lobby
+    path('lobby/config/', lobby_views.LobbyConfig.as_view(), name='lobby-config'),
 
     path('lobby/', lobby_views.Lobby.as_view(), name='lobby'),
     path('lobby/homedata/', lobby_views.HomeData.as_view(), name='lobby-home-data'),

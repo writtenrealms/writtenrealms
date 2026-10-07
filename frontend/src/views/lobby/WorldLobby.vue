@@ -39,17 +39,18 @@
           <UserChars />
         </div>
 
-        <div class="world-leaderboard" v-if="!create_character && (leaderboards.length || leaderboardError || world.id == 1)">
+        <div class="world-leaderboard" v-if="!create_character && (leaderboards.length || leaderboardError)">
           <LeaderboardPanels :panels="leaderboards" :error="leaderboardError" :loading="leaderboardsLoading"
             @retry="store.dispatch('lobby/fetch_leaderboards', route.params.world_id)" />
-
-          <div class="mt-6" v-if="world.id == 1">
-            <span class='mr-1 color-primary'>&#x2606;</span>
-            <router-link :to="{ 'name': 'edeus_unique_bearers' }">Unique Bearers</router-link>
-          </div>
         </div>
       </div>
     </div>
+  </div>
+  <div v-else-if="loadError" class="world-lobby-error" role="alert">
+    <p>{{ loadError }}</p>
+    <router-link v-if="!store.getters.isAuthenticated"
+      :to="{ name: 'login', query: { redirect: route.fullPath } }">Log in</router-link>
+    <button class="btn-small" @click="loadWorld">RETRY</button>
   </div>
   <div v-else class="loading-container">
     <div class="spinner"></div>
@@ -57,17 +58,17 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, onMounted, ref, watch }  from "vue";
-import { useRouter, useRoute } from "vue-router";
+import { computed, ref, watch }  from "vue";
+import { useRoute } from "vue-router";
 import { useStore } from "vuex";
 import UserChars from "@/components/lobby/UserChars.vue";
 import LeaderboardPanels from "@/components/lobby/LeaderboardPanels.vue";
 
 const store = useStore();
-const router = useRouter();
 const route = useRoute();
 
 const loaded = ref(false);
+const loadError = ref('');
 
 const world = computed(() => store.state.lobby.world);
 const leaderboards = computed(() => store.state.lobby.leaderboards);
@@ -84,18 +85,28 @@ const backgroundImage = computed(() => {
 
 const descLines = computed(() => world.value.description.split("\n"));
 
-onMounted(async () => {
-  if (store.state.auth.user.is_temporary) {
-    await store.dispatch('auth/logout');
-    router.push({name: 'home'});
+async function loadWorld() {
+  const worldId = route.params.world_id;
+  loaded.value = false;
+  loadError.value = '';
+  try {
+    if (store.state.auth.user.is_temporary) {
+      await store.dispatch('auth/logout');
+    }
+    await store.dispatch('lobby/initial_fetch', worldId);
+    if (route.params.world_id === worldId) loaded.value = true;
+  } catch (error: any) {
+    if (route.params.world_id !== worldId) return;
+    const status = error.response?.status;
+    loadError.value = status === 401 || status === 403
+      ? store.getters.isAuthenticated
+        ? 'This account does not have access to this world.'
+        : 'This world is private. Log in with an account that has access.'
+      : status === 404
+        ? 'This world is unavailable. It may not have been set up yet.'
+        : 'This world could not be loaded. Please try again.';
   }
-
-  await store.dispatch(
-    "lobby/initial_fetch",
-    route.params.world_id);
-
-  loaded.value = true;
-});
+}
 
 
 const copyShareLink = async () => {
@@ -127,19 +138,23 @@ const world_descriptors = computed(() => {
   return `${descriptor} ${world_type} WORLD`;
 });
 
-watch(() => route.params.world_id, (newWorldId) => {
-  if (newWorldId) {
-    store.dispatch(
-    "lobby/initial_fetch",
-    route.params.world_id);
-  }
-});
+watch(() => route.params.world_id, (worldId) => {
+  if (worldId) loadWorld();
+}, { immediate: true });
 </script>
 
 <style lang="scss">
 @import "@/styles/colors.scss";
 @import "@/styles/fonts.scss";
 @import "@/styles/layout.scss";
+
+.world-lobby-error {
+  max-width: 600px;
+  margin: 60px auto;
+  padding: 0 20px;
+
+  a, button { margin: 20px 20px 0 0; }
+}
 
 #world_lobby {
   width: 100%;

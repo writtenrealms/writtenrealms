@@ -3,6 +3,14 @@
 These guides cover the player-facing systems currently available in Written
 Realms Core.
 
+## Entering a World
+
+On a server featuring one main world, the homepage and **Lobby** open that
+world directly. Read its description, create a character, or choose **PLAY AS**
+to continue an existing character. Private worlds require an account with
+access. Servers configured for multiple worlds show a **Worlds** directory
+instead; direct links to a world work in either setup.
+
 ## First Steps: Ask for Help
 
 Unsure where to go or how something works? Type `ask` followed by your question

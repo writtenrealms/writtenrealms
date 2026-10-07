@@ -41,6 +41,19 @@ from users.models import User
 from worlds.models import World
 
 
+class LobbyConfig(APIView):
+    """Public landing configuration, independent of world/player counts."""
+
+    authentication_classes = ()
+    permission_classes = ()
+
+    def get(self, request):
+        config = system_models.SiteControl.objects.filter(name='prod').values(
+            'main_world_id',
+        ).first()
+        return Response(config if config is not None else {'main_world_id': 1})
+
+
 def exclude_archived_player_worlds(qs):
     return qs.exclude(
         Q(world__lifecycle=api_consts.WORLD_STATE_ARCHIVED) |

@@ -74,6 +74,33 @@ unset COMPOSE_FILE
 docker compose up -d --build
 ```
 
+## Main world and lobby
+
+Core opens a single world's lobby by default: `/`, `/home`, and `/lobby`
+redirect to `/worlds/1`. After creating or importing your world, set **Main
+world id** on the `prod` record in Django admin → System → Site controls
+(`/admin/system/sitecontrol/`). Use the root world's database ID, not a runtime
+spawn or instance ID. For example, to promote local world 12:
+
+```bash
+docker compose exec backend python manage.py shell -c "from system.models import SiteControl; SiteControl.objects.update_or_create(name='prod', defaults={'main_world_id': 12})"
+```
+
+Leave the field blank (`None` in Python) to restore the multi-world homepage
+and lobby. Reload the browser after changing it. This is a platform setting,
+not part of a world's portable manifest; no frontend rebuild is needed.
+
+The setting does not create or publish a world or grant access to it. A public
+landing world must be public in its world settings. An unavailable or private
+world displays an error/sign-in state. Builders can use **Build** in the header
+to reach their worlds and **Create World** to author another one. Direct world,
+builder, and lobby-section URLs remain available in either mode.
+
+The public `GET /api/v1/lobby/config/` endpoint returns only `main_world_id`.
+It reads one Site Control row; the browser shares and retains that request for
+the page lifetime. Single-world entry never requests the directory or homepage
+world lists, and adds no per-player work to the game loop.
+
 ## Reset the local database
 
 For a clean local onboarding pass, reset the Docker-backed Postgres data and let the app rebuild from migrations:

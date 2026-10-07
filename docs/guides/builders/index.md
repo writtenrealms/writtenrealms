@@ -4,6 +4,11 @@ Written Realms builders can work through focused editor screens or apply
 portable YAML in **World > Edit**. Start with the manifest guide when moving
 content between worlds, then use the system guides for field-by-field examples.
 
+Use **Build** in the site header to find worlds you build and **Create World**
+to start another. This remains available when the server's homepage and lobby
+feature a single main world. A world's lobby also offers **EDIT** when you
+have editing access.
+
 ## Start Here
 
 - [YAML Manifests](yaml-manifests.md) explains the editor workflow, batch

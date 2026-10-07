@@ -4,6 +4,9 @@
     <router-link class="gray-link" :to="{ name: 'lobby' }">Back to Lobby</router-link>
 
     <h1 class="section-title">{{ sectionName }}</h1>
+    <router-link v-if="section === 'building'" :to="{ name: 'world-create' }" class="color-primary">
+      Create World
+    </router-link>
 
     <div v-if="section == 'public'" class='public-worlds'>
       <div class="public-world flex mb-4" v-for="world in worlds" :key="world.id">
