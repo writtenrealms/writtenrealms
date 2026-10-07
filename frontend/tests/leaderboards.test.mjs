@@ -48,6 +48,18 @@ test('empty configured panels remain visible while disabled panels render no hea
   assert.match(await render({ error: true }), /RETRY/);
 });
 
+test('multiple rankings become tabs showing one panel; own characters are tagged', async () => {
+  const html = await render({ panels, ownPlayerIds: [5, 7] });
+  assert.equal(html.match(/role="tab"/g).length, 3);
+  assert.match(html, /aria-selected="true"[^>]*>A Persian Outpost/);
+  assert.equal(html.match(/style="display:none;"/g).length, 2);
+  assert.equal(html.match(/YOURS/g).length, 2);
+  const party = [{ ...panels[0], entries: [{ id: 5, is_party: true, name: 'Joe, Ally', clear_time_ms: 1 }] }];
+  const single = await render({ panels: party, ownPlayerIds: [5] });
+  assert.doesNotMatch(single, /YOURS|role="tab"/);
+  assert.match(single, /<h2/);
+});
+
 test('leaderboard failure does not block characters; retry recovers without reloading the world', async () => {
   const original = axios.get;
   let fail = true;
