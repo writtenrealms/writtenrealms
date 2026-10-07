@@ -205,6 +205,8 @@ def _plan_spec_hash(plan: SpawnPlan, *, entries: list[SpawnEntry] | None = None)
         }
         if entry.initial_state:
             entry_payload["initial_state"] = entry.initial_state
+        if entry.rewards:
+            entry_payload["rewards"] = entry.rewards
         hashed_entries.append(entry_payload)
     payload = {
         "slug": plan.slug,
@@ -275,6 +277,9 @@ def _entry_spec_hashes(
     if entry.initial_state:
         hashes["initial_state"] = _spec_digest(entry.initial_state)
         materialization["initial_state"] = hashes["initial_state"]
+    if entry.rewards:
+        hashes["rewards"] = _spec_digest(entry.rewards)
+        materialization["rewards"] = hashes["rewards"]
     hashes["materialization"] = _spec_digest(materialization)
     return hashes
 
@@ -1564,6 +1569,9 @@ def _materialize_placement(
             spawn_kwargs["rng"] = _rng_for_placement(placement)
             if entry is not None:
                 spawn_kwargs["initial_state"] = entry.initial_state
+                spawn_kwargs["currency_rewards"] = (entry.rewards or {}).get(
+                    "currencies",
+                )
         spawned = source.spawn(**spawn_kwargs)
         spawned.spawn_placement = placement
         group_id = _placement_group_id(placement)

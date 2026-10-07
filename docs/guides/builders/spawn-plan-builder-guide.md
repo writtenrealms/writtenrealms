@@ -174,6 +174,52 @@ loot:
 Spawn-entry loot uses the same `entries`, `source`, `source_pool`,
 `probability`, `quantity`, and `conditions` fields as mob-definition loot.
 
+## Spawn-Specific Currency Rewards
+
+Use `entries[].rewards.currencies` to replace the currency rewards for one
+placement without changing its mob definition:
+
+```yaml
+- slug: sparabara
+  source: mobdefinition.persian-sparabara
+  target: room@65
+  count: 1
+  rewards:
+    currencies:
+      gold: 2
+```
+
+This is the complete currency reward mapping for the entry, not an addition to
+the definition's rewards. Currency codes must exist in the base world's
+catalog, including for plans in instance templates. Amounts must be whole
+numbers from `0` through `9,007,199,254,740,991`; zero amounts are omitted from
+canonical exports.
+
+To spawn this sparabara with **no currency rewards and no item drops**, use:
+
+```yaml
+- slug: sparabara
+  source: mobdefinition.persian-sparabara
+  target: room@65
+  count: 1
+  rewards:
+    currencies: {}
+  loot:
+    inherit_definition: false
+    entries: []
+```
+
+Omit `rewards.currencies` to inherit the definition's currency rewards. Removing
+it when saving a plan restores inheritance for future spawns. An explicit
+`currencies: {}` disables all currency rewards and remains explicit on export.
+These settings affect currency rewards only; experience rewards are unchanged.
+
+Rewards are supported only when every possible entry source is a mob
+definition, including entries using `source_pool`. Each new or respawned mob
+gets its own reward snapshot. Saving a plan leaves surviving mobs' rewards
+unchanged. Later mob-definition edits preserve explicit placement overrides;
+mobs that inherited their rewards continue to follow definition edits.
+
 ## Targets
 
 A target says where the spawned copy should appear.
@@ -501,9 +547,10 @@ Live edits are rolling and non-destructive:
   Existing randomized slots retain their source, room, and traits when only the
   count changes.
 - Existing logical slots keep their placement identity and live output. Editing
-  a source, target, traits, initial state, or loot does not kill or move a mob
-  in combat and does not delete an item a player may be carrying. The new
-  settings take effect when that slot next needs to be materialized.
+  a source, target, traits, initial state, loot, or currency rewards does not
+  kill or move a mob in combat and does not delete an item a player may be
+  carrying. The new settings take effect when that slot next needs to be
+  materialized.
 - Cohort membership metadata is refreshed during reconciliation so newly added
   followers can join a surviving patrol without duplicating its leader.
 - Removing or disabling an entry, or decreasing its count, retires the excess

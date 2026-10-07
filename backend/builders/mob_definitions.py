@@ -201,6 +201,7 @@ def spawn_mob_from_definition(
     roams=None,
     rule=None,
     initial_state=None,
+    currency_rewards=None,
 ):
     from core.scoped_state import (
         initialize_character_state,
@@ -243,6 +244,10 @@ def spawn_mob_from_definition(
         "ignored_attributes": roll_result.ignored_attributes,
         "randomized": roll_result.randomized,
     }
+    # Keep the override's provenance with this mob, even if its entry is later
+    # edited or removed. Definition synchronization must preserve its rewards.
+    if currency_rewards is not None:
+        roll_metadata["currency_rewards_overridden"] = True
 
     mob = Mob.objects.create(
         world=spawn_world,
@@ -251,7 +256,11 @@ def spawn_mob_from_definition(
         definition_slug_snapshot=definition.slug,
         roll_metadata=roll_metadata,
         loot=copy.deepcopy(definition.loot or {}),
-        currency_reward_snapshot=_currency_reward_snapshot(definition),
+        currency_reward_snapshot=(
+            copy.deepcopy(currency_rewards)
+            if currency_rewards is not None
+            else _currency_reward_snapshot(definition)
+        ),
         attackable=definition.attackable,
         talkable=definition.talkable,
         health=mob_fields.get("health_max") or 1,
@@ -315,7 +324,8 @@ def sync_spawned_mobs_from_definition(definition) -> int:
             setattr(mob, field_name, value)
         mob.attackable = definition.attackable
         mob.talkable = definition.talkable
-        mob.currency_reward_snapshot = reward_snapshot
+        if not roll_metadata.get("currency_rewards_overridden"):
+            mob.currency_reward_snapshot = reward_snapshot
         mob.health = mob.health_max
         mob.stamina = mob.stamina_max
         mob.energy = mob.energy_max

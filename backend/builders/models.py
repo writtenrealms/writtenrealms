@@ -654,6 +654,7 @@ class MobDefinition(AdventBaseModel):
         rule=None,
         rng=None,
         initial_state=None,
+        currency_rewards=None,
     ):
         from builders.mob_definitions import spawn_mob_from_definition
 
@@ -665,6 +666,7 @@ class MobDefinition(AdventBaseModel):
             roams=roams,
             rule=rule,
             initial_state=initial_state,
+            currency_rewards=currency_rewards,
         )
 
 
@@ -761,6 +763,7 @@ class SpawnEntry(AdventBaseModel):
     initial_state = models.JSONField(default=dict, blank=True)
     traits = models.JSONField(default=dict, blank=True)
     loot = models.JSONField(default=dict, blank=True)
+    rewards = models.JSONField(default=dict, blank=True)
     conditions = models.JSONField(default=dict, blank=True)
 
     class Meta(AdventBaseModel.Meta):

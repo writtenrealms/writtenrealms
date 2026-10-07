@@ -196,6 +196,11 @@ Current required mappings:
 - WR1 `Loader` / `Rule` rows export as `kind: spawnplan` entries. WR2 no longer
   imports or stores loader/rule rows, and runtime item/mob rows no longer keep
   `rule_id` or source-template FKs.
+- A converted mob placement with an explicitly authored currency reward
+  override may emit `entries[].rewards.currencies` as a complete code-to-amount
+  mapping. An empty map disables currency rewards for that placement. Omit the
+  field when the placement should inherit its mob definition's rewards; never
+  infer an override from WR1 runtime balances or inventory.
 - Converted zones and spawn plans omit `spec.default_roam_chance` unless the
   WR1 source has an explicit authored value with equivalent scope. Do not emit
   `0` merely because the source lacks a value: on these WR2 manifests `null`
@@ -883,6 +888,30 @@ Instance world manifests continue to inherit the base world's core
 An instance-local plan or target-zone default therefore overrides the inherited
 world fallback. Mob definitions remain shared with the base world, so a
 positive definition-level `roam_chance` remains the highest-precedence value.
+
+## Spawn-Entry Currency Rewards
+
+Mob-only spawn entries accept `rewards.currencies`, using base-world currency
+codes and the shared non-negative integer amount validator. The mapping
+replaces all definition currency rewards for that placement. Omission inherits
+the definition; `currencies: {}` explicitly disables currency rewards. Empty
+overrides survive YAML export/import. Zero amounts are normalized out of the
+mapping without losing the explicit override. Item and mixed source pools
+reject `rewards`.
+
+`SpawnEntry.rewards` stores the authored override. Plan and materialization
+hashes include it, so rolling edits affect future materializations while live
+mobs retain their current rewards and placements. Instance runs retain the
+existing snapshot/freeze policy for template edits.
+
+Materialization passes the override directly into the existing
+`Mob.currency_reward_snapshot`. `roll_metadata.currency_rewards_overridden`
+records provenance so later definition synchronization preserves the mob's
+override even after an entry is edited or removed. Inheriting mobs still
+receive definition reward edits. Combat continues to consume the same snapshot.
+Currency validation loads one catalog per plan import; explicit overrides
+avoid definition reward lookups during spawning and add no combat queries.
+Currency usage/deletion checks include authored spawn-entry reward mappings.
 
 ## Initial State Manifest Shape
 

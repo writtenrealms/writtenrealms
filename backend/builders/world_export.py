@@ -48,6 +48,7 @@ from core.death_routing import (
     acquire_death_routing_config_locks,
     death_routing_config_ids_for_world,
 )
+from core.economy import economy_world, validate_currency_amount
 from core.mob_traits import normalize_trait_table
 from core.scoped_state import (
     STATE_SCOPE_ROOM,
@@ -1113,6 +1114,8 @@ def _serialize_spawn_entry(
         )
     if entry.initial_state:
         data["initial_state"] = copy.deepcopy(entry.initial_state)
+    if entry.rewards:
+        data["rewards"] = copy.deepcopy(entry.rewards)
     if entry.loot:
         data["loot"] = _canonicalize_nested_conditions(
             copy.deepcopy(entry.loot),
@@ -5857,6 +5860,40 @@ def delete_faction_manifest(*, world: World, manifest: dict[str, Any]) -> Factio
         return faction
 
 
+def _normalize_spawn_rewards(
+    value: Any,
+    *,
+    currency_codes: set[str],
+    field_name: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise serializers.ValidationError(f"{field_name} must be a mapping.")
+    unknown_fields = set(value) - {"currencies"}
+    if unknown_fields:
+        raise serializers.ValidationError(
+            f"Unsupported {field_name} field(s): {', '.join(sorted(map(str, unknown_fields)))}."
+        )
+    if "currencies" not in value:
+        return {}
+    raw_currencies = value["currencies"]
+    if not isinstance(raw_currencies, dict):
+        raise serializers.ValidationError(f"{field_name}.currencies must be a mapping.")
+    currencies = {}
+    for code, raw_amount in raw_currencies.items():
+        amount_field = f"{field_name}.currencies.{code}"
+        if code not in currency_codes:
+            raise serializers.ValidationError(f"{amount_field} references an unknown currency code.")
+        try:
+            amount = validate_currency_amount(raw_amount, field_name=amount_field)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict)
+        if amount:
+            currencies[code] = amount
+    # The empty mapping explicitly disables currency rewards. Do not collapse
+    # it to {}, which means inherit the definition.
+    return {"currencies": currencies}
+
+
 def apply_spawn_plan_manifest(
     *,
     world: World,
@@ -5911,6 +5948,14 @@ def apply_spawn_plan_manifest(
             raise serializers.ValidationError(f"Duplicate spawn entry slug '{entry_slug}'.")
         entry_slugs.add(entry_slug)
 
+    # Resolve the catalog once per plan, rather than querying per entry/currency.
+    currency_codes = (
+        set(Currency.objects.filter(world=economy_world(world)).values_list(
+            "code", flat=True,
+        ))
+        if any("rewards" in entry_spec for entry_spec in entries)
+        else set()
+    )
     normalized_entries = []
     for index, entry_spec in enumerate(entries):
         entry_field = f"spec.entries[{index}]"
@@ -5939,6 +5984,19 @@ def apply_spawn_plan_manifest(
                 f"{entry_field}.initial_state is only supported when every "
                 "source is a mob definition."
             )
+        if "rewards" in entry_spec and any(
+            resolved.source_type != "mobdefinition"
+            for resolved in resolved_sources
+        ):
+            raise serializers.ValidationError(
+                f"{entry_field}.rewards is only supported when every "
+                "source is a mob definition."
+            )
+        rewards = _normalize_spawn_rewards(
+            entry_spec.get("rewards", {}),
+            currency_codes=currency_codes,
+            field_name=f"{entry_field}.rewards",
+        )
         target = _validate_spawn_target(
             world=world,
             target=entry_spec.get("target"),
@@ -5984,6 +6042,7 @@ def apply_spawn_plan_manifest(
             "initial_state": initial_state,
             "traits": traits,
             "loot": loot,
+            "rewards": rewards,
             "conditions": entry_conditions,
         })
 
@@ -6032,6 +6091,7 @@ def apply_spawn_plan_manifest(
                 "initial_state",
                 "traits",
                 "loot",
+                "rewards",
                 "conditions",
             ):
                 setattr(entry, field_name, normalized[field_name])

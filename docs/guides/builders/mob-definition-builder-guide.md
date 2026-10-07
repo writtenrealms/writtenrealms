@@ -143,6 +143,11 @@ the complete currency-reward mapping for that mob definition. Omit the entire
 See [currency-builder-guide.md](currency-builder-guide.md)
 for defining currencies and choosing a default.
 
+A spawn-plan mob entry can replace this mapping for one placement using
+`rewards.currencies`, or disable currency rewards with `rewards.currencies: {}`.
+See [Spawn-Specific Currency Rewards](spawn-plan-builder-guide.md#spawn-specific-currency-rewards).
+Definition edits preserve these explicit overrides on existing mobs.
+
 For mobs, `weapon_damage` is an internal combat stat. It represents the mob's
 weapon, claws, bite, slam, or other natural attack without requiring a spawned
 weapon item. Runtime mob damage ignores equipped weapon items and uses the mob's

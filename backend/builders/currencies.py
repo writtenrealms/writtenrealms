@@ -202,6 +202,12 @@ def _payload_references_currency(value, *, code: str) -> bool:
         for key, child in value.items():
             normalized_key = str(key).strip().lower()
             if (
+                normalized_key == "currencies"
+                and isinstance(child, dict)
+                and code in child
+            ):
+                return True
+            if (
                 normalized_key in {
                     "currency",
                     "currency_code",
@@ -437,7 +443,7 @@ def currency_usage_map(
     add_structured(
         "spawn entry",
         SpawnEntry.objects.filter(plan__world__in=authored_worlds),
-        ("source", "count", "placement", "traits", "loot", "conditions"),
+        ("source", "count", "placement", "traits", "loot", "rewards", "conditions"),
     )
     add_structured(
         "ability",
