@@ -2,35 +2,49 @@
   <div class="world-chars-region">
     <CreateChar v-if="newCharacter" :world="world" @charcreated="onCharCreated" />
     <div class="world-chars" v-else>
-      <div class="world-chars-title">YOUR CHARACTERS</div>
+      <div class="world-chars-header">
+        <div class="world-chars-title">YOUR CHARACTERS</div>
+        <input v-if="expanded" v-model="filter" type="search" class="chars-filter"
+          placeholder="Filter by name or class" aria-label="Filter characters" />
+      </div>
 
-      <div class="world-chars-container mt-8">
-        <div v-for="char in chars" :key="char.id" class="char-display panel panel-shadow">
-          <div class="more-actions hover" @click="onClickMoreActions(char.id)">
-            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <div class="world-chars-list" v-if="chars.length">
+        <div v-for="char in shownChars" :key="char.id" class="char-row">
+          <div class="char-identity">
+            <div class="char-name">
+              <span class="char-name-text">{{ char.name }}</span>
+              <span v-if="char.is_builder" class="color-text-50 ml-2">[ Builder ]</span>
+              <span v-if="world.is_multiplayer && !char.world_is_multi" class='color-text-50 ml-2'>[ SPW ]</span>
+            </div>
+            <div class="char-info" v-if="world.allow_combat">{{ charInfo(char) }}</div>
           </div>
-
-          <UserCharActions
-            :player="char"
-            v-if="more_actions[char.id]"
-            @close="onCloseCharActions"/>
-
-          <div class="char-name">
-            {{ char.name }}
-            <span v-if="char.is_builder" class="color-text-50 ml-2">[ Builder ]</span>
-            <span v-if="world.is_multiplayer && !char.world_is_multi" class='color-text-50 ml-2'>[ SPW ]</span>
-          </div>
-          <div class="char-info" v-if="world.allow_combat">{{ charInfo(char) }}</div>
-          <div class="enter-world">
-            <button
-              class="btn-small play-as"
-              @click="onTransfer(char)"
-              v-if="char.can_transfer && !user.is_temporary"
-            >TRANSFER {{ char.name }}</button>
-            <button class="btn-small play-as" @click="onEnter(char)" v-else>PLAY AS {{ char.name }}</button>
+          <span class="char-played">{{ formatRelativeModifiedDate(char.last_connection_ts) }}</span>
+          <button class="btn-small" @click="playChar(char)">{{ needsTransfer(char) ? 'TRANSFER' : 'PLAY' }}</button>
+          <div class="char-more">
+            <button class="icon-button" :aria-label="`More actions for ${char.name}`"
+              @click="onClickMoreActions(char.id)">
+              <Ellipsis aria-hidden="true" />
+            </button>
+            <UserCharActions
+              :player="char"
+              v-if="more_actions[char.id]"
+              @close="onCloseCharActions"/>
           </div>
         </div>
-        <button class="btn-add new-character" @click="onClickCreateChar()">CREATE NEW CHARACTER</button>
+        <p v-if="!shownChars.length" class="color-text-50 chars-empty">No characters match.</p>
+      </div>
+      <div v-else class="chars-none">
+        <p class="color-text-60">You don't have a character in this world yet.</p>
+        <button class="btn-add" @click="onClickCreateChar()">CREATE NEW CHARACTER</button>
+      </div>
+
+      <div class="chars-more" v-if="chars.length > VISIBLE_CHARS">
+        <button class="btn-thin" @click="toggleExpanded">
+          {{ expanded ? 'SHOW FEWER' : `SHOW ALL ${chars.length} CHARACTERS` }}
+        </button>
+        <span class="color-text-50">
+          {{ expanded ? (filter ? `${shownChars.length} of ${chars.length} match` : `Showing all ${chars.length}`) : `Showing ${VISIBLE_CHARS} of ${chars.length}` }}
+        </span>
       </div>
     </div>
   </div>
@@ -39,20 +53,25 @@
 <script lang="ts" setup>
 import { computed, onMounted, ref } from "vue";
 import { useStore } from "vuex";
-import { useRouter, useRoute } from "vue-router";
-import { capfirst } from "@/core/utils";
+import { useRoute } from "vue-router";
+import { capfirst, formatRelativeModifiedDate } from "@/core/utils";
+import { Ellipsis } from "@lucide/vue";
+import { useCharEntry } from "@/composables/useCharEntry";
 import CreateChar from "./CreateChar.vue";
 import UserCharActions from "./UserCharActions.vue";
 
+const VISIBLE_CHARS = 5;
 
 const store = useStore();
 const route = useRoute();
-const router = useRouter();
+const { needsTransfer, playChar } = useCharEntry();
 
-const chars = computed(() => store.state.lobby.chars);
+const chars = computed(() => store.state.lobby.chars || []);
 const world = computed(() => store.state.lobby.world);
-const user = computed(() => store.state.auth.user);
 const newCharacter = computed(() => store.state.lobby.create_character);
+
+const expanded = ref(false);
+const filter = ref('');
 
 let more_actions = ref({});
 
@@ -70,25 +89,22 @@ const charInfo = (char) => {
   return `${capfirst(char.gender)} ${char.archetype}, level ${char.level}`;
 }
 
+// Characters arrive most recently played first.
+const shownChars = computed(() => {
+  if (!expanded.value) return chars.value.slice(0, VISIBLE_CHARS);
+  const query = filter.value.trim().toLowerCase();
+  if (!query) return chars.value;
+  return chars.value.filter(char =>
+    `${char.name} ${charInfo(char)}`.toLowerCase().includes(query));
+});
+
+const toggleExpanded = () => {
+  expanded.value = !expanded.value;
+  filter.value = '';
+}
+
 const onCharCreated = () => {
   store.commit("lobby/create_character_set", false);
-}
-
-const onEnter = (char) => {
-  store.dispatch('game/request_enter_world', {
-      player_id: char.id,
-      world_id: route.params.world_id
-    });
-}
-
-const onTransfer = async (char) => {
-  router.push({
-    name: 'lobby_world_transfer',
-    params: {
-      player_id: char.id,
-      world_id: route.params.world_id,
-    },
-  });
 }
 
 const  onClickCreateChar = () => {
@@ -112,85 +128,125 @@ const onCloseCharActions = () => {
 <style lang="scss" scoped>
 @import "@/styles/colors.scss";
 @import "@/styles/fonts.scss";
+@import "@/styles/layout.scss";
 
 .world-chars-region {
-  padding-top: 50px;
-  margin-bottom: 150px;
+  padding-top: 40px;
+  margin-bottom: 100px;
 
   // Your characters
   .world-chars {
+    .world-chars-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      min-height: 34px;
+      margin-bottom: 10px;
+    }
+
     .world-chars-title {
       @include font-title-regular;
       color: $color-secondary;
       letter-spacing: 1.5px;
       font-size: 15px;
       line-height: 18px;
-      // margin-bottom: 27px;
     }
 
-    .world-chars-container {
-      justify-content: space-between;
+    .chars-filter {
+      width: 220px;
+      max-width: 100%;
+      padding: 5px 10px;
+      font-size: 13px;
+      background: $color-form-background;
+      border: 1px solid $color-form-border;
+      border-radius: 2px;
+      color: $color-text;
+    }
+
+    .char-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto auto;
+      gap: 18px;
+      align-items: center;
+      padding: 13px 0;
+      border-bottom: 1px solid $color-background-light-border;
+
+      &:first-child {
+        border-top: 1px solid $color-background-light-border;
+      }
+
+      @media ($mobile-site) {
+        grid-template-columns: minmax(0, 1fr) auto auto;
+
+        .char-played {
+          display: none;
+        }
+      }
+    }
+
+    .char-name {
+      @include font-text-regular;
+      line-height: 22px;
+      overflow-wrap: anywhere;
+    }
+
+    .char-info {
+      @include font-text-light;
+      font-size: 13px;
+      line-height: 20px;
+      color: $color-text-hex-60;
+    }
+
+    .char-played {
+      @include font-title-light;
+      font-size: 12px;
+      letter-spacing: 0.5px;
+      color: $color-text-hex-50;
+      white-space: nowrap;
+    }
+
+    .char-more {
+      position: relative;
+
+      .expanded-actions {
+        position: absolute;
+        right: 0;
+        top: 26px;
+        z-index: 10;
+        border: 1px solid #333;
+        border-top: 0px;
+        background: #222;
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.25);
+      }
+    }
+
+    .chars-empty {
+      padding: 12px 0;
+    }
+
+    .chars-none {
+      p {
+        margin-bottom: 16px;
+      }
+    }
+
+    .chars-more {
       display: flex;
-      flex-direction: row;
+      justify-content: space-between;
+      align-items: center;
       flex-wrap: wrap;
+      gap: 12px;
+      padding-top: 12px;
+      font-size: 13px;
 
-      .char-display {
-        margin-bottom: 50px;
-        flex-basis: 47%;
-        position: relative;
-
-        .more-actions {
-          position: absolute;
-          right: 8px;
-          top: 0;
-
-          .dot {
-            height: 3px;
-            width: 3px;
-            background-color: $color-text-half;
-            border-radius: 50%;
-            display: inline-block;
-            margin-right: 5px;
-          }
-
-          &:hover {
-            .dot {
-              background-color: $color-primary;
-            }
-          }
-        }
-
-        .expanded-actions {
-          position: absolute;
-          right: -10px;
-          top: 25px;
-          border: 1px solid #333;
-          border-top: 0px;
-          background: #222;
-          box-shadow: 0 5px 15px rgba(0, 0, 0, 0.25);
-        }
-
-        .char-name {
-          @include font-text-regular;
-          line-height: 20px;
-        }
-
-        .char-info {
-          @include font-text-light;
-          line-height: 23px;
-          color: $color-text-hex-50;
-        }
-
-        .play-as {
-          margin-top: 15px;
-          text-transform: uppercase;
-        }
+      .btn-thin {
+        @include font-title-regular;
+        font-size: 13px;
+        letter-spacing: 1px;
+        padding: 4px 0;
       }
-
-      .create-character {
-        margin-top: 12px;
-      }
-
     }
   }
 

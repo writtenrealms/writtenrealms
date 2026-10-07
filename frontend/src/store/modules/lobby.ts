@@ -27,7 +27,7 @@ const actions = {
     );
 
     const userCharsPromise = axios.get(
-      `/lobby/worlds/${world_id}/chars/?page_size=30`
+      `/lobby/worlds/${world_id}/chars/?page_size=100`
     );
 
     const leaderboardPromise = dispatch('fetch_leaderboards', world_id);

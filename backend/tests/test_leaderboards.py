@@ -120,6 +120,8 @@ class TestLeaderboards(WorldTestCase):
         panel = self.panels()[0]
         self.assertIn('Party clears', panel['description'])
         self.assertEqual([r['name'] for r in panel['entries']], ['Joe, Ally'])
+        # Party entries are keyed by record, so the lobby must not match them to characters.
+        self.assertTrue(panel['entries'][0]['is_party'])
 
     def test_duels_use_three_completed_matches_win_percentage_then_wins(self):
         more = self.create_player('More')

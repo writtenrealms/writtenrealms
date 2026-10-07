@@ -98,7 +98,7 @@ def _instance(world, panel, templates):
         # Party runs are records, not individual personal bests. Snapshot names
         # survive cleanup; one bounded query returns at most the requested rows.
         result['entries'] = [
-            {'id': r.pk, 'name': ', '.join(p['name'] for p in r.participants), 'clear_time_ms': r.clear_time_ms}
+            {'id': r.pk, 'is_party': True, 'name': ', '.join(p['name'] for p in r.participants), 'clear_time_ms': r.clear_time_ms}
             for r in records.only('id', 'participants', 'clear_time_ms').order_by('clear_time_ms', 'completed_at', 'pk')[:panel.get('limit', 10)]
         ]
     return result
@@ -118,7 +118,7 @@ def world_leaderboard_panels(world):
                            w.config.instance_single_player, w.config.instance_goal)
                           for w in sorted(templates.values(), key=lambda w: w.pk)]]
     digest = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()[:24]
-    key = f'lobby-rankings:v1:{world.pk}:{digest}'
+    key = f'lobby-rankings:v2:{world.pk}:{digest}'
     cached = cache.get(key)
     if cached is not None and cached['fresh_until'] > time.time():
         return cached['panels']
