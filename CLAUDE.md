@@ -196,6 +196,7 @@ docker compose logs -f celery-beat
 - Components in `src/components/` (PascalCase.vue)
 - Store modules in `src/store/modules/`
 - Communicates with Django REST API and FastAPI WebSockets
+- Before UI work, consult the style guide at `/styleguide` (`src/views/StyleGuide.vue`) and keep it current; see "Frontend UI Conventions" in `AGENTS.md` for tokens, global styles, and icons (`@lucide/vue`)
 
 ### Legacy WR1 Engine (Out Of Tree)
 - ZeroMQ-based real-time game engine (WR1)
