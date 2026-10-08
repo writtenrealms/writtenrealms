@@ -28,6 +28,7 @@ from core.view_mixins import (
     WorldValidatorMixin)
 
 from lobby import serializers as lobby_serializers
+from lobby.characters import delete_character
 from lobby.cache import LOBBY_FIXED_SECTIONS_CACHE_KEY
 from lobby.serializers import LobbyWorldSerializer, LobbyWorldCardSerializer
 from lobby.models import FeaturedWorld, DiscoverWorld, InDevelopmentWorld
@@ -38,7 +39,22 @@ from system import (
     models as system_models)
 from users import serializers as user_serializers
 from users.models import User
-from worlds.models import World
+from worlds.models import Room, World
+
+
+class LobbyConfig(APIView):
+    """Public landing configuration, independent of world/player counts."""
+
+    authentication_classes = ()
+    permission_classes = ()
+
+    def get(self, request):
+        config = system_models.SiteControl.objects.filter(name='prod').values(
+            'main_world_id', 'building_enabled',
+        ).first()
+        return Response(config if config is not None else {
+            'main_world_id': 1, 'building_enabled': True,
+        })
 
 
 def exclude_archived_player_worlds(qs):
@@ -246,44 +262,62 @@ class PlayingWorlds(WorldCardListView):
         return self.get_annotated_queryset(world_order)
 
 
-class BuildingWorlds(WorldCardListView):
+class BuildingWorlds(generics.ListAPIView):
+    """
+    The user's world inventory: worlds they author or were added to as a
+    builder, most recently opened first, with instances nested under their
+    base world when the user can build both.
+    """
 
-    serializer_class = LobbyWorldCardSerializer
-
-    def get_serializer_context(self):
-        return {
-            'request': self.request,
-            'char_counts': 'user'
-        }
+    serializer_class = lobby_serializers.BuildingWorldSerializer
+    pagination_class = None
+    MAX_WORLDS = 500
 
     def get_queryset(self):
-        world_ids = []
-
-        # Get Worlds where the user is the author
-        world_ids.extend(
-            World.objects.filter(
-                author=self.request.user,
-                context_id__isnull=True
-            ).exclude(
-                lifecycle=api_consts.WORLD_STATE_ARCHIVED,
-            ).values_list('id', flat=True))
-
-        # Worlds where the user is a builder
-        world_ids.extend(
-            WorldBuilder.objects.filter(
-                world__context_id__isnull=True,
-                user=self.request.user
-            ).exclude(
-                world__lifecycle=api_consts.WORLD_STATE_ARCHIVED,
-            ).values_list('world_id', flat=True))
-
-        sorted_world_ids = LastViewedRoom.objects.filter(
-            world_id__in=world_ids,
+        user = self.request.user
+        builder_world_ids = WorldBuilder.objects.filter(user=user).values('world_id')
+        players_count = Player.objects.filter(
+            Q(world__context_id=OuterRef('pk'))
+            | Q(world__context__instance_of_id=OuterRef('pk')),
+            user__is_temporary=False,
         ).exclude(
             world__lifecycle=api_consts.WORLD_STATE_ARCHIVED,
-        ).order_by('-modified_ts').values_list('world_id', flat=True)
+        ).order_by().values(
+            base_world_id=Coalesce('world__context__instance_of_id', 'world__context_id'),
+        ).annotate(cnt=Count('id')).values('cnt')
+        rooms_count = Room.objects.filter(
+            world_id=OuterRef('pk'),
+        ).order_by().values('world_id').annotate(cnt=Count('id')).values('cnt')
+        return World.objects.filter(
+            Q(author=user) | Q(pk__in=builder_world_ids),
+            context__isnull=True,
+        ).exclude(
+            lifecycle=api_consts.WORLD_STATE_ARCHIVED,
+        ).select_related('config', 'instance_of').annotate(
+            num_rooms=Coalesce(Subquery(rooms_count[:1], output_field=IntegerField()), 0),
+            num_characters=Coalesce(Subquery(players_count[:1], output_field=IntegerField()), 0),
+            last_opened=Subquery(LastViewedRoom.objects.filter(
+                world_id=OuterRef('pk'), user=user,
+            ).values('modified_ts')[:1]),
+            latest_review_status=Subquery(WorldReview.objects.filter(
+                world_id=OuterRef('pk'),
+            ).order_by('-created_ts').values('status')[:1]),
+        ).order_by(F('last_opened').desc(nulls_last=True), '-created_ts', '-pk')[:self.MAX_WORLDS]
 
-        return self.get_annotated_queryset(sorted_world_ids)
+    def list(self, request, *args, **kwargs):
+        worlds = list(self.get_queryset())
+        listed = {world.pk: world for world in worlds}
+        rows = []
+        for world in worlds:
+            world.listed_instances = []
+        for world in worlds:
+            parent = listed.get(world.instance_of_id)
+            if parent is not None:
+                world.nested = True
+                parent.listed_instances.append(world)
+            else:
+                rows.append(world)
+        return Response(self.get_serializer(rows, many=True).data)
 
 
 class ReviewedWorlds(generics.ListAPIView):
@@ -529,21 +563,7 @@ class WorldCharacters(WorldLobbyBase,
         return super().partial_update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
-        player = self.get_object()
-
-        if player.in_game:
-            raise ValidationError(
-                "Cannot delete a player currently in a game.")
-
-        if player.instance_participations.filter(exited_at__isnull=True).count():
-            raise ValidationError(
-                "Cannot delete a player with live instances.")
-
-        player.name = "%s%s" % (player.name, player.id)
-        player.pending_deletion_ts = timezone.now()
-        player.save()
-
-        #self.perform_destroy(player)
+        delete_character(self.get_object())
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 world_chars = WorldCharacters.as_view({

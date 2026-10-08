@@ -14,7 +14,8 @@ def get_staff_panel():
 
     site_control = SiteControl.objects.get(name='prod')
     panel_data = {
-        'maintenance_mode': site_control.maintenance_mode
+        'maintenance_mode': site_control.maintenance_mode,
+        'building_enabled': site_control.building_enabled,
     }
 
     # Unreviewed publication submissions

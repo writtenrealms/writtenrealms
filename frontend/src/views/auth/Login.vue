@@ -21,6 +21,10 @@
       </div>
 
       <button class="btn-medium">SEND LOGIN LINK</button>
+      <p class="auth-switch color-text-60">
+        New to Written Realms?
+        <router-link :to="{ name: 'signup', query: redirect ? { redirect } : {} }">Sign up</router-link>
+      </p>
     </template>
 
     <template v-if="googleAuthEnabled">
@@ -42,6 +46,7 @@ import { useStore } from "vuex";
 import { useRouter, useRoute } from "vue-router";
 import { GoogleLogin } from 'vue3-google-login';
 import { GOOGLE_AUTH_ENABLED } from "@/config";
+import { rememberPostLoginRedirect, safeRedirect } from "@/core/authRedirect";
 
 const email = ref("");
 const sent = ref(false);
@@ -56,7 +61,10 @@ onMounted(() => {
   emailInput.focus();
 });
 
+const redirect = safeRedirect(route.query.redirect);
+
 const login = async () => {
+  rememberPostLoginRedirect(redirect);
   await store.dispatch('auth/login', {
     email: email.value
   });
@@ -66,11 +74,6 @@ const login = async () => {
 const googleLoginCallback = async (response) => {
   await store.dispatch('auth/google_login', response.credential);
 
-  // Check if there's a redirect query parameter
-  if (route.query.redirect) {
-    router.push(route.query.redirect as string);
-  } else {
-    router.push("/lobby");
-  }
+  router.push(redirect || "/lobby");
 }
 </script>

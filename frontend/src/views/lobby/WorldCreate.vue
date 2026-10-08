@@ -2,6 +2,10 @@
   <div id="world-create">
     <h2>CREATE NEW WORLD</h2>
 
+    <p v-if="!canCreateWorlds" class="creation-closed color-text-60">
+      World creation is closed right now. Staff can still create worlds, and you can keep building worlds you author or were added to.
+    </p>
+
     <FormField
       :elementSchema="name_schema"
       v-model="world_name"
@@ -42,7 +46,7 @@
       :formErrors="formErrors"
     />
 
-    <button class="btn-medium" :disabled="creating" @click="create">
+    <button class="btn-medium" :disabled="creating || !canCreateWorlds" @click="create">
       {{ creating ? "CREATING..." : "CREATE" }}
     </button>
   </div>
@@ -55,9 +59,11 @@ import { useRouter } from "vue-router";
 import FormField from "@/components/forms/FormField.vue";
 import { FormElement } from "@/core/forms.ts";
 import { builderRoomIndexRoute } from "@/core/builderRoutes";
+import { useBuilding } from "@/composables/useBuilding";
 
 const store = useStore();
 const router = useRouter();
+const { canCreateWorlds } = useBuilding();
 
 const world_name = ref("A New World");
 const is_multi = ref(true);

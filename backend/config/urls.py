@@ -3,6 +3,7 @@ from django.urls import path, re_path, include
 from rest_framework.urlpatterns import format_suffix_patterns
 
 from builders import views as builder_views
+from lobby import characters as lobby_characters
 from lobby import views as lobby_views
 from quests import views as quest_views
 from spawns import views as spawn_views
@@ -43,6 +44,7 @@ api_v1_urls = [
 
     # Staff
     path('staff/panel/', system_views.staff_panel, name='staff_panel'),
+    path('staff/site/', system_views.staff_site_settings, name='staff-site-settings'),
     path('staff/init/', system_views.staff_init, name='staff_init'),
     path('staff/teardown/', system_views.staff_teardown, name='staff_teardown'),
     path('staff/worlds/', system_views.RootWorlds.as_view(), name='staff-worlds'),
@@ -59,6 +61,7 @@ api_v1_urls = [
     path('staff/nexus/<pk>/data/', system_views.NexusData.as_view(), name='staff-nexus-data'),
 
     # Lobby
+    path('lobby/config/', lobby_views.LobbyConfig.as_view(), name='lobby-config'),
 
     path('lobby/', lobby_views.Lobby.as_view(), name='lobby'),
     path('lobby/homedata/', lobby_views.HomeData.as_view(), name='lobby-home-data'),
@@ -83,6 +86,8 @@ api_v1_urls = [
     path('lobby/worlds/<pk>/leaders/', lobby_views.world_leaders, name='lobby-world-leaders'),
     path('lobby/worlds/<pk>/leaderboards/', lobby_views.WorldLeaderboards.as_view(), name='lobby-world-leaderboards'),
     path('lobby/worlds/<world_pk>/transfer/', lobby_views.transfer, name='lobby-world-transfer'),
+    path('lobby/characters/<int:pk>/', lobby_characters.CharacterDetail.as_view(), name='lobby-character'),
+    path('lobby/characters/<int:pk>/items/', lobby_characters.CharacterItems.as_view(), name='lobby-character-items'),
 
     # Game calls made by a player either in game or in lobby
     path('game/enter/', spawn_views.EnterGame.as_view(), name='enter-game'),

@@ -3,6 +3,37 @@
 These guides cover the player-facing systems currently available in Written
 Realms Core.
 
+## Entering a World
+
+On a server featuring one main world, the homepage and **Lobby** open that
+world directly. Read its description, then choose **Sign up to play** or
+**Log in**; after the login link from your email you return to the same world.
+Choose **Continue as** to pick up your most recent character, **New character**
+to make another, or **Play** next to any character in your list. Private worlds
+require an account with access. Servers configured for multiple worlds show a
+**Worlds** directory instead; direct links to a world work in either setup.
+
+## Character Pages
+
+Click a character in your list, or a name in a world's rankings, to open its
+character page. Other players see a character's name, title, class, level,
+description, and what they are wearing. On your own characters you also see
+stats, currencies, and everything they carry, and you can:
+
+- equip and remove gear, and move items into or out of bags you carry;
+- edit the description other players see when they look at you;
+- delete the character.
+
+Item changes and deletion are only available while the character is out of
+the game; manage items in the game while you are playing.
+If you enter the game in another tab, further item changes on the character
+page are refused. Characters ready to transfer after completing a world show
+**Transfer** on their character page, just as they do in the world lobby.
+
+In private worlds, character pages are visible to players with access,
+including the world's author and builders. Other players' inventories and
+stats remain private, and invisible characters stay hidden from non-staff.
+
 ## First Steps: Ask for Help
 
 Unsure where to go or how something works? Type `ask` followed by your question

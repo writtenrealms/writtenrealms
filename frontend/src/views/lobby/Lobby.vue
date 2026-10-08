@@ -88,15 +88,15 @@
     </div>
 
     <!-- Building -->
-    <div class="lobby-section building">
+    <div class="lobby-section building" v-if="canCreateWorlds || building_worlds.length">
       <div class="section-title">Building</div>
       <div class="worlds-list-section-worlds" :class="{ two_length: playing_worlds.length === 1 }">
         <WorldCard v-for="world in building_worlds.slice(0, 2)" :key="world.id" :world="world" />
-        <router-link :to="{ name: 'world-create'}" class="create-world">
+        <router-link v-if="canCreateWorlds" :to="{ name: 'world-create'}" class="create-world">
           <button class="btn btn-add">CREATE WORLD</button>
         </router-link>
       </div>
-      <router-link :to="{ name: 'lobby_section', params: { section: 'building' } }" class="lobby-section-link">
+      <router-link :to="{ name: 'lobby_building' }" class="lobby-section-link">
         View More
       </router-link>
     </div>
@@ -145,6 +145,7 @@ import { useStore } from "vuex";
 import axios from "axios";
 import { World } from "@/core/interfaces";
 import WorldCard from "@/components/lobby/WorldCard.vue"
+import { useBuilding } from "@/composables/useBuilding";
 
 
 const chars = ref<any[]>([]);
@@ -168,6 +169,7 @@ const include_unreviewed = ref<boolean>(true);
 const store = useStore();
 const router = useRouter();
 const route = useRoute();
+const { canCreateWorlds } = useBuilding();
 
 onMounted(async () => {
   if (store.state.auth.user.is_temporary) {

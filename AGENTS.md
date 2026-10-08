@@ -52,6 +52,26 @@
 - Vue components are `PascalCase.vue` in `frontend/src/components/`; TypeScript uses `camelCase`.
 - No repo-wide formatter is enforced; match the style in the surrounding files.
 
+## Frontend UI Conventions
+
+- Before adding or changing UI, consult the style guide at `/styleguide`
+  (`frontend/src/views/StyleGuide.vue`) and reuse its classes, components, and
+  tokens instead of writing one-off styles.
+- Keep the style guide current in the same change: add any new shared class,
+  variant, or token to it (sections are ordered by how widely they are used),
+  and remove styles and examples that nothing uses anymore.
+- Use the tokens in `frontend/src/styles/colors.scss`, `fonts.scss`, and
+  `layout.scss` for colors, fonts, and breakpoints. Those files are imported
+  into most components, so they must only define variables and mixins; put
+  global rules in `ui.scss` or `forms.scss`, and single-purpose classes in
+  `utilities.scss`.
+- Icons come from `@lucide/vue`: import each icon by name, keep the app-wide
+  defaults set in `App.vue` unless a size is needed, and use `.icon-button`
+  with an `aria-label` for icon-only controls. Don't hand-draw SVG icons or add
+  another icon library.
+- Keep the in-game client's existing look unless the change is specifically
+  about it.
+
 ## Testing Guidelines
 
 - `make test` is the canonical backend test command. It runs full Django test

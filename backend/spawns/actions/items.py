@@ -487,6 +487,7 @@ class EquipAction:
         *,
         command_type: str = "equip",
         wield_only: bool = False,
+        build_events: bool = True,
     ) -> ActionResult:
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
@@ -494,7 +495,6 @@ class EquipAction:
             if not player.room_id:
                 raise ActionError("You are nowhere. Cannot equip items.", code="no_room")
 
-            room = Room.objects.get(pk=player.room_id)
             equipment = Equipment.objects.select_for_update().get(pk=player.equipment_id)
             player.equipment = equipment
             selected_items = _select_equipment_candidates(player, selector)
@@ -577,6 +577,13 @@ class EquipAction:
             if not (equipped_items or swapped_items or removed_items or unequippable_items):
                 raise ActionError("You can't equip that.", code="not_equippable")
 
+        # Lobby callers hold the player lock across their offline/ownership
+        # checks and the mutation. They serialize their own response once,
+        # without loading the room or building unused observer events.
+        if not build_events:
+            return ActionResult()
+
+        room = Room.objects.get(pk=player.room_id)
         updated_player = get_player_with_related(player_id)
         actor_payload = serialize_actor(updated_player, updated_player.room)
         room_payload = serialize_room(
@@ -671,14 +678,16 @@ class EquipAction:
 
 
 class RemoveEquipmentAction:
-    def execute(self, player_id: int, selector: str, *, command_type: str = "remove") -> ActionResult:
+    def execute(
+        self, player_id: int, selector: str, *,
+        command_type: str = "remove", build_events: bool = True,
+    ) -> ActionResult:
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
             door_cancellation_events = _cancel_pending_door_action(player)
             if not player.room_id:
                 raise ActionError("You are nowhere. Cannot remove equipment.", code="no_room")
 
-            room = Room.objects.get(pk=player.room_id)
             equipment = Equipment.objects.select_for_update().get(pk=player.equipment_id)
             player.equipment = equipment
             selected_items = _select_equipped_items(player, selector)
@@ -701,6 +710,11 @@ class RemoveEquipmentAction:
             if touched_slots:
                 equipment.save(update_fields=sorted(touched_slots))
 
+        # Offline callers only need the mutation, not game event payloads.
+        if not build_events:
+            return ActionResult()
+
+        room = Room.objects.get(pk=player.room_id)
         updated_player = get_player_with_related(player_id)
         actor_payload = serialize_actor(updated_player, updated_player.room)
         room_payload = serialize_room(
@@ -762,7 +776,10 @@ class RemoveEquipmentAction:
 
 
 class GetAction:
-    def execute(self, player_id: int, selector: str, source_selector: str | None = None) -> ActionResult:
+    def execute(
+        self, player_id: int, selector: str, source_selector: str | None = None,
+        *, build_events: bool = True,
+    ) -> ActionResult:
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
             door_cancellation_events = _cancel_pending_door_action(player)
@@ -914,6 +931,10 @@ class GetAction:
             if not moved_items and not claimed_items:
                 raise ActionError("You don't see that here.", code="item_not_found")
 
+        # Offline callers only need the mutation, not game event payloads.
+        if not build_events:
+            return ActionResult()
+
         updated_player = get_player_with_related(player_id)
         actor_payload = serialize_actor(updated_player, updated_player.room)
         room_payload = serialize_room(
@@ -1015,7 +1036,10 @@ class GetAction:
 
 
 class PutAction:
-    def execute(self, player_id: int, selector: str, target_selector: str) -> ActionResult:
+    def execute(
+        self, player_id: int, selector: str, target_selector: str,
+        *, build_events: bool = True,
+    ) -> ActionResult:
         with transaction.atomic():
             player = Player.objects.select_for_update().get(pk=player_id)
             door_cancellation_events = _cancel_pending_door_action(player)
@@ -1079,6 +1103,10 @@ class PutAction:
             for item in moved_items:
                 item.container = target_container
                 item.save(update_fields=["container_type", "container_id"])
+
+        # Offline callers only need the mutation, not game event payloads.
+        if not build_events:
+            return ActionResult()
 
         updated_player = get_player_with_related(player_id)
         actor_payload = serialize_actor(updated_player, updated_player.room)

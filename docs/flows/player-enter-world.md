@@ -12,6 +12,14 @@ This document describes the current WR2 flow for getting a player from lobby to 
 
 ## 1) Lobby: choose or create a character
 
+Before rendering `/`, `/home`, or `/lobby`, the client loads
+`GET /api/v1/lobby/config/` once per page lifetime. A non-null `main_world_id`
+(default `1`) redirects to `/worlds/<id>`, preserving query parameters and the
+fragment. A null value restores the multi-world pages and the authenticated
+directory flow. Site Control manages this platform setting independently of
+world permissions and manifest content. No directory queries run during
+single-world entry.
+
 1. World lobby page loads world + user characters:
    - `GET /api/v1/lobby/worlds/<world_id>/`
    - `GET /api/v1/lobby/worlds/<world_id>/chars/`

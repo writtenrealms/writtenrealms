@@ -38,12 +38,11 @@
 
 <script lang="ts" setup>
 import { computed, nextTick, onMounted, ref } from "vue";
-import { useStore } from "vuex";
+import axios from "axios";
 import ModalView from "@/components/ui/ModalView.vue";
 import type { Player } from "@/core/interfaces";
 
-const store = useStore();
-const props = defineProps<{ player: Player }>();
+const props = defineProps<{ player: Player; afterDelete?: () => void }>();
 const emit = defineEmits(["close"]);
 
 const confirmationName = ref("");
@@ -76,11 +75,12 @@ const onSubmit = async () => {
   isDeleting.value = true;
 
   try {
-    store.commit("lobby/char_id_set", props.player.id);
-    await store.dispatch("lobby/char_delete");
+    await axios.delete(`/lobby/characters/${props.player.id}/`);
     emit("close");
-  } catch {
-    errorMessage.value = "Unable to delete the character. Please try again.";
+    props.afterDelete?.();
+  } catch (error: any) {
+    errorMessage.value = error.response?.data?.[0] || error.response?.data?.detail
+      || "Unable to delete the character. Please try again.";
     isDeleting.value = false;
   }
 };

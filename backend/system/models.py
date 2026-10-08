@@ -1,6 +1,7 @@
 import os
 
 from django.db import models
+from django.core.validators import MinValueValidator
 from django.utils import timezone
 
 from config import game_settings as adv_config
@@ -44,7 +45,22 @@ class SiteControl(AdventBaseModel):
 
     name = models.TextField()
     maintenance_mode = models.BooleanField(default=False)
-    platform_policy = models.JSONField(default=dict, blank=True)
+    building_enabled = models.BooleanField(
+        default=True,
+        help_text=(
+            'Allow any signed-up user to create worlds and see the Build '
+            'menu. Staff can always build, and builders keep access to '
+            'worlds they already author or were added to.'
+        ),
+    )
+    main_world_id = models.PositiveIntegerField(
+        default=1, null=True, blank=True, validators=[MinValueValidator(1)],
+        help_text=(
+            'Root world opened by the homepage and lobby. Defaults to world 1. '
+            'Leave blank to show the multi-world homepage and lobby. '
+            'This does not change world visibility or access permissions.'
+        ),
+    )
 
 
 class Nexus(BaseModel):

@@ -10,7 +10,8 @@
 
       <div class="menu" v-if="showMenu">
         <template v-if="isAuthenticated">
-          <router-link to="/lobby" :class="{ 'selected': isActive('lobby') }">Worlds</router-link>
+          <router-link to="/lobby" :class="{ 'selected': isLobbyActive }">{{ lobbyLabel }}</router-link>
+          <router-link v-if="canCreateWorlds" :to="{ name: 'lobby_building' }">Build</router-link>
           <a href="#" @click.prevent="editAccount" v-if="!isTemporary">Account</a>
           <a href="https://core.writtenrealms.com/docs/">Docs</a>
           <a href="#" @click.prevent="logout">Log Out</a>
@@ -26,20 +27,32 @@
 </template>
 
 <script lang="ts" setup>
-import { computed } from 'vue';
+import { computed, onMounted } from 'vue';
 import { useStore } from 'vuex';
 import { useRouter } from 'vue-router';
 import { FormElement, EntityForm } from '@/core/forms';
 import ConfirmEmail from '@/components/account/ConfirmEmail.vue';
 import StaffAccount from '@/components/account/StaffAccountSlot.vue';
+import { loadPlatformConfig, platformConfig } from '@/core/platform';
+import { useBuilding } from '@/composables/useBuilding';
 
 const store = useStore();
 const router = useRouter();
 
+const { canCreateWorlds } = useBuilding();
+
 const showMenu = true;
 const isAuthenticated = computed(() => store.getters.isAuthenticated);
 const isTemporary = false;
-const isActive = (route) => { return router.currentRoute.value.name === route; }
+const lobbyLabel = computed(() => platformConfig.value?.main_world_id === null ? 'Worlds' : 'Lobby');
+const isLobbyActive = computed(() => {
+  const route = router.currentRoute.value;
+  return route.name === 'lobby' || (
+    route.name === 'lobby_world_details' &&
+    String(route.params.world_id) === String(platformConfig.value?.main_world_id)
+  );
+});
+onMounted(() => { loadPlatformConfig().catch(() => {}); });
 
 
 const editAccount = () => {
@@ -112,7 +125,10 @@ const logout = () => {
     padding: 0 15px;
 
     @media ($mobile-site) {
-      height: 50px;
+      min-height: 50px;
+      height: auto;
+      padding-top: 10px;
+      padding-bottom: 10px;
     }
 
     display: flex;
@@ -120,6 +136,7 @@ const logout = () => {
     align-items: center;
 
     .logo {
+      flex-shrink: 0;
       a {
         text-decoration: none;
       }
@@ -138,7 +155,11 @@ const logout = () => {
       text-align: right;
 
       @media ($mobile-site) {
-        text-align: center;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px 12px;
+
       }
 
       a {
@@ -148,6 +169,11 @@ const logout = () => {
         line-height: 18px;
         margin-left: 1em;
         opacity: 0.3;
+
+        @media ($mobile-site) {
+          margin-left: 0;
+          font-size: 14px;
+        }
 
         &:hover {
           color: $color-primary;

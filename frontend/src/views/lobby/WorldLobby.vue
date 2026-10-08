@@ -1,55 +1,63 @@
 <template>
   <div id="world_lobby" v-if="world && loaded" :key="String(world.id)">
-    <div class="world-details">
-      <div class="world-home-bg" :style="backgroundImage">
-        <div class="world-home-bg-overlay"></div>
-      </div>
-
-      <div class="world-home flex">
-        <div class="world-home-left-side">
-          <div class="world-info">
-            <div class="world-title">{{ world.name }}</div>
-            <div class="world-author">
-              By {{ world.built_by }}
-            </div>
-            <div class='world-misc mt-1'>
-              <span class='color-text-50 world-type'>
-                {{ world_descriptors }}
-              </span>
-              <span class="divider"></span>
-              <a href="javascript:void(0)" @click.prevent="copyShareLink">SHARE</a>
-              <template v-if="world.can_edit">
-                <span class="divider"></span>
-                <router-link
-                  :to="{ name: 'builder_world_index', params: { world_id: route.params.world_id } }">EDIT</router-link>
-              </template>
-            </div>
-            <div class='instance-of' v-if="world.instance_of.name">
-              <span class='color-text-50'>INSTANCE OF&nbsp;</span>
-              <router-link :to="{ name: 'lobby_world_details', params: { world_id: world.instance_of.id } }">
-                {{ world.instance_of.name.toUpperCase() }}
-              </router-link>
-            </div>
-
-            <div class="world-description mt-4">
-              <div class="desc-line" v-for="(line, index) of descLines" :key="index">{{ line }}</div>
-            </div>
-          </div>
-
-          <UserChars />
+    <div class="world-hero">
+      <div class="world-hero-art" :style="backgroundImage"></div>
+      <div class="world-hero-content">
+        <h1 class="world-title">{{ world.name }}</h1>
+        <div class="world-tools">
+          <button class="icon-button" title="Copy link to this world" aria-label="Copy link to this world"
+            @click="copyShareLink">
+            <Share aria-hidden="true" />
+          </button>
+          <router-link v-if="world.can_edit" class="icon-button" title="Edit this world" aria-label="Edit this world"
+            :to="{ name: 'builder_world_index', params: { world_id: route.params.world_id } }">
+            <Pencil aria-hidden="true" />
+          </router-link>
         </div>
-
-        <div class="world-leaderboard" v-if="!create_character && (leaderboards.length || leaderboardError || world.id == 1)">
-          <LeaderboardPanels :panels="leaderboards" :error="leaderboardError" :loading="leaderboardsLoading"
-            @retry="store.dispatch('lobby/fetch_leaderboards', route.params.world_id)" />
-
-          <div class="mt-6" v-if="world.id == 1">
-            <span class='mr-1 color-primary'>&#x2606;</span>
-            <router-link :to="{ 'name': 'edeus_unique_bearers' }">Unique Bearers</router-link>
-          </div>
+        <div class='instance-of' v-if="world.instance_of.name">
+          <span class='color-text-50'>INSTANCE OF&nbsp;</span>
+          <router-link :to="{ name: 'lobby_world_details', params: { world_id: world.instance_of.id } }">
+            {{ world.instance_of.name.toUpperCase() }}
+          </router-link>
+        </div>
+        <div class="world-actions" v-if="!create_character">
+          <template v-if="!isAuthenticated">
+            <router-link class="btn-medium" role="button" :to="signupRoute">SIGN UP TO PLAY</router-link>
+            <router-link class="btn-medium button-gray" role="button"
+              :to="{ name: 'login', query: { redirect: route.path } }">LOG IN</router-link>
+          </template>
+          <template v-else-if="resumeChar">
+            <button class="btn-medium" @click="playChar(resumeChar)">
+              {{ needsTransfer(resumeChar) ? 'TRANSFER' : 'CONTINUE AS' }} {{ resumeChar.name.toUpperCase() }}
+            </button>
+            <button class="btn-medium button-gray" @click="onClickCreateChar">NEW CHARACTER</button>
+          </template>
+          <button v-else class="btn-medium" @click="onClickCreateChar">CREATE A CHARACTER</button>
         </div>
       </div>
     </div>
+
+    <div class="world-body">
+      <div class="world-main" :class="{ creating: create_character }">
+        <div class="world-description">
+          <div class="desc-line" v-for="(line, index) of descLines" :key="index">{{ line }}</div>
+        </div>
+
+        <UserChars />
+      </div>
+
+      <div class="world-leaderboard" v-if="!create_character && (leaderboards.length || leaderboardError)">
+        <LeaderboardPanels :panels="leaderboards" :error="leaderboardError" :loading="leaderboardsLoading"
+          :own-player-ids="ownPlayerIds"
+          @retry="store.dispatch('lobby/fetch_leaderboards', route.params.world_id)" />
+      </div>
+    </div>
+  </div>
+  <div v-else-if="loadError" class="world-lobby-error" role="alert">
+    <p>{{ loadError }}</p>
+    <router-link v-if="!store.getters.isAuthenticated"
+      :to="{ name: 'login', query: { redirect: route.fullPath } }">Log in</router-link>
+    <button class="btn-small" @click="loadWorld">RETRY</button>
   </div>
   <div v-else class="loading-container">
     <div class="spinner"></div>
@@ -57,46 +65,62 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, onMounted, ref, watch }  from "vue";
-import { useRouter, useRoute } from "vue-router";
+import { computed, nextTick, ref, watch }  from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
 import UserChars from "@/components/lobby/UserChars.vue";
 import LeaderboardPanels from "@/components/lobby/LeaderboardPanels.vue";
+import { Pencil, Share } from "@lucide/vue";
+import { useCharEntry } from "@/composables/useCharEntry";
+import defaultBackground from "@/assets/ui/world-home-bg.jpg";
 
 const store = useStore();
-const router = useRouter();
 const route = useRoute();
+const router = useRouter();
 
 const loaded = ref(false);
+const loadError = ref('');
 
 const world = computed(() => store.state.lobby.world);
 const leaderboards = computed(() => store.state.lobby.leaderboards);
 const leaderboardError = computed(() => store.state.lobby.leaderboardError);
 const leaderboardsLoading = computed(() => store.state.lobby.leaderboardsLoading);
 const create_character = computed(() => store.state.lobby.create_character);
+const isAuthenticated = computed(() => store.getters.isAuthenticated);
+const chars = computed(() => store.state.lobby.chars || []);
+const { needsTransfer, playChar } = useCharEntry();
 
-const backgroundImage = computed(() => {
-  if (world && world.value.large_background) {
-    return { backgroundImage: `url(${world.value.large_background})` };
+// Characters arrive most recently played first.
+const resumeChar = computed(() => chars.value[0]);
+const ownPlayerIds = computed(() => chars.value.map(char => char.id));
+
+const backgroundImage = computed(() => ({
+  backgroundImage: `url(${world.value.large_background || defaultBackground})`,
+}));
+
+// Visitors sign up on their own page and come back with character creation open.
+const signupRoute = computed(() => ({
+  name: 'signup',
+  query: { redirect: router.resolve({ path: route.path, query: { create: '1' } }).fullPath },
+}));
+
+const onClickCreateChar = () => {
+  if (!isAuthenticated.value) {
+    router.push(signupRoute.value);
+    return;
   }
-  return {};
+  store.commit("lobby/create_character_set", true);
+};
+
+// The creation form (or sign-up for visitors) opens above the description;
+// bring it into view since the button that opened it is in the banner.
+watch(create_character, async (creating) => {
+  if (!creating) return;
+  await nextTick();
+  document.getElementById('lobby-new-character')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
 const descLines = computed(() => world.value.description.split("\n"));
-
-onMounted(async () => {
-  if (store.state.auth.user.is_temporary) {
-    await store.dispatch('auth/logout');
-    router.push({name: 'home'});
-  }
-
-  await store.dispatch(
-    "lobby/initial_fetch",
-    route.params.world_id);
-
-  loaded.value = true;
-});
-
 
 const copyShareLink = async () => {
   try {
@@ -110,30 +134,37 @@ const copyShareLink = async () => {
   }
 };
 
-const world_descriptors = computed(() => {
-  let descriptor = "";
-
-  if (world.value.is_private) {
-    descriptor += "PRIVATE ";
+async function loadWorld() {
+  const worldId = route.params.world_id;
+  loaded.value = false;
+  loadError.value = '';
+  try {
+    if (store.state.auth.user.is_temporary) {
+      await store.dispatch('auth/logout');
+    }
+    await store.dispatch('lobby/initial_fetch', worldId);
+    if (route.params.world_id !== worldId) return;
+    if (route.query.create && !isAuthenticated.value) {
+      router.replace(signupRoute.value);
+      return;
+    }
+    loaded.value = true;
+  } catch (error: any) {
+    if (route.params.world_id !== worldId) return;
+    const status = error.response?.status;
+    loadError.value = status === 401 || status === 403
+      ? store.getters.isAuthenticated
+        ? 'This account does not have access to this world.'
+        : 'This world is private. Log in with an account that has access.'
+      : status === 404
+        ? 'This world is unavailable. It may not have been set up yet.'
+        : 'This world could not be loaded. Please try again.';
   }
+}
 
-  if (world.value.is_narrative) {
-    descriptor += "NARRATIVE ";
-  }
-
-  const world_type = world.value.is_multiplayer
-    ? "MULTIPLAYER"
-    : "SINGLEPLAYER";
-  return `${descriptor} ${world_type} WORLD`;
-});
-
-watch(() => route.params.world_id, (newWorldId) => {
-  if (newWorldId) {
-    store.dispatch(
-    "lobby/initial_fetch",
-    route.params.world_id);
-  }
-});
+watch(() => route.params.world_id, (worldId) => {
+  if (worldId) loadWorld();
+}, { immediate: true });
 </script>
 
 <style lang="scss">
@@ -141,188 +172,180 @@ watch(() => route.params.world_id, (newWorldId) => {
 @import "@/styles/fonts.scss";
 @import "@/styles/layout.scss";
 
+.world-lobby-error {
+  max-width: 600px;
+  margin: 60px auto;
+  padding: 0 20px;
+
+  a, button { margin: 20px 20px 0 0; }
+}
+
 #world_lobby {
   width: 100%;
-  //padding: 50px 20px;
-  max-width: 1150px;
-  margin: 0 auto;
 
-  .world-details {
-    flex-grow: 1;
+  // Banner art spans the full width at its own proportions (banners are
+  // 2300x598) and dissolves into the page; the title sits over its lower part.
+  .world-hero {
+    position: relative;
+    isolation: isolate;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    // Never shorter than the art, so the page below can't slide under it.
+    min-height: max(180px, calc(100vw * 598 / 2300));
 
+    @media ($mobile-site) {
+      min-height: 200px;
+    }
+  }
+
+  .world-hero-art {
+    position: absolute;
+    z-index: -1;
+    top: 0;
+    left: 0;
+    width: 100%;
+    aspect-ratio: 2300 / 598;
+    min-height: 180px;
+    background-color: #332d25;
+    background-position: center top;
+    background-size: cover;
+    background-repeat: no-repeat;
+
+    @media ($mobile-site) {
+      min-height: 200px;
+      background-position: 62% top;
+    }
+
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(25, 26, 28, 0.7) 0%, rgba(25, 26, 28, 0.3) 35%, $color-transparent-rgba 60%),
+        linear-gradient(180deg, $color-transparent-rgba 0%, $color-transparent-rgba 45%, rgba(25, 26, 28, 0.75) 80%, $color-background-rgba 100%);
+    }
+  }
+
+  .world-hero-content,
+  .world-body {
+    width: 100%;
     max-width: 1150px;
     margin: 0 auto;
-    position: relative;
+    padding-left: 80px;
+    padding-right: 30px;
 
-    .world-home-bg {
-      position: absolute;
-      background: #332d25;
-      // background: url("/ui/lobby/world-home-bg.jpg");
-      background: url("@/assets/ui/world-home-bg.jpg");
-      background-size: 1150px 299px;
-      width: 100%;
-      height: 299px;
+    @media ($mobile-site) {
+      padding-left: 15px;
+      padding-right: 15px;
+    }
+  }
+
+  .world-hero-content {
+    padding-top: 130px;
+    padding-bottom: 34px;
+
+    @media ($mobile-site) {
+      padding-top: 120px;
     }
 
-    .world-home-bg-overlay {
-      background: linear-gradient(to bottom,
-          $color-transparent-rgba,
-          $color-background-rgba 100%);
-      position: absolute;
-      width: 100%;
-      height: 299px;
-    }
-
-    .world-home {
-      position: absolute;
-      z-index: 10000;
-      width: 100%;
-      margin-top: 150px;
-      margin-bottom: 50px;
-
-      flex-direction: row;
+    .world-title {
+      @include font-title-regular;
+      font-size: 56px;
+      line-height: 1;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      text-shadow: 0 2px 18px rgba(0, 0, 0, 0.5);
+      margin: 0;
 
       @media ($mobile-site) {
-        flex-direction: column;
-        margin-top: 50px;
-      }
-
-      .world-home-left-side {
-        flex: 2;
-
-        .world-title {
-          text-transform: uppercase;
-        }
-      }
-
-      .world-leaderboard {
-        flex: 1;
-
-        @media ($mobile-site) {
-          margin-top: 50px;
-        }
+        font-size: 38px;
+        letter-spacing: 2.5px;
       }
     }
 
-    .world-home-left-side {
-      padding: 0 30px;
+    .world-tools {
+      display: flex;
+      gap: 6px;
+      margin: 10px 0 0 -6px;
+    }
 
-      @media ($desktop-site) {
-        padding-left: 80px;
-      }
+    .icon-button {
+      color: $color-text-70;
 
-      @media ($mobile-site) {
-        padding: 0 15px;
-      }
-
-      //@include media-breakpoint-up(lg) {
-      //  padding-left: 80px;
-      //}
-
-      // Details of the world
-      .world-info {
-        .world-title {
-          @include font-title-regular;
-          font-size: 30px;
-          letter-spacing: 1.3px;
-          line-height: 35px;
-        }
-
-        .world-author,
-        .world-misc {
-          @include font-text-light;
-          font-size: 15px;
-          letter-spacing: -0.5px;
-          line-height: 20px;
-          // margin-bottom: 1em;
-
-          a,
-          .world-type {
-            @include font-title-regular;
-            font-size: 13px;
-            letter-spacing: 0.83px;
-            word-spacing: 0.5em;
-            line-height: 16px;
-          }
-
-          a {
-            color: $color-primary;
-
-            &:hover {
-              text-decoration: underline;
-            }
-          }
-
-          span.divider {
-            border-left: 1px solid white;
-            opacity: 0.2;
-            margin-left: 12px;
-            padding-left: 12px;
-          }
-        }
-        .instance-of {
-          border-top: 1px solid $color-background-border;
-          margin-top: 5px;
-          padding-top: 5px;
-          width: 350px;
-
-          @include font-title-regular;
-          font-size: 13px;
-          letter-spacing: 0.83px;
-          word-spacing: 0.5em;
-          line-height: 16px;
-        }
-
-        .world-description {
-          @include font-text-light;
-          font-size: 15px;
-          line-height: 26px;
-
-          div.desc-line:not(:last-child) {
-            margin-bottom: 0.8em;
-          }
-        }
+      &:hover {
+        color: $color-primary;
+        background: rgba(18, 19, 21, 0.45);
       }
     }
 
-    // Leaderboard
+    .instance-of {
+      @include font-title-regular;
+      font-size: 13px;
+      letter-spacing: 0.83px;
+      word-spacing: 0.5em;
+      line-height: 16px;
+      margin-top: 10px;
+    }
+
+    .world-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 26px;
+
+      a {
+        text-decoration: none;
+      }
+    }
+
+    // Keeps the secondary button legible over the banner art.
+    .button-gray {
+      background-color: rgba(18, 19, 21, 0.35);
+
+      &:hover {
+        background-color: rgba(18, 19, 21, 0.6);
+      }
+    }
+  }
+
+  .world-body {
+    display: flex;
+    gap: 64px;
+    padding-top: 10px;
+    padding-bottom: 50px;
+
+    @media ($mobile-site) {
+      flex-direction: column;
+      gap: 40px;
+    }
+
+    .world-main {
+      flex: 1.75;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+
+      &.creating .world-description {
+        order: 1;
+        margin-top: 40px;
+      }
+    }
+
     .world-leaderboard {
-      padding: 0 30px;
-      // @include media-breakpoint-up(lg) {
-      //   margin-top: 130px;
-      //   padding: 0 15px 0 50px;
-      // }
-      // @include media-breakpoint-down(md) {
-      //   padding-top: 50px;
-      // }
-      padding-top: 146px;
+      flex: 1;
+      min-width: 0;
+    }
+  }
 
-      @media ($mobile-site) {
-        padding: 0 15px 0 15px;
-      }
+  .world-description {
+    @include font-text-light;
+    font-size: 16px;
+    line-height: 28px;
+    max-width: 64ch;
 
-      .leaderboard-title {
-        @include font-title-regular;
-        color: $color-secondary;
-        font-size: 15px;
-        letter-spacing: 1.5px;
-        line-height: 18px;
-        margin-bottom: 20px;
-      }
-
-      ul {
-        list-style-type: none;
-        padding: 0;
-
-        li.world-leader {
-          line-height: 23px;
-
-          .index {
-            color: $color-secondary;
-            margin-right: 0.5em;
-          }
-        }
-      }
+    div.desc-line:not(:last-child) {
+      margin-bottom: 0.8em;
     }
   }
 }

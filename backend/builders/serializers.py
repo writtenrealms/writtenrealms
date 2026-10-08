@@ -108,7 +108,7 @@ from spawns import serializers as spawn_serializers
 from spawns import trigger_matcher
 from spawns.models import Player, PlayerConfig, Mob, Item, Equipment
 from system.models import Nexus
-from system.policies import get_platform_policy
+from system.policies import can_create_worlds
 from users.models import User
 from worlds import serializers as world_serializers
 from worlds.models import (
@@ -276,11 +276,9 @@ class WorldSerializer(serializers.ModelSerializer):
         if request.user.is_temporary:
             raise serializers.ValidationError(
                 "Must sign up to create a world.")
-        if self.instance is None:
-            policy = get_platform_policy()
-            if policy.world_creation != 'all' and not request.user.is_staff:
-                raise serializers.ValidationError(
-                    "World creation is currently disabled.")
+        if self.instance is None and not can_create_worlds(request.user):
+            raise serializers.ValidationError(
+                "World creation is currently disabled.")
         return super().validate(*args, **kwargs)
 
     def _get_stat_system(self, world):

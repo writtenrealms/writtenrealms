@@ -190,6 +190,44 @@ class LobbyWorldCardSerializer(WorldSerializer):
         ]
 
 
+class BuildingWorldSerializer(serializers.ModelSerializer):
+    """A row in the builder's world inventory. Counts are annotated by the view."""
+
+    small_background = serializers.CharField(source='config.small_background', read_only=True)
+    role = serializers.SerializerMethodField()
+    num_rooms = serializers.IntegerField(read_only=True)
+    num_characters = serializers.IntegerField(read_only=True)
+    last_opened = serializers.DateTimeField(read_only=True)
+    # Same rule as World.review_status, without a query per world.
+    review_status = serializers.SerializerMethodField()
+    instance_of = serializers.SerializerMethodField()
+    instances = serializers.SerializerMethodField()
+
+    class Meta:
+        model = World
+        fields = [
+            'id', 'name', 'small_background', 'is_multiplayer', 'is_public',
+            'role', 'num_rooms', 'num_characters', 'last_opened', 'created_ts',
+            'review_status', 'instance_of', 'instances',
+        ]
+
+    def get_role(self, world):
+        return 'author' if world.author_id == self.context['request'].user.pk else 'builder'
+
+    def get_review_status(self, world):
+        return world.latest_review_status or api_consts.WORLD_REVIEW_STATUS_UNSUBMITTED
+
+    def get_instance_of(self, world):
+        # Only set for instances listed on their own, without their base world.
+        if world.instance_of_id and not getattr(world, 'nested', False):
+            return {'id': world.instance_of_id, 'name': world.instance_of.name}
+        return None
+
+    def get_instances(self, world):
+        children = getattr(world, 'listed_instances', [])
+        return BuildingWorldSerializer(children, many=True, context=self.context).data
+
+
 class WorldTransferSerializer(serializers.Serializer):
     """
     Serializer to execute the transfer of a player from a single player

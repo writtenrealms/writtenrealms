@@ -50,6 +50,11 @@
         <a href="/privacy">Privacy Policy</a> and
         <a href="/conduct">Code of Conduct</a>.
       </p>
+
+      <p class="auth-switch color-text-60">
+        Already have an account?
+        <router-link :to="{ name: 'login', query: redirect ? { redirect } : {} }">Log in</router-link>
+      </p>
     </template>
 
     <template v-if="googleAuthEnabled">
@@ -67,12 +72,15 @@
 <script lang='ts' setup>
 import { ref, onMounted } from 'vue';
 import { useStore } from 'vuex';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { GoogleLogin } from 'vue3-google-login';
 import { GOOGLE_AUTH_ENABLED } from '@/config';
+import { rememberPostLoginRedirect, safeRedirect } from '@/core/authRedirect';
 
 const store = useStore();
 const router = useRouter();
+const route = useRoute();
+const redirect = safeRedirect(route.query.redirect);
 const email = ref('');
 const send_newsletter = ref(false);
 const username = ref('');
@@ -85,6 +93,7 @@ onMounted(() => {
 });
 
 const signup = async () => {
+  rememberPostLoginRedirect(redirect);
   try {
     await store.dispatch('auth/signup', {
       email: email.value,
@@ -99,7 +108,7 @@ const signup = async () => {
 
 const googleLoginCallback = async (response) => {
   await store.dispatch('auth/google_login', response.credential);
-  router.push("/lobby");
+  router.push(redirect || "/lobby");
 }
 </script>
 

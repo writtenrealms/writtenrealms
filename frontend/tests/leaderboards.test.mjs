@@ -5,6 +5,7 @@ import { createServer } from 'vite';
 import { createSSRApp } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import { createStore } from 'vuex';
+import { createRouter, createMemoryHistory } from 'vue-router';
 import axios from 'axios';
 
 const server = await createServer({
@@ -14,7 +15,12 @@ const server = await createServer({
 after(() => server.close());
 const { default: Panels } = await server.ssrLoadModule('/src/components/lobby/LeaderboardPanels.vue');
 const { default: lobby } = await server.ssrLoadModule('/src/store/modules/lobby.ts');
-const render = props => renderToString(createSSRApp(Panels, { panels: [], ...props }));
+// Character names link to character pages.
+const router = createRouter({
+  history: createMemoryHistory(),
+  routes: [{ path: '/characters/:player_id', name: 'character_details', component: {} }],
+});
+const render = props => renderToString(createSSRApp(Panels, { panels: [], ...props }).use(router));
 const panels = [
   { id: '0', type: 'instance_clear_time', title: 'A Persian Outpost — Fastest Clears', description: 'Personal bests · Time control', entries: [
     { id: 5, name: 'Runner', clear_time_ms: 1125309 },
@@ -46,6 +52,21 @@ test('empty configured panels remain visible while disabled panels render no hea
   assert.doesNotMatch(await render({ panels: [] }), /<h2/);
   assert.match(await render({ error: true }), /role="alert"/);
   assert.match(await render({ error: true }), /RETRY/);
+});
+
+test('multiple rankings become tabs showing one panel; own characters are tagged', async () => {
+  const html = await render({ panels, ownPlayerIds: [5, 7] });
+  assert.equal(html.match(/role="tab"/g).length, 3);
+  assert.match(html, /aria-selected="true"[^>]*>A Persian Outpost/);
+  assert.equal(html.match(/style="display:none;"/g).length, 2);
+  assert.equal(html.match(/YOURS/g).length, 2);
+  assert.match(html, /href="\/characters\/5"/);
+  const party = [{ ...panels[0], entries: [{ id: 5, is_party: true, name: 'Joe, Ally', clear_time_ms: 1 }] }];
+  const single = await render({ panels: party, ownPlayerIds: [5] });
+  assert.doesNotMatch(single, /YOURS|role="tab"/);
+  // Party clear records aren't characters, so they don't link anywhere.
+  assert.doesNotMatch(single, /href="\/characters/);
+  assert.match(single, /<h2/);
 });
 
 test('leaderboard failure does not block characters; retry recovers without reloading the world', async () => {

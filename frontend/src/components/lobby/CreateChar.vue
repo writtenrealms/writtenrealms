@@ -1,10 +1,6 @@
 <template>
   <div id="lobby-new-character">
-    <div class="new-char-signup" v-if="showSignup">
-      <SignUp :redirect="route.fullPath" />
-    </div>
-
-    <div class="wrapper" v-else>
+    <div class="wrapper">
       <form class @submit.prevent="createCharacter">
         <h1 class="form-title">CREATE NEW CHARACTER</h1>
         <div
@@ -103,10 +99,9 @@
 <script lang="ts" setup>
 import { computed, ref, watchEffect } from 'vue';
 import { useStore } from 'vuex';
-import { useRouter, useRoute } from 'vue-router';
+import { useRouter } from 'vue-router';
 import axios from "axios";
 import _ from "lodash";
-import SignUp from "@/views/auth/SignUp.vue";
 import Help from "@/components/Help.vue";
 import { INTRO_WORLD_ID } from "@/config";
 import { capfirst } from "@/core/utils";
@@ -115,7 +110,6 @@ const emit = defineEmits(['charcreated']);
 
 const store = useStore();
 const router = useRouter();
-const route = useRoute();
 const world = computed(() => store.state.lobby.world);
 const charname = ref("");
 const defaultGender = () => {
@@ -167,7 +161,6 @@ const worldFactions = computed(() => {
 });
 
 const showFactions = computed(() => world.value.core_factions.length > 0 && world.value.can_select_faction);
-const showSignup = computed(() => !store.state.auth.token);
 const showArchetype = computed(() => !(!world.value.allow_combat || world.value.is_classless || router.currentRoute.value.params.world_id == INTRO_WORLD_ID) && classChoiceEnabled.value && classOptions.value.length > 0);
 const factionData = computed(() => world.value.core_factions.find(f => f.code === faction.value) || false);
 
