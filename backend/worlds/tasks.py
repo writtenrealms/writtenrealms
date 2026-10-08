@@ -4,17 +4,18 @@ from django.db import transaction
 from django.db.models import Exists, F, OuterRef
 from django.utils import timezone
 from django.core.cache import cache
+from django.core.exceptions import PermissionDenied
 
 from celery import shared_task
 
 from config import constants as api_consts, constants
 from config import game_settings as adv_config
+from core.forge_permissions import reject_job, require_world_admin
 from fastapi_app.forge_ws import complete_job, exit_world as notify_exit_world
 from spawns.models import Player
 from spawns.loading import run_spawn_plans_for_world
 from spawns.instance_clock import is_time_controlled, live_worlds
 from spawns.services import WorldGate
-from users.models import User
 from worlds.models import InstanceRun, World
 from worlds.services import WorldSmith
 
@@ -128,15 +129,15 @@ def start_world(world_id, user_id=None, client_id=None):
         world_id (int): The ID of the world to start.
         user_id (int): The ID of the user who started the world.
     """
-    world = World.objects.get(pk=world_id)
+    try:
+        world, user = require_world_admin(world_id, user_id)
+    except PermissionDenied as exc:
+        reject_job(client_id, 'start_world', exc)
+        return
     print("Starting world %s [ %s ]..." % (world.name, world.id))
 
     try:
-        user = None
-        if user_id:
-            user = User.objects.filter(id=user_id).first()
-        staff_request = user.is_staff if user else False
-        WorldSmith(world).start(staff_request=staff_request)
+        WorldSmith(world).start(staff_request=user.is_staff)
     except Exception as e:
         if client_id:
             complete_job(
@@ -155,11 +156,15 @@ def start_world(world_id, user_id=None, client_id=None):
 
 
 @shared_task
-def request_stop(world_id, client_id=None):
-    world = World.objects.get(pk=world_id)
+def request_stop(world_id, client_id=None, user_id=None):
+    try:
+        world, user = require_world_admin(world_id, user_id)
+    except PermissionDenied as exc:
+        reject_job(client_id, 'stop_world', exc)
+        return
 
     try:
-        WorldSmith(world).request_stop(client_id=client_id)
+        WorldSmith(world).request_stop(client_id=client_id, user_id=user.id)
     except Exception as e:
         if client_id:
             complete_job(
@@ -171,8 +176,12 @@ def request_stop(world_id, client_id=None):
 
 
 @shared_task
-def stop_world(world_id, client_id=None):
-    world = World.objects.get(pk=world_id)
+def stop_world(world_id, client_id=None, user_id=None):
+    try:
+        world, _ = require_world_admin(world_id, user_id)
+    except PermissionDenied as exc:
+        reject_job(client_id, 'stop_world', exc)
+        return
 
     try:
         WorldSmith(world).stop()
@@ -192,8 +201,12 @@ def stop_world(world_id, client_id=None):
             job="stop_world",)
 
 @shared_task
-def kill_world(world_id, client_id=None):
-    world = World.objects.get(pk=world_id)
+def kill_world(world_id, client_id=None, user_id=None):
+    try:
+        world, _ = require_world_admin(world_id, user_id)
+    except PermissionDenied as exc:
+        reject_job(client_id, 'kill_world', exc)
+        return
 
     try:
         WorldSmith(world).kill()

@@ -121,7 +121,7 @@ class WorldSmith:
         self.world.update_builder_admin()
         return self.world
 
-    def request_stop(self, client_id=None):
+    def request_stop(self, client_id=None, user_id=None):
         """
         Request to stop a MPW, which will give players a 30 seconds warning
         before actually doing anything.
@@ -135,7 +135,8 @@ class WorldSmith:
 
         from worlds.tasks import stop_world
         stop_world.apply_async(
-            args=[spawn_world.id, client_id],
+            args=[spawn_world.id],
+            kwargs={'client_id': client_id, 'user_id': user_id},
             countdown=60)
 
     def stop(self):

@@ -18,8 +18,13 @@ const actions = {
     state.ws.send(JSON.stringify(data));
   },
 
-  receive: async ({ dispatch }, data) => {
+  receive: async ({ commit, dispatch }, data) => {
     console.log('Received Forge Websocket message:', data);
+
+    if (data.type === 'error') {
+      commit('ui/notification_set_error', data.error, { root: true });
+      return;
+    }
 
     // job_complete
     if (data.type === 'job_complete') {
@@ -94,7 +99,7 @@ const actions = {
     // Toggle Maintenance
     if (data.job == "toggle_maintenance_mode") {
       if (data.status === 'error') {
-        const error = data.error || 'Error toggling maintenance.';
+        const error = data.job_data.error || 'Error toggling maintenance.';
         commit('ui/notification_set_error', error, { root: true });
       } else if (data.status === 'success') {
         const maintenance_mode = data.job_data.maintenance_mode ? 'ON' : 'OFF';
@@ -108,7 +113,7 @@ const actions = {
     // Broadcast Message
     if (data.job == "broadcast") {
       if (data.status === 'error') {
-        const error = data.error || 'Error broadcasting message.';
+        const error = data.job_data.error || 'Error broadcasting message.';
         commit('ui/notification_set_error', error, { root: true });
       } else if (data.status === 'success') {
         commit('ui/notification_set', 'Message broadcasted.', { root: true });

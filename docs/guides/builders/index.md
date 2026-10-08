@@ -17,6 +17,13 @@ switch in the staff control panel. When it is off, **Build** and
 **Create World** only appear for staff, and builders still reach worlds they
 already have access to from each world's lobby.
 
+Starting, stopping, or killing a world and receiving its live administration
+updates require editing access: the world's author, an assigned builder with
+rank 1 or above, or site staff. For running worlds and instances, access is
+checked against the root world. Signing in alone does not grant these controls.
+The staff panel and maintenance switch require site staff access. Denied requests
+display an error without changing the world or subscribing to its updates.
+
 ## Start Here
 
 - [YAML Manifests](yaml-manifests.md) explains the editor workflow, batch

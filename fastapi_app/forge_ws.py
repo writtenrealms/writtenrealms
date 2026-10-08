@@ -40,6 +40,8 @@ HEARTBEAT_CHECK_INTERVAL_SECONDS = 60
 # Redis key TTL for player connections (in seconds) - 24 hours
 PLAYER_CONNECTION_TTL_SECONDS = 86400
 
+SUBSCRIPTION_AUTH_TIMEOUT_SECONDS = 10
+
 # Lazy-loaded Celery app for task dispatch
 _celery_app = None
 
@@ -74,6 +76,7 @@ class ConnectionManager:
         self.connected_players: dict[int, str] = {}
         self.heartbeats: dict[str, datetime] = {}
         self.client_ips: dict[str, str | None] = {}
+        self.pending_subscriptions: dict[str, tuple[str, asyncio.Future]] = {}
 
         # Redis for cross-process pub/sub
         self._redis: aioredis.Redis | None = None
@@ -100,6 +103,7 @@ class ConnectionManager:
 
         # Subscribe to the forge channel for job completions
         await self._pubsub.subscribe("forge:job_complete")
+        await self._pubsub.subscribe("forge:subscription_complete")
         await self._pubsub.subscribe("forge:pub")
 
         self._pubsub_task = asyncio.create_task(self._listen_pubsub())
@@ -138,6 +142,8 @@ class ConnectionManager:
 
                 if channel == "forge:job_complete":
                     await self._handle_job_complete(data)
+                elif channel == "forge:subscription_complete":
+                    await self._handle_subscription_complete(data)
                 elif channel == "forge:pub":
                     await self._handle_pub(data)
         except asyncio.CancelledError:
@@ -162,6 +168,45 @@ class ConnectionManager:
                 player_id = data.get('data', {}).get('player_id')
                 if player_id:
                     self.connected_players[player_id] = client_id
+
+    async def _handle_subscription_complete(self, data: dict):
+        pending = self.pending_subscriptions.get(data.get('client_id'))
+        if pending:
+            request_id, future = pending
+            if data.get('request_id') == request_id and not future.done():
+                future.set_result(data)
+
+    async def authorize_subscription(self, client_id, sub, world_id=None):
+        # The socket receive loop handles one request at a time, so pending
+        # approvals are bounded to one per connection. Awaiting a Future keeps
+        # the event loop free; never block on Celery's synchronous result.get().
+        # A fresh ID prevents late replies from approving a subsequent request.
+        request_id = str(uuid.uuid4())
+        future = asyncio.get_running_loop().create_future()
+        self.pending_subscriptions[client_id] = (request_id, future)
+
+        async def dispatch_and_wait():
+            await asyncio.to_thread(
+                get_celery_app().send_task,
+                'system.tasks.authorize_forge_subscription',
+                kwargs={
+                    'client_id': client_id,
+                    'request_id': request_id,
+                    'user_id': self.client_users[client_id],
+                    'sub': sub,
+                    'world_id': world_id,
+                },
+                expires=SUBSCRIPTION_AUTH_TIMEOUT_SECONDS,
+            )
+            return await future
+
+        try:
+            return await asyncio.wait_for(
+                dispatch_and_wait(), SUBSCRIPTION_AUTH_TIMEOUT_SECONDS)
+        finally:
+            self.pending_subscriptions.pop(client_id, None)
+            if not future.done():
+                future.cancel()
 
     async def _handle_pub(self, data: dict):
         """Handle publication message from Redis."""
@@ -244,6 +289,9 @@ class ConnectionManager:
 
     async def disconnect(self, client_id: str):
         """Clean up a disconnected client."""
+        pending = self.pending_subscriptions.pop(client_id, None)
+        if pending:
+            pending[1].cancel()
         # Remove from active connections
         self.active_connections.pop(client_id, None)
 
@@ -355,6 +403,16 @@ def complete_job(client_id: str, job: str, status: str = 'success', data: dict |
         "job": job,
         "status": status,
         "data": data,
+    }))
+
+
+def complete_subscription(client_id: str, request_id: str, error: str | None = None):
+    """Return a worker authorization decision without subscribing any client."""
+    _get_sync_redis().publish('forge:subscription_complete', json.dumps({
+        'client_id': client_id,
+        'request_id': request_id,
+        'status': 'error' if error else 'success',
+        'error': error,
     }))
 
 
@@ -525,6 +583,7 @@ async def handle_job(data: dict, client_id: str, user_id: int, ip: str | None):
             'worlds.tasks.stop_world',
             kwargs={
                 'world_id': data['world_id'],
+                'user_id': user_id,
                 'client_id': client_id,
             }
         )
@@ -538,6 +597,7 @@ async def handle_job(data: dict, client_id: str, user_id: int, ip: str | None):
             'worlds.tasks.kill_world',
             kwargs={
                 'world_id': data['world_id'],
+                'user_id': user_id,
                 'client_id': client_id,
             }
         )
@@ -549,7 +609,7 @@ async def handle_job(data: dict, client_id: str, user_id: int, ip: str | None):
     elif job == 'toggle_maintenance_mode':
         celery_app.send_task(
             'system.tasks.toggle_maintenance_mode',
-            kwargs={'client_id': client_id}
+            kwargs={'client_id': client_id, 'user_id': user_id}
         )
         await manager.send_to_client(client_id, {
             "type": "job_queued",
@@ -561,6 +621,7 @@ async def handle_job(data: dict, client_id: str, user_id: int, ip: str | None):
             'system.tasks.broadcast',
             kwargs={
                 'message': data['message'],
+                'user_id': user_id,
                 'client_id': client_id,
             }
         )
@@ -571,15 +632,53 @@ async def handle_job(data: dict, client_id: str, user_id: int, ip: str | None):
 
 
 async def handle_subscribe(data: dict, client_id: str):
-    """Handle a subscription request."""
+    """Authorize through Django before changing in-memory group membership."""
     sub = data.get('sub')
-
+    world_id = data.get('world_id')
     if sub == 'builder.admin':
-        world_id = data.get('world_id')
-        await manager.add_to_group(client_id, f"builder.admin-{world_id}")
-
+        # Canonicalize the channel ID before asking the worker to authorize it.
+        try:
+            if isinstance(world_id, bool) or not isinstance(world_id, (int, str)):
+                raise ValueError
+            world_id = int(world_id)
+            if not 0 < world_id < 2**63:
+                raise ValueError
+        except (TypeError, ValueError):
+            await manager.send_to_client(client_id, {
+                'type': 'error', 'sub': sub, 'error': 'A valid world ID is required.',
+            })
+            return
+        group_name = f'builder.admin-{world_id}'
     elif sub == 'staff.panel':
-        await manager.add_to_group(client_id, "staff.panel")
+        group_name = sub
+        world_id = None
+    else:
+        await manager.send_to_client(client_id, {
+            'type': 'error', 'error': 'Unknown subscription.',
+        })
+        return
+
+    try:
+        decision = await manager.authorize_subscription(client_id, sub, world_id)
+        error = None
+        if decision.get('status') != 'success':
+            error = decision.get('error') or 'Subscription denied.'
+    except asyncio.TimeoutError:
+        error = 'Subscription authorization timed out. Please try again.'
+    except Exception:
+        logger.exception('Subscription authorization failed for %s', client_id)
+        error = 'Unable to authorize this subscription. Please try again.'
+
+    if error:
+        await manager.send_to_client(client_id, {
+            'type': 'error', 'sub': sub, 'error': error,
+        })
+        return
+    if client_id in manager.active_connections:
+        await manager.add_to_group(client_id, group_name)
+        await manager.send_to_client(client_id, {
+            'type': 'subscribed', 'sub': sub, 'world_id': world_id,
+        })
 
 
 async def handle_unsubscribe(data: dict, client_id: str):
@@ -587,7 +686,10 @@ async def handle_unsubscribe(data: dict, client_id: str):
     sub = data.get('sub')
 
     if sub == 'builder.admin':
-        world_id = data.get('world_id')
+        try:
+            world_id = int(data.get('world_id'))
+        except (TypeError, ValueError):
+            return
         await manager.remove_from_group(client_id, f"builder.admin-{world_id}")
 
     elif sub == 'staff.panel':
