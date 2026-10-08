@@ -28,6 +28,7 @@ from core.view_mixins import (
     WorldValidatorMixin)
 
 from lobby import serializers as lobby_serializers
+from lobby.characters import delete_character
 from lobby.cache import LOBBY_FIXED_SECTIONS_CACHE_KEY
 from lobby.serializers import LobbyWorldSerializer, LobbyWorldCardSerializer
 from lobby.models import FeaturedWorld, DiscoverWorld, InDevelopmentWorld
@@ -562,21 +563,7 @@ class WorldCharacters(WorldLobbyBase,
         return super().partial_update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
-        player = self.get_object()
-
-        if player.in_game:
-            raise ValidationError(
-                "Cannot delete a player currently in a game.")
-
-        if player.instance_participations.filter(exited_at__isnull=True).count():
-            raise ValidationError(
-                "Cannot delete a player with live instances.")
-
-        player.name = "%s%s" % (player.name, player.id)
-        player.pending_deletion_ts = timezone.now()
-        player.save()
-
-        #self.perform_destroy(player)
+        delete_character(self.get_object())
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 world_chars = WorldCharacters.as_view({

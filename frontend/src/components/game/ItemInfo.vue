@@ -131,10 +131,20 @@ const props = defineProps({
   contentsInteractive: {
     type: Boolean,
     default: true
+  },
+  // Outside the game (e.g. a character page), pass the character and world.
+  player: {
+    type: Object,
+    default: null
+  },
+  world: {
+    type: Object,
+    default: null
   }
 });
 
-const world = computed(() => store.state.game.world);
+const world = computed(() => props.world || store.state.game.world);
+const sourcePlayer = computed<any>(() => props.player || store.state.game.player);
 const resourceLabels = computed(() => world.value?.labels?.resources || {});
 const statLabels = computed(() => world.value?.labels?.stats || {});
 const attributeLabels = computed(() => world.value?.labels?.attributes || {});
@@ -206,7 +216,7 @@ const buildComparedStats = (item: any) => {
   if (eqType.startsWith("weapon")) slot = "weapon";
   else if (eqType === "shield") slot = "offhand";
 
-  const playerEquipment = (store.state.game.player && store.state.game.player.equipment) || {};
+  const playerEquipment = (sourcePlayer.value && sourcePlayer.value.equipment) || {};
   const equippedItem = playerEquipment[slot];
   const offhandItem = eqType === "weapon_2h" ? playerEquipment.offhand : null;
   const attributeOrder = world.value?.labels?.order?.attributes || Object.keys(item.attributes || {});
@@ -354,8 +364,8 @@ const lines = computed(() => {
   return description.split("\n") || [];
 });
 const player = {
-  ...(store.state.game.player || {}),
-  marks: (store.state.game.player && store.state.game.player.marks) || {},
+  ...(sourcePlayer.value || {}),
+  marks: (sourcePlayer.value && sourcePlayer.value.marks) || {},
 };
 const armorClassEntries = computed(() => world.value?.equipment?.armor_classes || []);
 const authoredArmorClasses = computed(() => armorClassEntries.value.length > 0);
