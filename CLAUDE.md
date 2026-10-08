@@ -228,9 +228,13 @@ Set via `DJANGO_SETTINGS_MODULE` environment variable.
 - Match existing style in surrounding files (no repo-wide formatter)
 
 ### Commit Messages
-- Short, sentence case, direct description
-- Example: "Update Edeus node affinity to use dedicated instance"
-- Not: "Updated the node affinity for the Edeus world"
+- Default to a single short, sentence-case subject describing the high-level
+  change, easy to scan in the history (e.g., "Add character pages").
+- Put implementation details, feature inventories, and testing notes in the PR
+  description. Omit the commit body unless the user requests one or a brief
+  explanation of essential, non-obvious rationale must travel with the commit.
+- Do not add AI attribution or AI `Co-Authored-By` trailers to commit messages.
+- Follow the full commit and PR guidelines in `AGENTS.md`.
 
 ### Database Patterns
 - Use `AdventBaseModel` for models with `created_ts` and `modified_ts`

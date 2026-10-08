@@ -88,7 +88,12 @@
 
 ## Commit & Pull Request Guidelines
 
-- Commit messages are short, sentence case, and describe the change directly (e.g., "Update Edeus node affinity...").
+- Default to a single short, sentence-case commit subject that describes the
+  high-level change and is easy to scan in the history (e.g., "Add character pages").
+- Put implementation details, feature inventories, and testing notes in the PR
+  description. Omit the commit body unless the user requests one or a brief
+  explanation of essential, non-obvious rationale must travel with the commit.
+- Do not add AI attribution or AI `Co-Authored-By` trailers to commit messages.
 - PRs should include a summary, testing notes, and any required config changes.
 - Link relevant issues and call out migrations or data changes explicitly.
 
