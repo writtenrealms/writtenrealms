@@ -23,7 +23,11 @@
           :class="{ 'ranking-entry-own': isOwn(entry) }">
           <span class="ranking-position color-secondary">{{ index + 1 }}</span>
           <div class="ranking-character">
-            <div>{{ entry.name }}<span v-if="isOwn(entry)" class="tag tag-secondary ranking-own-tag">YOURS</span></div>
+            <div>
+              <span v-if="entry.is_party">{{ entry.name }}</span>
+              <router-link v-else class="ranking-name" :to="{ name: 'character_details', params: { player_id: entry.id } }">{{ entry.name }}</router-link>
+              <span v-if="isOwn(entry)" class="tag tag-secondary ranking-own-tag">YOURS</span>
+            </div>
             <div v-if="entry.core_faction || entry.archetype" class="ranking-detail color-text-60">
               {{ [entry.core_faction, entry.archetype].filter(Boolean).join(' · ') }}
             </div>
@@ -136,6 +140,8 @@ h2 {
 .ranking-position { min-width: 1rem; }
 .ranking-entry-own { background: linear-gradient(90deg, rgba(245, 201, 131, 0.06), transparent 70%); }
 .ranking-own-tag { margin-left: 6px; vertical-align: 2px; }
+.ranking-name { color: $color-text; }
+.ranking-name:hover { color: $color-secondary; }
 .ranking-character { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ranking-score { text-align: right; font-variant-numeric: tabular-nums; font-size: 14px; }
 .leaderboard-error { margin-bottom: 1.5rem; }

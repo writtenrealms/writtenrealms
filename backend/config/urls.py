@@ -3,6 +3,7 @@ from django.urls import path, re_path, include
 from rest_framework.urlpatterns import format_suffix_patterns
 
 from builders import views as builder_views
+from lobby import characters as lobby_characters
 from lobby import views as lobby_views
 from quests import views as quest_views
 from spawns import views as spawn_views
@@ -85,6 +86,8 @@ api_v1_urls = [
     path('lobby/worlds/<pk>/leaders/', lobby_views.world_leaders, name='lobby-world-leaders'),
     path('lobby/worlds/<pk>/leaderboards/', lobby_views.WorldLeaderboards.as_view(), name='lobby-world-leaderboards'),
     path('lobby/worlds/<world_pk>/transfer/', lobby_views.transfer, name='lobby-world-transfer'),
+    path('lobby/characters/<int:pk>/', lobby_characters.CharacterDetail.as_view(), name='lobby-character'),
+    path('lobby/characters/<int:pk>/items/', lobby_characters.CharacterItems.as_view(), name='lobby-character-items'),
 
     # Game calls made by a player either in game or in lobby
     path('game/enter/', spawn_views.EnterGame.as_view(), name='enter-game'),

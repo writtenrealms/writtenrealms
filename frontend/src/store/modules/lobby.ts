@@ -12,8 +12,6 @@ const set_initial_state = () => {
 
     create_character: false,
 
-    // For char editing and deleting, set by the view before invoking the action
-    char_id: Number,
   };
 };
 
@@ -54,20 +52,6 @@ const actions = {
       if (state.requestedWorldId === String(world_id)) commit('leaderboards_loading', false);
     }
   },
-  char_edit: async ({ commit, state }, payload) => {
-    const world_id = state.world.id;
-    const char_id = state.char_id;
-    const resp = await axios.patch(`/lobby/worlds/${world_id}/chars/${char_id}/`, {
-      description: payload.description
-    });
-    commit('char_update', resp.data);
-  },
-  char_delete: async ({ commit, state }) => {
-    const world_id = state.world.id;
-    const char_id = state.char_id;
-    await axios.delete(`/lobby/worlds/${world_id}/chars/${char_id}/`);
-    commit('char_delete', char_id);
-  }
 };
 
 const mutations = {
@@ -82,22 +66,6 @@ const mutations = {
   },
   char_create: (state, char) => {
     state.chars.splice(0, 0, char);
-  },
-  char_update: (state, char) => {
-    const char_ids = _.map(state.chars, char => char.id);
-    const index = char_ids.indexOf(char.id);
-    state.chars.splice(index, 1, char);
-  },
-  char_delete: (state, char_id) => {
-    const char_ids = _.map(state.chars, char => char.id);
-    const index = char_ids.indexOf(char_id);
-    state.chars.splice(index, 1);
-  },
-  char_id_set: (state, id) => {
-    state.char_id = id;
-  },
-  char_id_clear: (state) => {
-    state.char_id = null;
   },
   set_world: (state, world) => {
     state.world = world;

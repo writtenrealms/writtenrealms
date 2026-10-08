@@ -10,27 +10,19 @@
       </div>
 
       <div class="world-chars-list">
-        <div v-for="char in shownChars" :key="char.id" class="char-row">
+        <!-- The whole row opens the character page; Play stays its own control. -->
+        <div v-for="char in shownChars" :key="char.id" class="char-row" @click="openChar(char)">
           <div class="char-identity">
             <div class="char-name">
-              <span class="char-name-text">{{ char.name }}</span>
-              <span v-if="char.is_builder" class="color-text-50 ml-2">[ Builder ]</span>
-              <span v-if="world.is_multiplayer && !char.world_is_multi" class='color-text-50 ml-2'>[ SPW ]</span>
+              <router-link class="char-name-text" :to="charRoute(char)" @click.stop>{{ char.name }}</router-link>
+              <span v-if="char.is_builder" class="tag ml-2">Builder</span>
+              <span v-if="world.is_multiplayer && !char.world_is_multi" class="tag ml-2">Single player</span>
             </div>
             <div class="char-info" v-if="world.allow_combat">{{ charInfo(char) }}</div>
           </div>
           <span class="char-played">{{ formatRelativeModifiedDate(char.last_connection_ts) }}</span>
-          <button class="btn-small" @click="playChar(char)">{{ needsTransfer(char) ? 'TRANSFER' : 'PLAY' }}</button>
-          <div class="char-more">
-            <button class="icon-button" :aria-label="`More actions for ${char.name}`"
-              @click="onClickMoreActions(char.id)">
-              <Ellipsis aria-hidden="true" />
-            </button>
-            <UserCharActions
-              :player="char"
-              v-if="more_actions[char.id]"
-              @close="onCloseCharActions"/>
-          </div>
+          <button class="btn-small" @click.stop="playChar(char)">{{ needsTransfer(char) ? 'TRANSFER' : 'PLAY' }}</button>
+          <ChevronRight class="char-open" aria-hidden="true" />
         </div>
         <p v-if="!shownChars.length" class="color-text-50 chars-empty">No characters match.</p>
       </div>
@@ -49,17 +41,17 @@
 <script lang="ts" setup>
 import { computed, onMounted, ref } from "vue";
 import { useStore } from "vuex";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { capfirst, formatRelativeModifiedDate } from "@/core/utils";
-import { Ellipsis } from "@lucide/vue";
+import { ChevronRight } from "@lucide/vue";
 import { useCharEntry } from "@/composables/useCharEntry";
 import CreateChar from "./CreateChar.vue";
-import UserCharActions from "./UserCharActions.vue";
 
 const VISIBLE_CHARS = 5;
 
 const store = useStore();
 const route = useRoute();
+const router = useRouter();
 const { needsTransfer, playChar } = useCharEntry();
 
 const chars = computed(() => store.state.lobby.chars || []);
@@ -68,8 +60,6 @@ const newCharacter = computed(() => store.state.lobby.create_character);
 
 const expanded = ref(false);
 const filter = ref('');
-
-let more_actions = ref({});
 
 onMounted(async () => {
   if (route.query.create && store.getters.isAuthenticated) {
@@ -103,18 +93,8 @@ const onCharCreated = () => {
   store.commit("lobby/create_character_set", false);
 }
 
-const onClickMoreActions = (char_id) => {
-    if (more_actions.value[char_id]) {
-      more_actions.value = {};
-    } else {
-      more_actions.value = {};
-      more_actions.value[char_id] = true;
-    }
-  }
-
-const onCloseCharActions = () => {
-    more_actions.value = {};
-}
+const charRoute = (char) => ({ name: 'character_details', params: { player_id: char.id } });
+const openChar = (char) => router.push(charRoute(char));
 </script>
 
 <style lang="scss" scoped>
@@ -169,6 +149,15 @@ const onCloseCharActions = () => {
         border-top: 1px solid $color-background-light-border;
       }
 
+      cursor: pointer;
+
+      &:hover {
+        background: linear-gradient(90deg, $color-background-light, transparent 85%);
+
+        .char-name-text { color: $color-secondary; }
+        .char-open { color: $color-primary; }
+      }
+
       @media ($mobile-site) {
         grid-template-columns: minmax(0, 1fr) auto auto;
 
@@ -199,19 +188,13 @@ const onCloseCharActions = () => {
       white-space: nowrap;
     }
 
-    .char-more {
-      position: relative;
+    .char-name-text {
+      color: $color-text;
+      text-decoration: none;
+    }
 
-      .expanded-actions {
-        position: absolute;
-        right: 0;
-        top: 26px;
-        z-index: 10;
-        border: 1px solid #333;
-        border-top: 0px;
-        background: #222;
-        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.25);
-      }
+    .char-open {
+      color: $color-text-hex-40;
     }
 
     .chars-empty {

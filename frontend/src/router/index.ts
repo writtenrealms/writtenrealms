@@ -47,6 +47,7 @@ const routes = [
 
   // Lobby
   { path: '/lobby', name: 'lobby', component: () => import('@/views/SiteEntry.vue') },
+  { path: '/characters/:player_id', name: 'character_details', component: () => import('@/views/lobby/CharacterPage.vue') },
   { path: '/lobby/building', name: 'lobby_building', component: () => import('@/views/lobby/Building.vue'), beforeEnter: ifAuthenticated },
   { path: '/lobby/:section', name: 'lobby_section', component: () => import('@/views/lobby/LobbySection.vue'), beforeEnter: ifAuthenticated },
   { path: '/create', name: 'world-create', component: () => import('@/views/lobby/WorldCreate.vue'), beforeEnter: ifAuthenticated },

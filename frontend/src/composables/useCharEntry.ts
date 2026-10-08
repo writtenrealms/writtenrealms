@@ -12,17 +12,18 @@ export function useCharEntry() {
   const needsTransfer = (char) =>
     char.can_transfer && !store.state.auth.user.is_temporary;
 
-  const playChar = (char) => {
+  // Pages outside a world's lobby (e.g. a character page) pass the world id.
+  const playChar = (char, worldId = route.params.world_id) => {
     if (needsTransfer(char)) {
       router.push({
         name: 'lobby_world_transfer',
-        params: { player_id: char.id, world_id: route.params.world_id },
+        params: { player_id: char.id, world_id: worldId },
       });
       return;
     }
     store.dispatch('game/request_enter_world', {
       player_id: char.id,
-      world_id: route.params.world_id,
+      world_id: worldId,
     });
   };
 
