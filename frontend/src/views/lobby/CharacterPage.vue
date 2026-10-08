@@ -41,7 +41,7 @@
             <div class="item-rows">
               <div v-for="slot in equipmentSlots" :key="slot.key" class="item-row" :class="{ selected: isSelected(slot.item) }">
                 <span class="slot-label">{{ slot.label }}</span>
-                <button v-if="slot.item" class="item-name" :class="slot.item.quality" @click="select(slot.item)">
+                <button v-if="slot.item" class="item-name" :class="slot.item.quality" v-bind="itemPreviewBindings(slot.item)">
                   {{ slot.item.name }}
                 </button>
                 <span v-else class="item-empty">Empty</span>
@@ -64,7 +64,7 @@
                     <ChevronRight v-else aria-hidden="true" />
                   </button>
                   <span v-else class="bag-toggle"></span>
-                  <button class="item-name" :class="item.quality" @click="select(item)">{{ item.name }}</button>
+                  <button class="item-name" :class="item.quality" v-bind="itemPreviewBindings(item)">{{ item.name }}</button>
                   <div class="item-actions">
                     <button v-if="item.type === 'equippable'" class="btn-small" :disabled="!canAct" @click="act('equip', item)">EQUIP</button>
                     <select v-if="!isBag(item) && bags.length" class="put-select" :disabled="!canAct"
@@ -78,7 +78,7 @@
                   <div v-for="content in item.inventory || []" :key="content.key" class="item-row bag-content-row"
                     :class="{ selected: isSelected(content) }">
                     <span class="bag-toggle"></span>
-                    <button class="item-name" :class="content.quality" @click="select(content)">{{ content.name }}</button>
+                    <button class="item-name" :class="content.quality" v-bind="itemPreviewBindings(content)">{{ content.name }}</button>
                     <div class="item-actions">
                       <button class="btn-thin" :disabled="!canAct" @click="act('take', content, item)">TAKE OUT</button>
                     </div>
@@ -110,12 +110,6 @@
         </div>
 
         <aside class="char-side">
-          <div class="panel item-detail">
-            <ItemInfo v-if="selectedItem" :item="selectedItem" :player="character" :world="data.world_config"
-              :contentsInteractive="false" />
-            <p v-else class="color-text-50">Select an item to see its details.</p>
-          </div>
-
           <section class="char-section">
             <h2>Level {{ character.level }}</h2>
             <div class="xp-bar" role="img" :aria-label="`${xpPercent}% of the way to the next level`">
@@ -191,6 +185,9 @@
           </table>
         </aside>
       </div>
+
+      <ItemPreview v-if="preview" :preview="preview" :player="character" :world="worldConfig"
+        @close="closePreview" @keep-open="keepPreviewOpen" @leave="leavePreview" />
     </template>
   </div>
 </template>
@@ -201,7 +198,8 @@ import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
 import axios from "axios";
 import { ArrowLeft, ChevronDown, ChevronRight } from "@lucide/vue";
-import ItemInfo from "@/components/game/ItemInfo.vue";
+import ItemPreview from "@/components/ui/ItemPreview.vue";
+import { useItemPreview } from "@/composables/useItemPreview";
 import DeleteCharacterDialog from "@/components/lobby/DeleteCharacterDialog.vue";
 import { useCharEntry } from "@/composables/useCharEntry";
 import { walletBalanceEntries } from "@/core/economy";
@@ -221,7 +219,9 @@ const { needsTransfer, playChar } = useCharEntry();
 const data = ref<any>(null);
 const loadError = ref("");
 const busy = ref(false);
-const selectedKey = ref<string | null>(null);
+const { preview, bindings: itemPreviewBindings, close: closePreview,
+  keepOpen: keepPreviewOpen, leave: leavePreview } = useItemPreview();
+watch(data, closePreview);
 const openBags = reactive<Record<string, boolean>>({});
 const editingDescription = ref(false);
 const draftDescription = ref("");
@@ -270,18 +270,15 @@ const inventory = computed(() => character.value.inventory || []);
 const isBag = (item: any) => item.type === "container";
 const bags = computed(() => inventory.value.filter(isBag));
 
-const allItems = computed(() => [
-  ...equipmentSlots.value.map(slot => slot.item).filter(Boolean),
-  ...inventory.value,
-  ...bags.value.flatMap((bag: any) => bag.inventory || []),
-]);
-const selectedItem = computed(() => allItems.value.find((item: any) => item.key === selectedKey.value) || null);
-const select = (item: any) => { selectedKey.value = item.key; };
-const isSelected = (item: any) => !!item && item.key === selectedKey.value;
-const toggleBag = (bag: any) => { openBags[bag.key] = !openBags[bag.key]; };
+const isSelected = (item: any) => !!item && item.key === preview.value?.item.key;
+const toggleBag = (bag: any) => {
+  closePreview();
+  openBags[bag.key] = !openBags[bag.key];
+};
 
 async function act(action: string, item: any, container: any = null) {
   if (!canAct.value) return;
+  closePreview();
   busy.value = true;
   try {
     const response = await axios.post(`/lobby/characters/${data.value.id}/items/`, {
@@ -643,11 +640,6 @@ const createdLabel = computed(() => new Date(data.value.created_ts).toLocaleDate
   height: 1px;
   overflow: hidden;
   clip: rect(0 0 0 0);
-}
-
-.item-detail {
-  margin-bottom: 32px;
-  min-height: 80px;
 }
 
 .xp-bar {

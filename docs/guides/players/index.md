@@ -24,6 +24,11 @@ stats, currencies, and everything they carry, and you can:
 - edit the description other players see when they look at you;
 - delete the character.
 
+Hover over an item name in equipment, inventory, or an open bag to see its
+description and stats beside it. On mobile, tap the name to open a centered
+preview. Close it with the **×** button, by tapping outside, or with Escape.
+Keyboard users can focus an item name and press Enter to move into its preview.
+
 Item changes and deletion are only available while the character is out of
 the game; manage items in the game while you are playing.
 If you enter the game in another tab, further item changes on the character

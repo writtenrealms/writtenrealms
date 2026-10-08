@@ -285,6 +285,19 @@
       <ManifestValue :value="manifestExample" />
     </section>
 
+    <section id="item-previews" class="sg-section">
+      <h2>Item previews</h2>
+      <p class="sg-note">
+        Use <span class="sg-code">useItemPreview</span> with one <span class="sg-code">ItemPreview</span>
+        per page. Hover or focus an item to preview it beside the name; tap on mobile for a centered dialog.
+        The preview reuses the game's <span class="sg-code">ItemInfo</span> and
+        <span class="sg-code">.lookup-item</span> typography, stat comparisons, and quality colors.
+      </p>
+      <button class="btn-thin" v-bind="previewBindings(previewItem)">A BRONZE SPEAR</button>
+      <ItemPreview v-if="preview" :preview="preview" :player="previewPlayer" :world="previewWorld"
+        @close="closePreview" @keep-open="keepPreviewOpen" @leave="leavePreview" />
+    </section>
+
     <!-- Color tokens -->
     <section id="colors" class="sg-section">
       <h2>Color tokens</h2>
@@ -316,6 +329,18 @@ import {
   Sparkles, Swords, Trash, TriangleAlert, User, Users, X,
 } from "@lucide/vue";
 import ManifestValue from "@/components/builder/world/ManifestValue.vue";
+import ItemPreview from "@/components/ui/ItemPreview.vue";
+import { useItemPreview } from "@/composables/useItemPreview";
+
+const { preview, bindings: previewBindings, close: closePreview,
+  keepOpen: keepPreviewOpen, leave: leavePreview } = useItemPreview();
+const previewItem = {
+  key: "item.example", name: "a bronze spear", quality: "imbued", type: "equippable",
+  equipment_type: "weapon_1h", weapon_type: "spear", level: 5, weapon_damage: 12,
+  description: "A leaf-shaped bronze blade caps a polished ash shaft.", attributes: { strength: 2 },
+};
+const previewPlayer = { level: 5, archetype: "warrior", equipment: {}, marks: {} };
+const previewWorld = { allow_combat: true };
 
 const sections = [
   { id: "text-color", title: "Text color" },
@@ -328,6 +353,7 @@ const sections = [
   { id: "feedback", title: "Status" },
   { id: "navigation", title: "Navigation" },
   { id: "data", title: "Data" },
+  { id: "item-previews", title: "Item previews" },
   { id: "colors", title: "Color tokens" },
 ];
 
