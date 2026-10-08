@@ -29,6 +29,36 @@ svg.lucide {
   }
 }
 
+// Small uppercase label for a status or role, e.g. YOURS, BUILDER, APPROVED.
+.tag {
+  @include font-title-regular;
+  display: inline-block;
+  font-size: 10px;
+  line-height: 16px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: $color-text-hex-60;
+  border: 1px solid $color-background-border;
+  border-radius: 2px;
+  padding: 0 5px;
+
+  &.tag-secondary {
+    color: $color-secondary;
+    border-color: rgba(245, 201, 131, 0.35);
+  }
+
+  &.tag-green {
+    color: $color-green-chat;
+    border-color: rgba(39, 144, 132, 0.6);
+  }
+
+  &.tag-primary {
+    color: $color-primary;
+    border-color: rgba(215, 118, 23, 0.5);
+  }
+}
+
 .panel {
   background: $color-background-light;
   border: 1px solid $color-background-light-border;

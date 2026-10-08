@@ -198,6 +198,15 @@
     <!-- Status and feedback -->
     <section id="feedback" class="sg-section">
       <h2>Status and feedback</h2>
+      <div class="sg-row sg-flush-row">
+        <span class="sg-code">.tag</span>
+        <div class="sg-inline">
+          <span class="tag">Builder</span>
+          <span class="tag tag-secondary">Yours</span>
+          <span class="tag tag-green">Approved</span>
+          <span class="tag tag-primary">Changes requested</span>
+        </div>
+      </div>
       <div class="sg-columns">
         <div>
           <h3 class="sg-label">.loading-container .spinner</h3>
@@ -537,6 +546,11 @@ const manifestExample = {
 
 .sg-flush {
   margin: 0;
+}
+
+.sg-flush-row {
+  border-top: 0;
+  margin-bottom: 8px;
 }
 
 .sg-demo-narrow {

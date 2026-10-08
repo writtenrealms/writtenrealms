@@ -43,6 +43,7 @@ api_v1_urls = [
 
     # Staff
     path('staff/panel/', system_views.staff_panel, name='staff_panel'),
+    path('staff/site/', system_views.staff_site_settings, name='staff-site-settings'),
     path('staff/init/', system_views.staff_init, name='staff_init'),
     path('staff/teardown/', system_views.staff_teardown, name='staff_teardown'),
     path('staff/worlds/', system_views.RootWorlds.as_view(), name='staff-worlds'),

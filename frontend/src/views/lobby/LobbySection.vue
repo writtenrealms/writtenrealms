@@ -4,9 +4,6 @@
     <router-link class="gray-link" :to="{ name: 'lobby' }">Back to Lobby</router-link>
 
     <h1 class="section-title">{{ sectionName }}</h1>
-    <router-link v-if="section === 'building'" :to="{ name: 'world-create' }" class="color-primary">
-      Create World
-    </router-link>
 
     <div v-if="section == 'public'" class='public-worlds'>
       <div class="public-world flex mb-4" v-for="world in worlds" :key="world.id">
@@ -42,8 +39,6 @@ onMounted(async () => {
   let endpoint;
   if (router.currentRoute.value.params.section === 'playing') {
     endpoint = 'lobby/worlds/playing/?page_size=100';
-  } else if (router.currentRoute.value.params.section === 'building') {
-    endpoint = 'lobby/worlds/building/?page_size=100';
   } else if (router.currentRoute.value.params.section === 'reviewed') {
     endpoint = 'lobby/worlds/reviewed/?page_size=100';
   } else if (router.currentRoute.value.params.section === 'public') {
@@ -59,8 +54,6 @@ onMounted(async () => {
 const sectionName = computed(() => {
   if (router.currentRoute.value.params.section === 'playing') {
     return 'Playing Worlds';
-  } else if (router.currentRoute.value.params.section === 'building') {
-    return 'Building Worlds';
   } else if (router.currentRoute.value.params.section === 'reviewed') {
     return 'Reviewed Worlds';
   } else if (router.currentRoute.value.params.section === 'public') {
