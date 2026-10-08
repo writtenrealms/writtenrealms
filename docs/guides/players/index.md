@@ -26,6 +26,13 @@ stats, currencies, and everything they carry, and you can:
 
 Item changes and deletion are only available while the character is out of
 the game; manage items in the game while you are playing.
+If you enter the game in another tab, further item changes on the character
+page are refused. Characters ready to transfer after completing a world show
+**Transfer** on their character page, just as they do in the world lobby.
+
+In private worlds, character pages are visible to players with access,
+including the world's author and builders. Other players' inventories and
+stats remain private, and invisible characters stay hidden from non-staff.
 
 ## First Steps: Ask for Help
 
