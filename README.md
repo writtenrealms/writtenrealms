@@ -95,7 +95,15 @@ make docker-restart-mount
 make reset-dev-db-mount
 ```
 
-For a true local fresh install, `scripts/reset-dev-db` stops the stack, clears `./data/db`, and starts it again so migrations rebuild the schema. Add `--build` if you also want to rebuild images.
+PostgreSQL uses the Compose-managed `postgres_data` named volume. Existing checkouts
+that stored their database in `./data/db` must follow the
+[storage move instructions](docs/dev/environment-setup.md#move-an-existing-bind-mounted-database)
+before starting the updated stack; Compose does not copy that data automatically.
+
+For a true local fresh install, `scripts/reset-dev-db` stops the stack, removes only
+its PostgreSQL named volume, and starts it again so migrations rebuild the schema.
+Other volumes and any old `./data/db` directory are preserved. The reset helper
+requires Python 3 on the host. Add `--build` if you also want to rebuild images.
 
 If you prefer not to export `COMPOSE_FILE`, pass both files each time:
 

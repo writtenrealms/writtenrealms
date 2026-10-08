@@ -158,7 +158,7 @@ services:
     logging: *default-logging
     image: postgres:15-alpine
     volumes:
-      - ./data/db:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
@@ -188,3 +188,6 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+
+volumes:
+  postgres_data:

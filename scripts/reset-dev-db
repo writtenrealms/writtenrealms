@@ -9,14 +9,16 @@ Reset the local Docker-backed Postgres database to a fresh install.
 
 This will:
   1. Stop the local Docker Compose stack
-  2. Delete ./data/db
-  3. Recreate ./data/db
-  4. Start the stack again so Django migrations rebuild the schema
+  2. Delete only this Compose project's PostgreSQL named volume
+  3. Start the stack again so PostgreSQL and Django rebuild the database
+
+Other volumes and the old ./data/db directory are preserved.
+Requires Docker Compose and Python 3 on the host.
 
 Options:
   --mount     Use docker-compose.mount.yml for the bind-mount workflow.
   --build     Rebuild images when starting the stack again.
-  --no-start  Reset the database files but leave the stack stopped.
+  --no-start  Remove the database volume but leave the stack stopped.
   --yes       Skip the confirmation prompt.
   --help      Show this help text.
 EOF
@@ -24,7 +26,6 @@ EOF
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
-db_dir="$repo_root/data/db"
 
 use_mount=0
 build_after=0
@@ -66,14 +67,34 @@ if [[ $use_mount -eq 1 ]]; then
     compose_desc="docker-compose.yml + docker-compose.mount.yml"
 fi
 
+cd "$repo_root"
+
+# Resolve Compose's actual volume name, including COMPOSE_PROJECT_NAME and
+# overlays. Refuse bind mounts or external volumes rather than deleting data
+# whose lifecycle is not owned by this project's Compose configuration.
+db_volume="$("${compose_cmd[@]}" config --format json | python3 -c '
+import json
+import sys
+
+config = json.load(sys.stdin)
+mounts = [mount for mount in config["services"]["db"].get("volumes", [])
+          if mount["target"] == "/var/lib/postgresql/data"]
+if len(mounts) != 1 or mounts[0]["type"] != "volume":
+    sys.exit("Refusing reset: PostgreSQL must use a named volume.")
+volume = config["volumes"][mounts[0]["source"]]
+if volume.get("external") or not volume.get("name"):
+    sys.exit("Refusing reset: PostgreSQL volume must be managed by Compose.")
+print(volume["name"])
+')"
+
 if [[ $skip_confirm -ne 1 ]]; then
     if [[ ! -t 0 ]]; then
         echo "Refusing to reset without confirmation in a non-interactive shell. Re-run with --yes." >&2
         exit 1
     fi
 
-    echo "This will permanently delete local database files in:"
-    echo "  $db_dir"
+    echo "This will permanently delete the local PostgreSQL volume:"
+    echo "  $db_volume"
     echo "Compose config:"
     echo "  $compose_desc"
     echo
@@ -88,18 +109,18 @@ if [[ $skip_confirm -ne 1 ]]; then
     esac
 fi
 
-cd "$repo_root"
-
 echo "==> Stopping Docker Compose stack..."
 "${compose_cmd[@]}" down --remove-orphans
 
-echo "==> Removing database files from $db_dir..."
-rm -rf "$db_dir"
-mkdir -p "$db_dir"
-chmod 700 "$db_dir"
+if docker volume inspect "$db_volume" >/dev/null 2>&1; then
+    echo "==> Removing PostgreSQL volume $db_volume..."
+    docker volume rm "$db_volume"
+else
+    echo "==> PostgreSQL volume $db_volume does not exist; nothing to reset."
+fi
 
 if [[ $start_after -eq 0 ]]; then
-    echo "==> Database files reset. Stack left stopped because --no-start was provided."
+    echo "==> Database volume reset. Stack left stopped because --no-start was provided."
     exit 0
 fi
 

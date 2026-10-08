@@ -101,6 +101,63 @@ It reads one Site Control row; the browser shares and retains that request for
 the page lifetime. Single-world entry never requests the directory or homepage
 world lists, and adds no per-player work to the game loop.
 
+## Local PostgreSQL storage
+
+PostgreSQL stores its files in the Compose-managed `postgres_data` named volume
+(`writtenrealms_postgres_data` with the default project name). On Docker Desktop,
+this lives inside the Linux VM. Source code can still use host bind mounts.
+
+Previously, `./data/db` was bind-mounted from the host. On macOS, all database
+file operations and change notifications therefore crossed Docker's file-sharing
+layer. Two crashes on October 7, 2026 reported `service fs failed: injecting event
+blocked for 60s` while delivering PostgreSQL file-deletion events there, including
+during test-database teardown. A named volume removes that host file-sharing path
+from database I/O and reduces its overhead. The storage location is the important
+difference; the name gives Compose a stable way to reuse it.
+
+`docker compose down` preserves the database. `docker compose down --volumes`
+deletes Compose-managed volumes and their data. Use `pg_dump` for portable database
+backups rather than treating Docker's internal volume path as a host directory.
+
+### Move an existing bind-mounted database
+
+Compose does **not** import `./data/db` into an empty named volume automatically.
+For an existing PostgreSQL 15 installation using the same image, make a clean
+offline copy before starting the updated stack:
+
+1. Stop the old stack cleanly with `docker compose stop --timeout 60`. PostgreSQL
+   must report a clean shutdown; if it previously crashed, start only the old
+   `db` container to allow recovery, then stop it again. Keep the old configuration
+   until this shutdown is complete.
+2. With the updated Compose configuration, run this from the repository root:
+
+   ```bash
+   docker compose run --rm --no-deps --entrypoint sh \
+     -v "$PWD/data/db:/source:ro" db -ec '
+       test "$(cat /source/PG_VERSION)" = "15"
+       test ! -e /source/postmaster.pid
+       test -z "$(ls -A "$PGDATA")"
+       cp -a /source/. "$PGDATA/"
+       chown -R postgres:postgres "$PGDATA"
+     '
+   ```
+
+   This refuses an unclean source or a nonempty destination. The source is mounted
+   read-only and retained for rollback. Custom tablespaces or an external WAL
+   directory need a separate backup/restore procedure; this copy assumes both are
+   contained in the data directory.
+3. Start only PostgreSQL with `docker compose up -d --no-deps --wait db`. Check its
+   logs and compare the database inventory and application table counts with the
+   original before starting the other services. `docker inspect` should show
+   `Type: volume` for `/var/lib/postgresql/data`.
+4. Start the remaining services, then run `make test` (including database cleanup).
+   Keep `./data/db` until the copy and application behavior are verified. It is a
+   snapshot from the move and does not receive subsequent database writes.
+
+To roll back before accepting new writes, stop the stack and restore the old
+`./data/db:/var/lib/postgresql/data` mount, then recreate `db`. After accepting new
+writes, export them from the named-volume database before any rollback.
+
 ## Reset the local database
 
 For a clean local onboarding pass, reset the Docker-backed Postgres data and let the app rebuild from migrations:
@@ -115,7 +172,12 @@ If you are using the bind-mount workflow instead of the default compose setup:
 make reset-dev-db-mount
 ```
 
-The underlying script is `scripts/reset-dev-db`. It stops the stack, deletes `./data/db`, recreates it, and starts the stack again. Add `--build` if you also want to rebuild images as part of the reset.
+The underlying script is `scripts/reset-dev-db` (Docker Compose and host Python 3
+required). It resolves the PostgreSQL volume name from the active Compose
+configuration, stops the stack, removes only that named volume, and starts the
+stack again. It preserves other volumes and the old `./data/db` directory. Add
+`--build` if you also want to rebuild images as part of the reset, or `--no-start`
+to leave the stack stopped.
 
 ## Required Environment Variables
 
