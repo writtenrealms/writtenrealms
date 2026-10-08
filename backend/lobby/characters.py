@@ -25,6 +25,7 @@ from spawns.actions.items import (
 from spawns.models import Item, Player
 from spawns.state_payloads import (
     get_player_with_related,
+    load_equipment_items,
     resolve_item_name,
     serialize_actor,
     serialize_world,
@@ -49,6 +50,8 @@ def can_view_world(user, world):
         return True
     if not user.is_authenticated:
         return False
+    if world.author_id == user.pk:
+        return True
     if WorldBuilder.objects.filter(world=world, user=user).exists():
         return True
     return Player.objects.filter(world__context=world, user=user).exists()
@@ -110,6 +113,7 @@ def private_payload(player_id):
         'last_connection_ts': player.last_connection_ts,
         'in_game': player.in_game,
         'can_manage_items': not player.in_game,
+        'can_transfer': player.world.lifecycle == adv_consts.WORLD_STATE_COMPLETE,
         'world_config': serialize_world(player.world),
         'character': serialize_actor(player, None).model_dump(mode='json'),
     }
@@ -146,6 +150,7 @@ class CharacterDetail(CharacterView):
         hidden = player.is_invisible and not (request.user.is_authenticated and request.user.is_staff)
         if hidden or not can_view_world(request.user, base_world):
             raise NotFound("Character not found.")
+        load_equipment_items([player])
         return Response({'view': 'public', **_headlines(player, base_world)})
 
     def patch(self, request, pk):
@@ -170,38 +175,41 @@ class CharacterItems(CharacterView):
     """
     Move a character's items while they are out of the game: equip, remove,
     put into a bag they carry, or take out of one. Reuses the game's item
-    actions, so the same equipment rules apply; their in-game messages are
-    not sent because nobody in the room can see an offline character.
+    actions, so the same equipment rules apply. Offline/ownership validation
+    and item changes share the player lock; game event payloads are skipped.
     """
 
     ACTIONS = ('equip', 'remove', 'put', 'take')
 
     def post(self, request, pk):
-        player, _ = self.get_player(pk, owner_only=True)
-        if player.in_game:
-            raise ValidationError({'detail': f'{player.name} is in the game. Manage items there.'})
-
         action = request.data.get('action')
         if action not in self.ACTIONS:
             raise ValidationError({'action': f'Must be one of {", ".join(self.ACTIONS)}.'})
-        item = self._owned_item(player, request.data.get('item'))
-        container = None
-        if action in ('put', 'take'):
-            container = self._owned_item(player, request.data.get('container'))
-            if not self._carried(player, container) or container.type != adv_consts.ITEM_TYPE_CONTAINER:
-                raise ValidationError({'container': 'Choose a bag your character is carrying.'})
 
-        try:
-            if action == 'equip':
-                EquipAction().execute(player.pk, item.key)
-            elif action == 'remove':
-                RemoveEquipmentAction().execute(player.pk, item.key)
-            elif action == 'put':
-                PutAction().execute(player.pk, item.key, container.key)
-            else:
-                GetAction().execute(player.pk, item.key, container.key)
-        except ActionError as error:
-            raise ValidationError({'detail': error.message})
+        # Entering the game and item actions lock this same row. Keep the
+        # offline and ownership checks valid until the item change commits.
+        with transaction.atomic():
+            player, _ = self.get_player(pk, owner_only=True, lock=True)
+            if player.in_game:
+                raise ValidationError({'detail': f'{player.name} is in the game. Manage items there.'})
+            item = self._owned_item(player, request.data.get('item'))
+            container = None
+            if action in ('put', 'take'):
+                container = self._owned_item(player, request.data.get('container'))
+                if not self._carried(player, container) or container.type != adv_consts.ITEM_TYPE_CONTAINER:
+                    raise ValidationError({'container': 'Choose a bag your character is carrying.'})
+
+            try:
+                if action == 'equip':
+                    EquipAction().execute(player.pk, item.key, build_events=False)
+                elif action == 'remove':
+                    RemoveEquipmentAction().execute(player.pk, item.key, build_events=False)
+                elif action == 'put':
+                    PutAction().execute(player.pk, item.key, container.key, build_events=False)
+                else:
+                    GetAction().execute(player.pk, item.key, container.key, build_events=False)
+            except ActionError as error:
+                raise ValidationError({'detail': error.message})
         return Response(private_payload(player.pk))
 
     def _owned_item(self, player, key):

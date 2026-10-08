@@ -246,7 +246,7 @@ def _payload_world_queryset():
     )
 
 
-def _load_equipment_items(players: Iterable[Player]) -> None:
+def load_equipment_items(players: Iterable[Player]) -> None:
     """Hydrate all occupied equipment slots in one query across the players."""
     equipment_rows = {
         player.equipment_id: player.equipment
@@ -313,7 +313,7 @@ def get_player_with_related(player_id: int) -> Player:
         )
         .get(pk=player_id)
     )
-    _load_equipment_items([player])
+    load_equipment_items([player])
     return player
 
 
@@ -996,7 +996,7 @@ def serialize_room(
         # inheritance/configuration graph within this room snapshot.
         for player in room_players:
             player.world = runtime_world
-    _load_equipment_items(room_players)
+    load_equipment_items(room_players)
     room_mobs = list(room_mobs_qs)
     quest_indicator_map: dict[int, dict[str, bool]] = {}
     quest_callout_data: list[dict] = []

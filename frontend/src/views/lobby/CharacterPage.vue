@@ -22,7 +22,9 @@
             <span v-if="data.in_game" class="tag tag-green">In game</span>
           </div>
           <div v-if="isPrivate" class="char-actions">
-            <button class="btn-medium" @click="playChar(character, data.world.id)">PLAY AS {{ data.name.toUpperCase() }}</button>
+            <button class="btn-medium" @click="playChar(data, data.world.id)">
+              {{ needsTransfer(data) ? 'TRANSFER' : 'PLAY AS' }} {{ data.name.toUpperCase() }}
+            </button>
           </div>
         </div>
       </header>
@@ -214,7 +216,7 @@ const SLOTS = [
 const route = useRoute();
 const router = useRouter();
 const store = useStore();
-const { playChar } = useCharEntry();
+const { needsTransfer, playChar } = useCharEntry();
 
 const data = ref<any>(null);
 const loadError = ref("");

@@ -17,7 +17,7 @@ export function useCharEntry() {
     if (needsTransfer(char)) {
       router.push({
         name: 'lobby_world_transfer',
-        params: { player_id: char.id, world_id: worldId },
+        params: { player_id: char.id },
       });
       return;
     }
