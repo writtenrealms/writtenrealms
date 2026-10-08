@@ -18,6 +18,7 @@
 import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
+import { takePostLoginRedirect } from "@/core/authRedirect";
 
 const store = useStore();
 const route = useRoute();
@@ -36,7 +37,7 @@ onMounted(async () => {
     }
     await store.dispatch("auth/confirm_login_link", token);
     status.value = "success";
-    router.push({ name: "lobby" });
+    router.push(takePostLoginRedirect() || { name: "lobby" });
   } catch (e: any) {
     status.value = "error";
   }

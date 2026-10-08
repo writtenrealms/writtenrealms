@@ -21,7 +21,12 @@
           </router-link>
         </div>
         <div class="world-actions" v-if="!create_character">
-          <template v-if="resumeChar">
+          <template v-if="!isAuthenticated">
+            <router-link class="btn-medium" role="button" :to="signupRoute">SIGN UP TO PLAY</router-link>
+            <router-link class="btn-medium button-gray" role="button"
+              :to="{ name: 'login', query: { redirect: route.path } }">LOG IN</router-link>
+          </template>
+          <template v-else-if="resumeChar">
             <button class="btn-medium" @click="playChar(resumeChar)">
               {{ needsTransfer(resumeChar) ? 'TRANSFER' : 'CONTINUE AS' }} {{ resumeChar.name.toUpperCase() }}
             </button>
@@ -33,7 +38,7 @@
     </div>
 
     <div class="world-body">
-      <div class="world-main">
+      <div class="world-main" :class="{ creating: create_character }">
         <div class="world-description">
           <div class="desc-line" v-for="(line, index) of descLines" :key="index">{{ line }}</div>
         </div>
@@ -60,8 +65,8 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, ref, watch }  from "vue";
-import { useRoute } from "vue-router";
+import { computed, nextTick, ref, watch }  from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
 import UserChars from "@/components/lobby/UserChars.vue";
 import LeaderboardPanels from "@/components/lobby/LeaderboardPanels.vue";
@@ -71,6 +76,7 @@ import defaultBackground from "@/assets/ui/world-home-bg.jpg";
 
 const store = useStore();
 const route = useRoute();
+const router = useRouter();
 
 const loaded = ref(false);
 const loadError = ref('');
@@ -80,6 +86,7 @@ const leaderboards = computed(() => store.state.lobby.leaderboards);
 const leaderboardError = computed(() => store.state.lobby.leaderboardError);
 const leaderboardsLoading = computed(() => store.state.lobby.leaderboardsLoading);
 const create_character = computed(() => store.state.lobby.create_character);
+const isAuthenticated = computed(() => store.getters.isAuthenticated);
 const chars = computed(() => store.state.lobby.chars || []);
 const { needsTransfer, playChar } = useCharEntry();
 
@@ -91,9 +98,27 @@ const backgroundImage = computed(() => ({
   backgroundImage: `url(${world.value.large_background || defaultBackground})`,
 }));
 
+// Visitors sign up on their own page and come back with character creation open.
+const signupRoute = computed(() => ({
+  name: 'signup',
+  query: { redirect: router.resolve({ path: route.path, query: { create: '1' } }).fullPath },
+}));
+
 const onClickCreateChar = () => {
+  if (!isAuthenticated.value) {
+    router.push(signupRoute.value);
+    return;
+  }
   store.commit("lobby/create_character_set", true);
 };
+
+// The creation form (or sign-up for visitors) opens above the description;
+// bring it into view since the button that opened it is in the banner.
+watch(create_character, async (creating) => {
+  if (!creating) return;
+  await nextTick();
+  document.getElementById('lobby-new-character')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 
 const descLines = computed(() => world.value.description.split("\n"));
 
@@ -118,7 +143,12 @@ async function loadWorld() {
       await store.dispatch('auth/logout');
     }
     await store.dispatch('lobby/initial_fetch', worldId);
-    if (route.params.world_id === worldId) loaded.value = true;
+    if (route.params.world_id !== worldId) return;
+    if (route.query.create && !isAuthenticated.value) {
+      router.replace(signupRoute.value);
+      return;
+    }
+    loaded.value = true;
   } catch (error: any) {
     if (route.params.world_id !== worldId) return;
     const status = error.response?.status;
@@ -158,6 +188,15 @@ watch(() => route.params.world_id, (worldId) => {
   .world-hero {
     position: relative;
     isolation: isolate;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    // Never shorter than the art, so the page below can't slide under it.
+    min-height: max(180px, calc(100vw * 598 / 2300));
+
+    @media ($mobile-site) {
+      min-height: 200px;
+    }
   }
 
   .world-hero-art {
@@ -203,8 +242,7 @@ watch(() => route.params.world_id, (worldId) => {
   }
 
   .world-hero-content {
-    // Place the title over the lower part of the art at any width.
-    padding-top: max(130px, calc(26vw - 190px));
+    padding-top: 130px;
     padding-bottom: 34px;
 
     @media ($mobile-site) {
@@ -255,6 +293,10 @@ watch(() => route.params.world_id, (worldId) => {
       flex-wrap: wrap;
       gap: 12px;
       margin-top: 26px;
+
+      a {
+        text-decoration: none;
+      }
     }
 
     // Keeps the secondary button legible over the banner art.
@@ -281,6 +323,13 @@ watch(() => route.params.world_id, (worldId) => {
     .world-main {
       flex: 1.75;
       min-width: 0;
+      display: flex;
+      flex-direction: column;
+
+      &.creating .world-description {
+        order: 1;
+        margin-top: 40px;
+      }
     }
 
     .world-leaderboard {

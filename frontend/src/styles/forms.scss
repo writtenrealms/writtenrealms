@@ -367,6 +367,11 @@ a[role="button"].btn-thin {
     margin-bottom: 1em;
   }
 
+  // "Already have an account?" / "New here?" link between sign up and log in
+  .auth-switch {
+    margin: 1.5em 0 0;
+  }
+
   .or-separator {
     display: flex;
     align-items: center;
