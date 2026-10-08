@@ -1,14 +1,15 @@
 <template>
-  <div class="world-chars-region">
+  <div class="world-chars-region" v-if="newCharacter || chars.length">
     <CreateChar v-if="newCharacter" :world="world" @charcreated="onCharCreated" />
-    <div class="world-chars" v-else>
+    <!-- Without characters, the banner's create button is the only call to action. -->
+    <div class="world-chars" v-else-if="chars.length">
       <div class="world-chars-header">
         <div class="world-chars-title">YOUR CHARACTERS</div>
         <input v-if="expanded" v-model="filter" type="search" class="chars-filter"
           placeholder="Filter by name or class" aria-label="Filter characters" />
       </div>
 
-      <div class="world-chars-list" v-if="chars.length">
+      <div class="world-chars-list">
         <div v-for="char in shownChars" :key="char.id" class="char-row">
           <div class="char-identity">
             <div class="char-name">
@@ -33,11 +34,6 @@
         </div>
         <p v-if="!shownChars.length" class="color-text-50 chars-empty">No characters match.</p>
       </div>
-      <div v-else class="chars-none">
-        <p class="color-text-60">You don't have a character in this world yet.</p>
-        <button class="btn-add" @click="onClickCreateChar()">CREATE NEW CHARACTER</button>
-      </div>
-
       <div class="chars-more" v-if="chars.length > VISIBLE_CHARS">
         <button class="btn-thin" @click="toggleExpanded">
           {{ expanded ? 'SHOW FEWER' : `SHOW ALL ${chars.length} CHARACTERS` }}
@@ -76,7 +72,7 @@ const filter = ref('');
 let more_actions = ref({});
 
 onMounted(async () => {
-  if (route.query.create) {
+  if (route.query.create && store.getters.isAuthenticated) {
     store.commit("lobby/create_character_set", true);
   }
 });
@@ -105,10 +101,6 @@ const toggleExpanded = () => {
 
 const onCharCreated = () => {
   store.commit("lobby/create_character_set", false);
-}
-
-const  onClickCreateChar = () => {
-  store.commit("lobby/create_character_set", true);
 }
 
 const onClickMoreActions = (char_id) => {
@@ -226,11 +218,6 @@ const onCloseCharActions = () => {
       padding: 12px 0;
     }
 
-    .chars-none {
-      p {
-        margin-bottom: 16px;
-      }
-    }
 
     .chars-more {
       display: flex;
