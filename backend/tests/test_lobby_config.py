@@ -15,31 +15,31 @@ class TestLobbyConfig(APITestCase):
         with self.assertNumQueries(1):
             response = self.client.get(self.endpoint)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, {'main_world_id': 1})
+        self.assertEqual(response.data, {'main_world_id': 1, 'building_enabled': True})
 
     def test_new_site_control_defaults_to_world_one(self):
         site = SiteControl.objects.create(name='prod')
         self.assertEqual(site.main_world_id, 1)
-        self.assertEqual(self.client.get(self.endpoint).data, {'main_world_id': 1})
+        self.assertEqual(self.client.get(self.endpoint).data, {'main_world_id': 1, 'building_enabled': True})
 
     def test_override_is_public_and_does_not_expose_other_settings(self):
         SiteControl.objects.create(
             name='prod', main_world_id=12, maintenance_mode=True,
-            platform_policy={'world_creation': 'whitelist'},
+            building_enabled=False,
         )
         # Public configuration must also work with stale browser credentials.
         self.client.credentials(HTTP_AUTHORIZATION='Bearer expired')
         with self.assertNumQueries(1):
             response = self.client.get(self.endpoint)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, {'main_world_id': 12})
+        self.assertEqual(response.data, {'main_world_id': 12, 'building_enabled': False})
 
     def test_blank_restores_multi_world_mode_and_changes_are_immediate(self):
         site = SiteControl.objects.create(name='prod', main_world_id=12)
-        self.assertEqual(self.client.get(self.endpoint).data, {'main_world_id': 12})
+        self.assertEqual(self.client.get(self.endpoint).data['main_world_id'], 12)
         site.main_world_id = None
         site.save(update_fields=['main_world_id'])
-        self.assertEqual(self.client.get(self.endpoint).data, {'main_world_id': None})
+        self.assertIsNone(self.client.get(self.endpoint).data['main_world_id'])
 
     def test_admin_field_rejects_nonpositive_ids_and_accepts_blank(self):
         field = SiteControl._meta.get_field('main_world_id')
@@ -59,8 +59,8 @@ class TestMainWorldPermissions(WorldTestCase):
         self.world.save(update_fields=['is_public'])
         self.client.force_authenticate(user=None)
         self.assertEqual(
-            self.client.get(reverse('lobby-config')).data,
-            {'main_world_id': self.world.pk},
+            self.client.get(reverse('lobby-config')).data['main_world_id'],
+            self.world.pk,
         )
         response = self.client.get(reverse('lobby-world-detail', args=[self.world.pk]))
         self.assertIn(response.status_code, (401, 403))

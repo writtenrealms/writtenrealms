@@ -1,17 +1,14 @@
-from typing import Literal
-
-from pydantic import BaseModel
-
 from system.models import SiteControl
 
 
-class PlatformPolicy(BaseModel):
-    world_creation: Literal['all', 'none', 'whitelist'] = 'all'
+def building_enabled(site_name='prod'):
+    """Whether any signed-up user may build. Defaults to open without a row."""
+    enabled = SiteControl.objects.filter(name=site_name).values_list(
+        'building_enabled', flat=True).first()
+    return True if enabled is None else enabled
 
 
-def get_platform_policy(site_name='prod'):
-    site_control = SiteControl.objects.filter(name=site_name).first()
-    policy_data = {}
-    if site_control and isinstance(site_control.platform_policy, dict):
-        policy_data = site_control.platform_policy
-    return PlatformPolicy.model_validate(policy_data)
+def can_create_worlds(user):
+    if not user.is_authenticated or user.is_temporary:
+        return False
+    return user.is_staff or building_enabled()

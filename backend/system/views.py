@@ -37,7 +37,7 @@ from spawns.serializers import PlayerSerializer
 from spawns.services import WorldGate
 from system import serializers as system_serializers
 from system import tasks as system_tasks
-from system.models import Nexus
+from system.models import Nexus, SiteControl
 from system.services import get_staff_panel
 from users import (serializers as user_serializers, models as user_models)
 from users.models import User
@@ -856,7 +856,7 @@ class StaffSearch(APIView):
 
 staff_search = StaffSearch.as_view()
 
-class StaffPanel(APIView, StaffViewMixin):
+class StaffPanel(StaffViewMixin, APIView):
 
     def get(self, request, format=None):
         panel_data = get_staff_panel()
@@ -864,7 +864,23 @@ class StaffPanel(APIView, StaffViewMixin):
 
 staff_panel = StaffPanel.as_view()
 
-class StaffInit(APIView, StaffViewMixin):
+
+class StaffSiteSettings(StaffViewMixin, APIView):
+    """Site-wide switches staff can change from the control panel."""
+
+    def patch(self, request, format=None):
+        building_enabled = request.data.get('building_enabled')
+        if not isinstance(building_enabled, bool):
+            raise serializers.ValidationError(
+                {'building_enabled': 'Must be true or false.'})
+        site_control, _ = SiteControl.objects.get_or_create(name='prod')
+        site_control.building_enabled = building_enabled
+        site_control.save(update_fields=['building_enabled', 'modified_ts'])
+        return Response({'building_enabled': site_control.building_enabled})
+
+staff_site_settings = StaffSiteSettings.as_view()
+
+class StaffInit(StaffViewMixin, APIView):
 
     def post(self, request, format=None):
         system_tasks.initialize.delay()
@@ -872,7 +888,7 @@ class StaffInit(APIView, StaffViewMixin):
 
 staff_init = StaffInit.as_view()
 
-class StaffTeardown(APIView, StaffViewMixin):
+class StaffTeardown(StaffViewMixin, APIView):
 
     def post(self, request, format=None):
         system_tasks.teardown.delay()
@@ -881,7 +897,7 @@ class StaffTeardown(APIView, StaffViewMixin):
 staff_teardown = StaffTeardown.as_view()
 
 
-class StaffInvalidateUserEmail(APIView, StaffViewMixin):
+class StaffInvalidateUserEmail(StaffViewMixin, APIView):
 
     def post(self, request, user_pk=None, format=None):
         user = get_object_or_404(User, pk=user_pk)
@@ -893,7 +909,7 @@ class StaffInvalidateUserEmail(APIView, StaffViewMixin):
 invalidate_email = StaffInvalidateUserEmail.as_view()
 
 
-class NexusViewSet(viewsets.ModelViewSet, StaffViewMixin):
+class NexusViewSet(StaffViewMixin, viewsets.ModelViewSet):
 
     queryset = Nexus.objects.all()
     serializer_class = system_serializers.NexusSerializer
@@ -904,7 +920,7 @@ nexus_details = NexusViewSet.as_view({
 })
 
 
-class NexusData(APIView, StaffViewMixin):
+class NexusData(StaffViewMixin, APIView):
 
     def get(self, request, pk=None, format=None):
         nexus = get_object_or_404(Nexus, pk=pk)

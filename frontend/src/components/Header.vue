@@ -11,7 +11,7 @@
       <div class="menu" v-if="showMenu">
         <template v-if="isAuthenticated">
           <router-link to="/lobby" :class="{ 'selected': isLobbyActive }">{{ lobbyLabel }}</router-link>
-          <router-link :to="{ name: 'lobby_section', params: { section: 'building' } }">Build</router-link>
+          <router-link v-if="canCreateWorlds" :to="{ name: 'lobby_building' }">Build</router-link>
           <a href="#" @click.prevent="editAccount" v-if="!isTemporary">Account</a>
           <a href="https://core.writtenrealms.com/docs/">Docs</a>
           <a href="#" @click.prevent="logout">Log Out</a>
@@ -34,9 +34,12 @@ import { FormElement, EntityForm } from '@/core/forms';
 import ConfirmEmail from '@/components/account/ConfirmEmail.vue';
 import StaffAccount from '@/components/account/StaffAccountSlot.vue';
 import { loadPlatformConfig, platformConfig } from '@/core/platform';
+import { useBuilding } from '@/composables/useBuilding';
 
 const store = useStore();
 const router = useRouter();
+
+const { canCreateWorlds } = useBuilding();
 
 const showMenu = true;
 const isAuthenticated = computed(() => store.getters.isAuthenticated);

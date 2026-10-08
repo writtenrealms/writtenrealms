@@ -45,7 +45,14 @@ class SiteControl(AdventBaseModel):
 
     name = models.TextField()
     maintenance_mode = models.BooleanField(default=False)
-    platform_policy = models.JSONField(default=dict, blank=True)
+    building_enabled = models.BooleanField(
+        default=True,
+        help_text=(
+            'Allow any signed-up user to create worlds and see the Build '
+            'menu. Staff can always build, and builders keep access to '
+            'worlds they already author or were added to.'
+        ),
+    )
     main_world_id = models.PositiveIntegerField(
         default=1, null=True, blank=True, validators=[MinValueValidator(1)],
         help_text=(

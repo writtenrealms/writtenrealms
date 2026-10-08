@@ -19,6 +19,13 @@
               <Slider :value="panel.maintenance_mode" @change="onSliderChange" />
             </div>
           </div>
+          <div class="maintenance-status flex">
+            <div class="mt-1">Open building to everyone:</div>
+            <div class='slider-container'>
+              <Slider :value="panel.building_enabled" @change="onBuildingChange" />
+            </div>
+          </div>
+          <p class="color-text-60 mt-1">When off, only staff can create worlds or see Build. Builders keep their existing worlds.</p>
         </div>
 
         <!-- Broadcast -->
@@ -127,6 +134,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useStore } from "vuex";
 import Slider from "@/components/forms/Slider.vue";
+import { platformConfig } from "@/core/platform";
 import axios from "axios";
 
 const store = useStore();
@@ -228,6 +236,21 @@ const world_admin_instance_link = (context_id, instance_id) => {
       world_id: context_id,
       instance_id: instance_id,
     }
+  }
+};
+
+const onBuildingChange = async (enabled: boolean) => {
+  try {
+    const resp = await axios.patch("/staff/site/", { building_enabled: enabled });
+    store.commit("staff/staff_panel_set", { ...panel.value, building_enabled: resp.data.building_enabled });
+    if (platformConfig.value) {
+      platformConfig.value = { ...platformConfig.value, building_enabled: resp.data.building_enabled };
+    }
+    store.commit("ui/notification_set", resp.data.building_enabled
+      ? "Building is open to everyone."
+      : "Building is limited to staff.");
+  } catch (error) {
+    store.commit("ui/notification_set_error", "Couldn't change the building setting.");
   }
 };
 
