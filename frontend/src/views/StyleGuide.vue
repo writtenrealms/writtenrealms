@@ -198,6 +198,8 @@
     <!-- Status and feedback -->
     <section id="feedback" class="sg-section">
       <h2>Status and feedback</h2>
+      <p class="sg-note">Use .inline-notice for persistent, informational feedback beside a form. Reserve red error styling for failures that need correction.</p>
+      <p class="inline-notice" role="status">This site is currently invite-only. Please sign in with an invited email address, or contact the administrator to request an invitation.</p>
       <div class="sg-row sg-flush-row">
         <span class="sg-code">.tag</span>
         <div class="sg-inline">

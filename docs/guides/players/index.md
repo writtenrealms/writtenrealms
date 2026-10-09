@@ -147,9 +147,14 @@ is unavailable.
 
 ## Account Preferences
 
-Some independently hosted servers require an invitation. On those servers,
-use an email address approved by the administrator when signing in or creating
-an account. Email, Google, and Alpha sign-in follow the same admission policy;
+When a site is invite-only, sign-up and sign-in show a notice inside the form
+if your email address has not been admitted. The notice explains how to request
+an invitation, and your entered details stay in place so you can try an invited
+address. A fully closed site instead asks you to check back later.
+
+Some servers, including Core during its closed alpha, require an invitation.
+On those servers, use an email address approved by the administrator when
+signing in or creating an account. Email, Google, and Alpha sign-in follow the same admission policy;
 guest play is unavailable. Contact the administrator if your address has not
 been admitted. An invitation grants access to the server; it does not grant
 builder or administrator permissions.

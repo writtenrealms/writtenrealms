@@ -2,6 +2,7 @@ import axios from "axios";
 import store from "@/store";
 import router from "@/router";
 import { API_BASE } from "@/config";
+import { accessNotice } from "@/core/accessNotice";
 
 export default function interceptorSetup() {
 
@@ -27,10 +28,17 @@ export default function interceptorSetup() {
         store.commit("auth/auth_clear");
         // router.push({ name: "login" });
       } else if (error.response.status == 403) {
+        if (["signup", "login"].includes(String(router.currentRoute.value.name)) && accessNotice(error)) {
+          // Auth forms keep admission notices beside the fields without a toast.
+          return Promise.reject(error);
+        }
         if (router.currentRoute.value.name != "game") {
+          const detail = error.response.data?.detail;
           store.commit(
             "ui/notification_set_error",
-            "You are not authorized to perform this action"
+            typeof detail === "string" && detail.trim()
+              ? detail
+              : "You are not authorized to perform this action"
           );
         }
       } else if (error.response.status == 400) {

@@ -724,3 +724,15 @@ svg.lucide {
     }
   }
 }
+
+.inline-notice {
+  background: $color-background-light;
+  border: 1px solid $color-background-border;
+  border-left: 3px solid $color-secondary;
+  padding: 0.85rem 1rem;
+  color: $color-text;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+
+  &.inline-notice-error { border-left-color: $color-red; }
+}

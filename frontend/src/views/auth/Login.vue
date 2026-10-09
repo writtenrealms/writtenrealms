@@ -2,6 +2,8 @@
   <form class="single-form" @submit.prevent="login">
     <h1>LOG IN</h1>
 
+    <p v-if="admissionMessage" class="inline-notice" role="status">{{ admissionMessage }}</p>
+
     <template v-if="sent">
       Check your email for a login link.
     </template>
@@ -47,9 +49,11 @@ import { useRouter, useRoute } from "vue-router";
 import { GoogleLogin } from 'vue3-google-login';
 import { GOOGLE_AUTH_ENABLED } from "@/config";
 import { rememberPostLoginRedirect, safeRedirect } from "@/core/authRedirect";
+import { accessNotice } from "@/core/accessNotice";
 
 const email = ref("");
 const sent = ref(false);
+const admissionMessage = ref('');
 const googleAuthEnabled = GOOGLE_AUTH_ENABLED;
 
 const store = useStore();
@@ -64,16 +68,25 @@ onMounted(() => {
 const redirect = safeRedirect(route.query.redirect);
 
 const login = async () => {
+  admissionMessage.value = '';
   rememberPostLoginRedirect(redirect);
-  await store.dispatch('auth/login', {
-    email: email.value
-  });
-  sent.value = true;
+  try {
+    await store.dispatch('auth/login', {
+      email: email.value
+    });
+    sent.value = true;
+  } catch (e) {
+    admissionMessage.value = accessNotice(e);
+  }
 }
 
 const googleLoginCallback = async (response) => {
-  await store.dispatch('auth/google_login', response.credential);
-
+  admissionMessage.value = '';
+  const result = await store.dispatch('auth/google_login', response.credential);
+  if (!result.success) {
+    admissionMessage.value = accessNotice(result.error);
+    return;
+  }
   router.push(redirect || "/lobby");
 }
 </script>

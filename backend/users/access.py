@@ -5,12 +5,12 @@ from rest_framework.authentication import SessionAuthentication
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
-from core.access_policy import email_is_allowed
+from core.access_policy import access_denial_detail, email_is_allowed
 
 
 def require_allowed_email(email):
     if not email_is_allowed(email, settings.ACCESS_EMAIL_ALLOWLIST):
-        raise PermissionDenied('This server is invitation-only. Contact its administrator for access.')
+        raise PermissionDenied(access_denial_detail())
 
 
 class AllowedEmailModelBackend(ModelBackend):

@@ -2,6 +2,8 @@
   <form class="single-form" @submit.prevent="signup">
     <h1>SIGN UP</h1>
 
+    <p v-if="admissionMessage" class="inline-notice" role="status">{{ admissionMessage }}</p>
+
     <template v-if="sent">
       Check your email for a login link to finish signing in.
     </template>
@@ -76,6 +78,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { GoogleLogin } from 'vue3-google-login';
 import { GOOGLE_AUTH_ENABLED } from '@/config';
 import { rememberPostLoginRedirect, safeRedirect } from '@/core/authRedirect';
+import { accessNotice } from '@/core/accessNotice';
 
 const store = useStore();
 const router = useRouter();
@@ -85,6 +88,7 @@ const email = ref('');
 const send_newsletter = ref(false);
 const username = ref('');
 const sent = ref(false);
+const admissionMessage = ref('');
 const googleAuthEnabled = GOOGLE_AUTH_ENABLED;
 
 onMounted(() => {
@@ -93,6 +97,7 @@ onMounted(() => {
 });
 
 const signup = async () => {
+  admissionMessage.value = '';
   rememberPostLoginRedirect(redirect);
   try {
     await store.dispatch('auth/signup', {
@@ -102,12 +107,17 @@ const signup = async () => {
     });
     sent.value = true;
   } catch (e) {
-    // Stay on the page
+    admissionMessage.value = accessNotice(e);
   }
 }
 
 const googleLoginCallback = async (response) => {
-  await store.dispatch('auth/google_login', response.credential);
+  admissionMessage.value = '';
+  const result = await store.dispatch('auth/google_login', response.credential);
+  if (!result.success) {
+    admissionMessage.value = accessNotice(result.error);
+    return;
+  }
   router.push(redirect || "/lobby");
 }
 </script>

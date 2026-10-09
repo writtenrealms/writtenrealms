@@ -28,6 +28,10 @@ class AdmissionTests(APITestCase):
         for url in ['email-login-request', 'signup']:
             response = self.client.post(reverse(url), {'email': 'new@example.com'})
             self.assertEqual(response.status_code, 403)
+            self.assertEqual(response.data['code'], 'invite_only')
+            self.assertEqual(response.data['detail'],
+                'This site is currently invite-only. Please sign in with an invited '
+                'email address, or contact the administrator to request an invitation.')
         self.assertFalse(User.objects.filter(email='new@example.com').exists())
         mail.assert_not_called()
 

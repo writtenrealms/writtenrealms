@@ -3,6 +3,7 @@ import { Module } from "vuex";
 import { ActionMethods } from "@/types/vuex-types";
 
 import { API_BASE } from "@/config";
+import { accessNotice } from "@/core/accessNotice";
 
 const LOGIN_REQUEST_ENDPOINT = `${API_BASE}auth/email/request/`;
 const LOGIN_CONFIRM_ENDPOINT = `${API_BASE}auth/email/confirm/`;
@@ -45,6 +46,7 @@ const actions = {
       }
       localStorage.removeItem("jwtToken");
       localStorage.removeItem("refreshToken");
+      throw error;
     }
   },
 
@@ -113,7 +115,9 @@ const actions = {
       commit("user_set", resp.data.user);
       return { success: true, resp: resp }
     } catch (error: any) {
-      commit('ui/notification_set_error', 'Error logging in.')
+      if (!accessNotice(error)) {
+        commit('ui/notification_set_error', 'Error logging in.', { root: true });
+      }
       return { success: false, error: error}
     }
   },
