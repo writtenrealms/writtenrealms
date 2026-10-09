@@ -62,8 +62,8 @@
             class="stock-chip"
           >
             <strong>{{ slot.key }}</strong>
-            <span>{{ stockSourceLabel(slot) }} × {{ slot.count }}</span>
-            <span class="stock-refresh color-text-60">{{ refreshLabel(slot.refresh) }}</span>
+            <span>{{ stockSourceLabel(slot) }}<template v-if="!slot.unlimited"> × {{ slot.count }}</template></span>
+            <span class="stock-refresh color-text-60">{{ slot.unlimited ? "Unlimited" : refreshLabel(slot.refresh) }}</span>
           </span>
         </div>
         <div v-else class="stock-empty color-text-60">No stock slots assigned.</div>

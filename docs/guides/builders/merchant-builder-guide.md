@@ -186,6 +186,38 @@ spec:
 Garron appears as an NPC in the room, but `kill garron` is rejected because
 `combat.attackable` is false.
 
+## Unlimited Inventory
+
+Use `unlimited: true` on an individual fixed item slot when every player should
+be able to buy it without waiting for restocking. A profile can mix unlimited
+supplies with finite or rotating stock:
+
+```yaml
+stock:
+  - key: iron-swords
+    item_definition: itemdefinition.iron-sword
+    unlimited: true
+  - key: repair-kits
+    item_definition: itemdefinition.repair-kit
+    count: 5
+    refresh: fill_missing
+```
+
+Unlimited entries must omit `count` and `refresh`. They require an
+`item_definition` without randomization; item bundles remain finite. Existing
+entries are finite unless `unlimited: true` is set. Remove an item's unlimited
+merchant entries before adding randomization to its definition.
+
+LIST shows one entry marked **Unlimited**. Buying creates a fresh item and
+leaves that listing available, including for repeated purchases by number.
+No unsold item copies are created for an unlimited entry. A shop containing
+only unlimited entries skips scheduled restocking unless finite purchase funds
+or buyback expiration still require the timer. `funds.mode: unlimited` controls
+the merchant's purchasing budget separately from inventory availability.
+
+Supplying `spec.stock` replaces the profile's entire catalog. Include all finite
+and unlimited entries when updating it; omitting `stock` preserves the catalog.
+
 ## Variable Inventory Example
 
 This merchant keeps three rotating curios in stock. Each restock rerolls the

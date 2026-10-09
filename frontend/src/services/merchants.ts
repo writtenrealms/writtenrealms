@@ -28,8 +28,9 @@ export interface MerchantProfileSummary {
 
 export interface MerchantStockSlot {
   key: string;
-  count: number;
-  refresh: "fill_missing" | "reroll_on_restock";
+  unlimited?: boolean;
+  count?: number;
+  refresh?: "fill_missing" | "reroll_on_restock";
   item_definition?: string;
   item_bundle?: string;
 }

@@ -11,12 +11,14 @@ from typing import Iterable
 
 from django.core.cache import cache
 from django.db import transaction
+from django.db.models import Q
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.utils import timezone
 from spawns.instance_clock import gameplay_now, in_simulation, is_time_controlled, live_worlds
 
 from builders.models import MerchantProfile, MerchantStockSlot
+from builders.item_definitions import preview_item_from_definition
 from config import constants as adv_consts
 from core.abilities import definition_world
 from core.economy import MAX_CURRENCY_AMOUNT, money_payload
@@ -70,19 +72,40 @@ def _serialize_stock_entry(
     number: int,
     viewer: Player,
     item_payload: dict | None = None,
+    sell_markup: float = 1.0,
 ) -> dict:
+    payload = item_payload if item_payload is not None else _serialized_item_payload(
+        _stock_item(entry), viewer=viewer,
+    )
+    unlimited = entry.item_id is None
+    if unlimited:
+        payload = {**payload, "key": f"merchant_stock_entry.{entry.id}"}
     return {
         "id": entry.id,
         "number": number,
         "key": f"merchant_stock_entry.{entry.id}",
-        "price": money_payload(int(entry.price or 0), entry.currency),
-        "item": (
-            item_payload
-            if item_payload is not None
-            else _serialized_item_payload(entry.item, viewer=viewer)
-        ),
+        "price": money_payload(_stock_price(entry, sell_markup), entry.currency),
+        "item": payload,
+        "unlimited": unlimited,
         "source_slot": entry.stock_slot.key if entry.stock_slot else "",
     }
+
+
+def _stock_item(entry: MerchantStockEntry) -> Item:
+    if entry.item_id is not None:
+        return entry.item
+    definition = entry.stock_slot.item_definition if entry.stock_slot else None
+    if definition is None or not entry.stock_slot.unlimited or definition.randomization:
+        raise ActionError("That catalog item is no longer available.", code="stock_not_found")
+    return preview_item_from_definition(definition)
+
+
+def _stock_price(entry: MerchantStockEntry, sell_markup: float) -> int:
+    # Catalogs have no replenishment cycle. Definition price edits take effect
+    # immediately, just as their unsaved item previews do.
+    if entry.item_id is None:
+        return _item_price(entry.stock_slot.item_definition, sell_markup)
+    return int(entry.price or 0)
 
 
 def _serialize_offer_entry(
@@ -391,10 +414,15 @@ def _profile_budget(profile: MerchantProfile) -> int | None:
     return max(0, int(profile.purchase_budget or 0))
 
 
-def _set_next_restock(runtime: MerchantRuntime, *, now=None) -> None:
+def _set_next_restock(runtime: MerchantRuntime, *, now=None, has_finite_stock=True) -> None:
     now = now or gameplay_now(runtime.world_id)
     interval = runtime.profile.restock_interval_seconds
-    if interval:
+    needs_restock = (
+        has_finite_stock
+        or runtime.profile.funds_mode == MerchantProfile.FUNDS_MODE_FINITE
+        or (runtime.profile.buyback_enabled and runtime.profile.buyback_expires == MerchantProfile.BUYBACK_EXPIRES_ON_RESTOCK)
+    )
+    if interval and needs_restock:
         runtime.next_restock_ts = now + timedelta(seconds=int(interval))
     else:
         runtime.next_restock_ts = None
@@ -718,6 +746,10 @@ def _retire_stock_entries(entries: Iterable[MerchantStockEntry]) -> None:
     for entry in entries:
         if entry.status != MerchantStockEntry.STATUS_AVAILABLE:
             continue
+        if entry.item_id is None:
+            # No item cleanup will cascade to an obsolete catalog entry.
+            entry.delete()
+            continue
         entry.status = MerchantStockEntry.STATUS_RETIRED
         entry.save(update_fields=["status", "modified_ts"])
         item = entry.item
@@ -756,6 +788,15 @@ def _create_stock_entry(runtime: MerchantRuntime, slot: MerchantStockSlot, item:
 
 
 def _restock_definition_slot(runtime: MerchantRuntime, slot: MerchantStockSlot) -> None:
+    if slot.unlimited:
+        if not runtime.stock_entries.filter(stock_slot=slot, status=MerchantStockEntry.STATUS_AVAILABLE).exists():
+            MerchantStockEntry.objects.create(
+                runtime=runtime,
+                stock_slot=slot,
+                price=_item_price(slot.item_definition, runtime.profile.sell_markup),
+                currency=runtime.settlement_currency,
+            )
+        return
     available_count = runtime.stock_entries.filter(
         stock_slot=slot,
         status=MerchantStockEntry.STATUS_AVAILABLE,
@@ -850,14 +891,15 @@ def restock_merchant(
     runtime.settlement_currency = runtime.profile.settlement_currency
     _expire_buyback_entries(runtime)
 
-    for slot in runtime.profile.stock_slots.select_related("item_definition", "item_bundle").order_by("created_ts", "id"):
+    slots = list(runtime.profile.stock_slots.select_related("item_definition", "item_bundle").order_by("created_ts", "id"))
+    for slot in slots:
         if slot.item_definition_id:
             _restock_definition_slot(runtime, slot)
         elif slot.item_bundle_id:
             _restock_bundle_slot(runtime, slot)
 
     runtime.last_restocked_ts = now
-    _set_next_restock(runtime, now=now)
+    _set_next_restock(runtime, now=now, has_finite_stock=any(not slot.unlimited for slot in slots))
     runtime.save(
         update_fields=[
             "remaining_purchase_budget",
@@ -952,14 +994,17 @@ def resolve_merchant_runtime(player: Player, selector: str | None) -> MerchantRu
 def _available_stock_queryset(runtime: MerchantRuntime):
     return (
         runtime.stock_entries.filter(
+            Q(item__is_pending_deletion=False)
+            | Q(item__isnull=True, stock_slot__unlimited=True),
             status=MerchantStockEntry.STATUS_AVAILABLE,
-            item__is_pending_deletion=False,
         )
         .select_related(
             "item",
             "item__definition",
             "item__currency",
             "stock_slot",
+            "stock_slot__item_definition",
+            "stock_slot__item_definition__currency",
             "currency",
         )
         .order_by(*_STOCK_ORDERING)
@@ -1156,14 +1201,16 @@ def _merchant_funds_payload(runtime: MerchantRuntime) -> dict:
 
 
 def list_merchant_stock(player: Player, merchant_selector: str | None) -> dict:
+    from spawns.state_payloads import serialize_inventory
+
     runtime = resolve_merchant_runtime(player, merchant_selector)
     candidates = list(
         _available_stock_queryset(runtime)[:MAX_MERCHANT_STOCK_LIST_ITEMS + 1]
     )
     truncated = len(candidates) > MAX_MERCHANT_STOCK_LIST_ITEMS
     entries = candidates[:MAX_MERCHANT_STOCK_LIST_ITEMS]
-    item_payloads = _serialized_item_payload_map(
-        (entry.item for entry in entries),
+    item_payloads = serialize_inventory(
+        [_stock_item(entry) for entry in entries],
         viewer=None,
     )
     _cache_merchant_selection(
@@ -1180,9 +1227,10 @@ def list_merchant_stock(player: Player, merchant_selector: str | None) -> dict:
                 entry,
                 number=number,
                 viewer=player,
-                item_payload=item_payloads[entry.item_id],
+                item_payload=item_payload.model_dump(),
+                sell_markup=runtime.profile.sell_markup,
             )
-            for number, entry in enumerate(entries, start=1)
+            for number, (entry, item_payload) in enumerate(zip(entries, item_payloads), start=1)
         ],
         "funds": _merchant_funds_payload(runtime),
         "balance": _player_settlement_balance(player, runtime),
@@ -1204,11 +1252,7 @@ def _find_stock_entry(
         raw_id = normalized.split(".", 1)[1]
         entry_id = _bounded_model_id(raw_id)
         if entry_id is not None:
-            entry = runtime.stock_entries.filter(
-                pk=entry_id,
-                status=MerchantStockEntry.STATUS_AVAILABLE,
-                item__is_pending_deletion=False,
-            ).first()
+            entry = _available_stock_queryset(runtime).filter(pk=entry_id).first()
             if entry:
                 return entry
 
@@ -1237,7 +1281,7 @@ def _find_stock_entry(
         raise ActionError("That item is not for sale.", code="stock_not_found")
 
     for entry in _available_stock_queryset(runtime)[:MAX_MERCHANT_STOCK_LIST_ITEMS]:
-        if item_matches_selector(entry.item, normalized):
+        if item_matches_selector(_stock_item(entry), normalized):
             return entry
     raise ActionError("That item is not for sale.", code="stock_not_found")
 
@@ -1287,21 +1331,28 @@ def buy_item(player: Player, merchant_selector: str | None, item_selector: str |
             "profile", "mob", "room", "settlement_currency").get(pk=runtime.pk)
         entry = _find_stock_entry(player, runtime, item_selector)
         entry = MerchantStockEntry.objects.select_for_update(of=("self",)).select_related(
-            "item", "currency").get(pk=entry.pk)
+            "item", "currency", "stock_slot", "stock_slot__item_definition",
+            "stock_slot__item_definition__currency").get(pk=entry.pk)
         if (
             entry.status != MerchantStockEntry.STATUS_AVAILABLE
-            or entry.item.is_pending_deletion
+            or (entry.item_id is not None and entry.item.is_pending_deletion)
         ):
             raise ActionError(
                 "That item is not for sale.",
                 code="stock_not_found",
             )
-        entry.item = (
-            Item.objects.select_for_update(of=("self",))
-            .select_related("definition", "currency")
-            .get(pk=entry.item_id)
-        )
-        price = int(entry.price or 0)
+        unlimited = entry.item_id is None
+        if unlimited:
+            preview = _stock_item(entry)
+            if preview.cost is not None and preview.currency_id != runtime.settlement_currency_id:
+                raise ActionError("Merchant stock uses a different currency.", code="merchant_currency_mismatch")
+        else:
+            entry.item = (
+                Item.objects.select_for_update(of=("self",))
+                .select_related("definition", "currency")
+                .get(pk=entry.item_id)
+            )
+        price = _stock_price(entry, runtime.profile.sell_markup)
         try:
             mutation = mutate_balances(
                 player,
@@ -1310,14 +1361,18 @@ def buy_item(player: Player, merchant_selector: str | None, item_selector: str |
             )
         except WalletError as error:
             raise ActionError(str(error), code=error.code)
-        entry.status = MerchantStockEntry.STATUS_SOLD
-        entry.save(update_fields=["status", "modified_ts"])
-        entry.item.container = player
-        entry.item.save(update_fields=["container_type", "container_id", "modified_ts"])
+        if unlimited:
+            purchased_item = entry.stock_slot.item_definition.spawn(target=player, spawn_world=player.world)
+        else:
+            entry.status = MerchantStockEntry.STATUS_SOLD
+            entry.save(update_fields=["status", "modified_ts"])
+            entry.item.container = player
+            entry.item.save(update_fields=["container_type", "container_id", "modified_ts"])
+            purchased_item = entry.item
 
     return {
         "merchant": merchant_runtime_payload(runtime),
-        "item": _serialized_item_payload(entry.item, viewer=player),
+        "item": _serialized_item_payload(purchased_item, viewer=player),
         "price": money_payload(price, entry.currency),
         "economy": {
             "wallet_revision": mutation.revision,

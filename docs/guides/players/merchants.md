@@ -44,6 +44,10 @@ instead of shifting that number onto another item, so open the view again when
 prompted. Item links in older console output also become inactive after the
 underlying item is no longer in that view or you leave the merchant's room.
 
+Entries marked **Unlimited** never sell out. Each purchase gives you a new copy,
+and you can reuse the same number while the view remains valid. Other entries
+have limited stock and may need time to restock.
+
 ## Prices, Eligibility, and Funds
 
 Item lookups show the item's value and merchant action price with the currency

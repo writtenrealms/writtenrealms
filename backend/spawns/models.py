@@ -1956,7 +1956,8 @@ class MerchantStockEntry(AdventBaseModel):
                                    **optional)
     item = models.OneToOneField('spawns.Item',
                                 on_delete=models.CASCADE,
-                                related_name='merchant_stock_entry')
+                                related_name='merchant_stock_entry',
+                                **optional)
     bundle_roll_id = models.TextField(**optional)
     price = models.BigIntegerField(default=0)
     currency = models.ForeignKey(

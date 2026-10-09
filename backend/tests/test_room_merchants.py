@@ -966,3 +966,31 @@ class TestConcurrentRoomMerchantRuntime(TransactionTestCase):
             ).count(),
             2,
         )
+
+    def test_concurrent_unlimited_buyers_get_distinct_items_without_consuming_catalog(self):
+        self.room.merchant_profile.stock_slots.update(unlimited=True)
+        players = [Player.objects.create(
+            name=f"Buyer {index}", user=self.user, room=self.room, world=self.spawn_world,
+        ) for index in range(4)]
+        for player in players:
+            mutate_balances(player, {self.currency: 2}, reason="test", emit_event=False)
+        key = list_merchant_stock(players[0], self.room.key)["stock"][0]["key"]
+        barrier = Barrier(len(players))
+
+        def purchase(player_id):
+            close_old_connections()
+            try:
+                player = Player.objects.get(pk=player_id)
+                barrier.wait(timeout=10)
+                return buy_item(player, self.room.key, key)
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=len(players)) as executor:
+            results = list(executor.map(purchase, [player.id for player in players]))
+        self.assertEqual(len({result["item"]["key"] for result in results}), len(players))
+        for result in results:
+            self.assertEqual(result["economy"]["balances"]["coin"], 1)
+        runtime = MerchantRuntime.objects.get(world=self.spawn_world, room=self.room)
+        self.assertEqual(runtime.stock_entries.count(), 1)
+        self.assertIsNone(runtime.stock_entries.get().item_id)

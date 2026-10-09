@@ -34,6 +34,12 @@ test("merchant summaries stay current with manifest apply responses", () => {
   assert.match(detailSource, /stockSummary\(profile\)/);
 });
 
+test("unlimited stock is labeled without a finite count or restock policy", () => {
+  assert.match(detailSource, /v-if="!slot.unlimited"/);
+  assert.match(detailSource, /slot.unlimited \? "Unlimited" : refreshLabel\(slot.refresh\)/);
+  assert.match(merchantServiceSource, /unlimited\?: boolean/);
+});
+
 test("shared manifest details use resource-generic copy and mutation behavior", () => {
   assert.match(
     sharedDetailsSource,

@@ -25,6 +25,7 @@
         >{{ entry.item?.name || "item" }}</span>
         <span v-else :class="[entry.item?.quality]">{{ entry.item?.name || "item" }}</span>
         for {{ formatPrice(entry.price) }}
+        <span v-if="entry.unlimited" class="color-text-60"> · Unlimited</span>
       </li>
     </ol>
     <div

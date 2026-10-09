@@ -310,6 +310,9 @@ Current required mappings:
   attachment; WR2 no longer has `MerchantInventory`, mob `merchant_profit`, or
   the `/game/system/update_merchants/` endpoint. Direct room attachment is an
   additional WR2 authoring option and is not inferred during WR1 conversion.
+  WR2 stock entries may explicitly set `unlimited: true` for a fixed,
+  nonrandomized item definition, omitting `count` and `refresh`. Preserve finite
+  legacy counts by default; do not infer unlimited supply from a large count.
 - WR1 crafter/upgrader mob-template flags and item `upgrade_count` do not
   export. WR2 crafting uses `craftmaterial`, `craftingrecipe`, and
   `craftingprofile` manifests, item-definition `spec.salvage`, and an optional
@@ -683,10 +686,21 @@ items, randomized stat items, and item bundles, live in:
 
 - [docs/guides/builders/item-definition-builder-guide.md](../guides/builders/item-definition-builder-guide.md)
 
-Merchant authoring details, including fixed stock, item-bundle stock, buyback,
+Merchant authoring details, including finite and unlimited fixed stock, item-bundle stock, buyback,
 finite funds, and killable versus non-killable shopkeepers, live in:
 
 - [docs/guides/builders/merchant-builder-guide.md](../guides/builders/merchant-builder-guide.md)
+
+Unlimited slots export `unlimited: true` instead of `count`/`refresh` and reject
+item bundles or randomized definitions. Each runtime holds one persistent
+catalog entry with no item instance; listing builds an unsaved definition
+preview, and purchasing creates the item inside the wallet transaction without
+consuming the catalog entry. Finite entries retain their individual item rows.
+Numbered selection keys remain stable across unlimited purchases. Catalog
+replacement retires previous entries, invalidating old selections. All-unlimited
+shops omit scheduled restocking unless finite funds or buyback expiration need
+it. Listing reads and serializes a bounded batch, including salvageability,
+without per-slot queries.
 
 Ability and Trainer Profile authoring, including direct room providers and
 optional presence-controlled trainer mobs, lives in:

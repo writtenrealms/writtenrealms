@@ -204,6 +204,7 @@ test("item hover and look values uppercase currency without changing normal mone
 });
 
 test("stock and buyback commands use generalized provider targets", () => {
+  assert.match(listSource, /v-if="entry.unlimited"[^>]*> · Unlimited/);
   assert.match(listSource, /merchantProviderTarget\(merchant\.value\)/);
   assert.match(listSource, /buy_command: buyCommand\(entry\)/);
   assert.match(listSource, /`buy \$\{entry\.key\} from \$\{merchantTarget\}`/);

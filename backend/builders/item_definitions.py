@@ -257,6 +257,17 @@ def _merge_attributes(*maps: dict[str, Any]) -> dict[str, float]:
     return merged
 
 
+def preview_item_from_definition(definition):
+    """Build an unsaved, unrolled item for a fixed merchant catalog listing."""
+    from spawns.models import Item
+
+    return Item(
+        definition=definition,
+        definition_slug_snapshot=definition.slug,
+        **_item_fields_from_definition(definition, _merge_attributes(definition.attributes)),
+    )
+
+
 def spawn_item_from_definition(
     definition,
     target,

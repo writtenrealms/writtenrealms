@@ -322,6 +322,7 @@ class MerchantStockSlot(AdventBaseModel):
         related_name='merchant_stock_slots',
         **optional)
     count = models.PositiveIntegerField(default=1)
+    unlimited = models.BooleanField(default=False)
     refresh = models.TextField(
         choices=list_to_choice(REFRESH_MODES),
         default=REFRESH_FILL_MISSING)

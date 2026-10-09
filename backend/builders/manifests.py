@@ -1897,8 +1897,10 @@ def merchant_profile_to_manifest(merchant_profile: MerchantProfile) -> dict[str,
                 {
                     **{
                         "key": slot.key,
-                        "count": int(slot.count),
-                        "refresh": slot.refresh,
+                        **({"unlimited": True} if slot.unlimited else {
+                            "count": int(slot.count),
+                            "refresh": slot.refresh,
+                        }),
                     },
                     **(
                         {"item_definition": slot.item_definition.slug}
@@ -5713,6 +5715,12 @@ def parse_item_definition_manifest(
         )
     except ItemDefinitionError as exc:
         raise serializers.ValidationError(str(exc))
+    if fields.get("randomization") and item_definition is not None and MerchantStockSlot.objects.filter(
+        item_definition=item_definition, unlimited=True,
+    ).exists():
+        raise serializers.ValidationError(
+            "Remove this item's unlimited merchant stock entries before adding randomization."
+        )
     salvage_only, salvage_yields = _coerce_item_salvage(
         world=world,
         spec_patch=spec_patch,
@@ -6397,7 +6405,7 @@ def _coerce_merchant_stock_slots(*, world: World, raw_stock: Any) -> list[dict[s
         field_prefix = f"spec.stock[{index}]"
         if not isinstance(raw_slot, dict):
             raise serializers.ValidationError(f"{field_prefix} must be a mapping.")
-        unknown_fields = sorted(set(raw_slot.keys()) - {"key", "item_definition", "item_bundle", "count", "refresh"})
+        unknown_fields = sorted(set(raw_slot.keys()) - {"key", "item_definition", "item_bundle", "count", "refresh", "unlimited"})
         if unknown_fields:
             raise serializers.ValidationError(
                 f"Unsupported {field_prefix} field(s): {', '.join(unknown_fields)}."
@@ -6406,6 +6414,12 @@ def _coerce_merchant_stock_slots(*, world: World, raw_stock: Any) -> list[dict[s
         if key in seen_keys:
             raise serializers.ValidationError(f"{field_prefix}.key is duplicated.")
         seen_keys.add(key)
+
+        unlimited = _coerce_bool(raw_slot.get("unlimited", False), f"{field_prefix}.unlimited")
+        if unlimited and ("count" in raw_slot or "refresh" in raw_slot):
+            raise serializers.ValidationError(
+                f"{field_prefix}: unlimited stock must omit count and refresh."
+            )
 
         sources = [
             name
@@ -6438,6 +6452,11 @@ def _coerce_merchant_stock_slots(*, world: World, raw_stock: Any) -> list[dict[s
             )
             default_refresh = MerchantStockSlot.REFRESH_REROLL_ON_RESTOCK
 
+        if unlimited and (item_definition is None or item_definition.randomization):
+            raise serializers.ValidationError(
+                f"{field_prefix}: unlimited stock requires a fixed item_definition without randomization."
+            )
+
         refresh = str(raw_slot.get("refresh", default_refresh)).strip().lower()
         if refresh not in MerchantStockSlot.REFRESH_MODES:
             raise serializers.ValidationError(
@@ -6450,6 +6469,7 @@ def _coerce_merchant_stock_slots(*, world: World, raw_stock: Any) -> list[dict[s
                 "item_definition": item_definition,
                 "item_bundle": item_bundle,
                 "count": count,
+                "unlimited": unlimited,
                 "refresh": refresh,
             }
         )
