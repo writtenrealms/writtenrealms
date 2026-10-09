@@ -93,8 +93,7 @@ from builders.models import (
     Social,
     Path,
     PathRoom,
-    WorldBuilder,
-    WorldReview)
+    WorldBuilder)
 from core.db import qs_by_pks
 from core.serializers import KeyNameSerializer, ReferenceField, AuthorField
 from builders.doors import (
@@ -110,7 +109,6 @@ from spawns.models import Player, PlayerConfig, Mob, Item, Equipment
 from system.models import Nexus
 from system.policies import can_create_worlds
 from users.models import User
-from worlds import serializers as world_serializers
 from worlds.models import (
     InstanceAssignment,
     InstanceRun,
@@ -231,7 +229,6 @@ class WorldSerializer(serializers.ModelSerializer):
     """
 
     last_viewed_room = serializers.SerializerMethodField()
-    review = serializers.SerializerMethodField()
     author = AuthorField()
     factions = serializers.SerializerMethodField()
     facts = serializers.SerializerMethodField()
@@ -264,7 +261,7 @@ class WorldSerializer(serializers.ModelSerializer):
             'last_viewed_room', 'short_description', 'state', 'is_multiplayer',
             'is_public', 'factions', 'facts', 'is_classless', 'class_options',
             'initial_state',
-            'review', 'maintenance_mode', 'maintenance_msg', 'instance_of',
+            'maintenance_mode', 'maintenance_msg', 'instance_of',
             'builder_info', 'currencies', 'default_currency',
             'initial_currency_code', 'initial_currency_name',
             'initial_currency_plural_name',
@@ -330,25 +327,6 @@ class WorldSerializer(serializers.ModelSerializer):
 
     def get_facts(self, world):
         return get_state_snapshot(STATE_SCOPE_WORLD, world)
-
-    def get_review(self, world):
-        review = WorldReview.objects.filter(
-            world=world
-        ).order_by('-created_ts').first()
-
-        if not review:
-            return {
-                'status': api_consts.WORLD_REVIEW_STATUS_UNSUBMITTED,
-                'text': '',
-                'reviewer': '',
-            }
-        else:
-            reviewer = review.reviewer.username if review.reviewer else ''
-            return {
-                'status': review.status,
-                'text': review.text,
-                'reviewer': reviewer,
-            }
 
     def get_instance_of(self, world):
         base_world = world.instance_of
@@ -3083,60 +3061,6 @@ class FactScheduleSerializer(serializers.ModelSerializer):
 
     def validate_fact(self, fact):
         return fact.lower().replace(' ', '_')
-
-
-# World Reviews
-
-class WorldReviewSerializer(serializers.ModelSerializer):
-
-    description = serializers.CharField(required=True, allow_null=False)
-    world = world_serializers.WorldSerializer(required=False)
-    world_author = serializers.SerializerMethodField()
-    world_builders = serializers.SerializerMethodField()
-    world_last_updated = serializers.SerializerMethodField()
-
-    class Meta:
-        model = WorldReview
-        fields = [
-            'id',
-            'world',
-            'reviewer',
-            'description',
-            'text',
-            'status',
-            'world_author',
-            'world_builders',
-            'world_last_updated',
-        ]
-
-        read_only_fields = ['world']
-
-    def get_world_author(self, review):
-        author = review.world.author
-        return {
-            'id': author.id,
-            'name': author.name,
-            'email': author.email,
-            'last_login': author.last_login,
-        }
-
-    def get_world_builders(self, review):
-        return [
-            {
-                'id': builder.id,
-                'name': builder.name,
-                'email': builder.email,
-                'last_login': builder.last_login,
-            }
-            for builder in review.world.builders.all()
-            if builder != review.world.author
-        ]
-
-    def get_world_last_updated(self, review):
-        last_viewed_room = LastViewedRoom.objects.filter(
-            world=review.world
-        ).order_by('-modified_ts').first()
-        return last_viewed_room.modified_ts if last_viewed_room else None
 
 
 class BuilderAssignmentSerializer(serializers.ModelSerializer):

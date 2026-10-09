@@ -32,8 +32,6 @@ display an error without changing the world or subscribing to its updates.
   progression, combat, and runtime rules.
 - [Zones, Rooms, and Doors](room-builder-guide.md) covers zone policy, room
   identity, exits, details, doors, and movement policy.
-- [World Publishing](world-publishing.md) explains review readiness and the
-  publication workflow.
 
 ## Definitions And Economy
 

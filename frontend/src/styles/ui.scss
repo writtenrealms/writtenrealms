@@ -29,7 +29,7 @@ svg.lucide {
   }
 }
 
-// Small uppercase label for a status or role, e.g. YOURS, BUILDER, APPROVED.
+// Small uppercase label for a status or role, e.g. YOURS, BUILDER, IN GAME.
 .tag {
   @include font-title-regular;
   display: inline-block;
@@ -51,11 +51,6 @@ svg.lucide {
   &.tag-green {
     color: $color-green-chat;
     border-color: rgba(39, 144, 132, 0.6);
-  }
-
-  &.tag-primary {
-    color: $color-primary;
-    border-color: rgba(215, 118, 23, 0.5);
   }
 }
 

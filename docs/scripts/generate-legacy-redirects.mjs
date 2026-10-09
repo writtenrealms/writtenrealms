@@ -14,7 +14,6 @@ const legacyRoutes = {
   "/playing/experience": "/players/",
   "/building": "/builders/",
   "/building/worlds": "/builders/world-config-builder-guide",
-  "/building/worlds/publishing": "/builders/world-publishing",
   "/building/commands": "/builders/builder-command-reference",
   "/building/conditions": "/builders/condition-builder-guide",
   "/building/factions": "/builders/faction-builder-guide",

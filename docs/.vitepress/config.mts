@@ -10,7 +10,6 @@ const builderSidebar: DefaultTheme.SidebarItem[] = [
     collapsed: false,
     items: [
       { text: "World config", link: "/builders/world-config-builder-guide" },
-      { text: "World publishing", link: "/builders/world-publishing" },
       { text: "Rooms and doors", link: "/builders/room-builder-guide" },
       { text: "Instances", link: "/builders/instance-builder-guide" },
       { text: "Spawn plans", link: "/builders/spawn-plan-builder-guide" },

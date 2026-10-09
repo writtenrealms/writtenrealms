@@ -1,5 +1,4 @@
 import axios from "axios";
-import reviews from "./reviews";
 
 const initial_state = () => {
   return {
@@ -12,9 +11,6 @@ const initial_state = () => {
 
 export default {
   namespaced: true,
-  modules: {
-    reviews,
-  },
 
   state: initial_state(),
 

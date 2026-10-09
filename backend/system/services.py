@@ -1,7 +1,6 @@
 from django.utils import timezone
 
 from config import constants as api_consts
-from builders.models import WorldReview
 from spawns.models import Player
 from system.models import Nexus, SiteControl
 from users.models import User
@@ -17,11 +16,6 @@ def get_staff_panel():
         'maintenance_mode': site_control.maintenance_mode,
         'building_enabled': site_control.building_enabled,
     }
-
-    # Unreviewed publication submissions
-    panel_data['unreviewed'] = WorldReview.objects.filter(
-        status=api_consts.WORLD_REVIEW_STATUS_SUBMITTED
-    ).count()
 
     # User signups in the last 24 hours
     one_day_ago = timezone.now() - timezone.timedelta(days=1)

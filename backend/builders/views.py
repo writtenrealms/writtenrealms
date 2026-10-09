@@ -93,8 +93,7 @@ from builders.models import (
     FactionRank,
     FACTION_TYPE_CORE,
     FactSchedule,
-    WorldBuilder,
-    WorldReview)
+    WorldBuilder)
 from spawns.models import Player
 from spawns import serializers as spawn_serializers
 from users.models import User
@@ -4950,93 +4949,6 @@ class WorldIntanceViewSet(BaseWorldBuilderViewSet):
         ).order_by('-created_ts')
 
 instance_list = WorldIntanceViewSet.as_view({'get': 'list', 'post': 'create'})
-
-
-class WorldReviewViewSet(BaseWorldBuilderViewSet):
-
-    serializer_class = builder_serializers.WorldReviewSerializer
-
-    def get_queryset(self):
-        return WorldReview.objects.filter(world=self.world)
-
-    def perform_create(self, serializer):
-        # Check that there are no other submitted reviews
-        if WorldReview.objects.filter(
-            world=self.world,
-            status=api_consts.WORLD_REVIEW_STATUS_SUBMITTED):
-            raise serializers.ValidationError(
-                'Only one review can be submitted at a time.')
-
-        # Check that it's been long enough since the last rejection
-        # if applicable.
-        last_rejection = WorldReview.objects.filter(
-            world=self.world,
-            status=api_consts.WORLD_REVIEW_STATUS_REVIEWED
-        ).order_by('-created_ts').first()
-        if last_rejection:
-            delta = (timezone.now() - last_rejection.created_ts).days
-            if delta < 30:
-                raise serializers.ValidationError(
-                    'Cannot resubmit for another {} days.'.format(30 - delta))
-
-        serializer.save(world=self.world)
-
-    @action(detail=True, methods=['post'], url_path='claim')
-    def claim_review(self, request, world_pk, pk):
-        if not request.user.is_staff:
-            raise drf_exceptions.PermissionDenied('Only staff can claim reviews.')
-
-        review = self.get_object()
-
-        if review.status != api_consts.WORLD_REVIEW_STATUS_SUBMITTED:
-            raise serializers.ValidationError(
-                'Only submitted reviews can be claimed.')
-
-        review.reviewer = request.user
-        review.save()
-
-        return Response(
-            self.serializer_class(review).data,
-            status=status.HTTP_201_CREATED)
-
-    @action(detail=True, methods=['post'], url_path='resolve')
-    def resolve_review(self, request, world_pk, pk):
-        if not request.user.is_staff:
-            raise drf_exceptions.PermissionDenied('Only staff can resolve reviews.')
-
-        review = self.get_object()
-
-        if review.status != api_consts.WORLD_REVIEW_STATUS_SUBMITTED:
-            raise serializers.ValidationError(
-                'Only submitted reviews can be resolved.')
-
-        _status = request.data.get('status')
-        text = request.data.get('text')
-
-        if _status not in [
-            api_consts.WORLD_REVIEW_STATUS_APPROVED,
-            api_consts.WORLD_REVIEW_STATUS_REVIEWED]:
-            raise drf_exceptions.ValidationError(
-                "Reviews can only be resolved into either 'approved' or 'reviewed'.")
-
-        if _status == api_consts.WORLD_REVIEW_STATUS_REVIEWED and not text:
-            raise drf_exceptions.ValidationError(
-                "A review must have a text field if it's not approved.")
-
-        review.status = _status
-        if text:
-            review.text = text
-        review.save()
-
-        return Response(
-            self.serializer_class(review).data,
-            status=status.HTTP_201_CREATED)
-
-review_list = WorldReviewViewSet.as_view({'get': 'list', 'post': 'create'})
-review_detail = WorldReviewViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'delete': 'destroy'})
 
 
 class BuilderAssignmentViewSet(BaseWorldBuilderViewSet):

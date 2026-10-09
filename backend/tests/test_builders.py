@@ -33,8 +33,7 @@ from builders.models import (
     FactionAssignment,
     FactionRank,
     Trigger,
-    WorldBuilder,
-    WorldReview)
+    WorldBuilder)
 from builders import serializers as builder_serializers
 from tests.base import WorldTestCase
 from spawns import serializers as spawn_serializers
@@ -2211,123 +2210,6 @@ class WorldManagePlayerTests(BuilderTestCase):
                     self.world.pk, other_player.pk]))
         self.assertEqual(resp.status_code, 404)
 
-
-class WorldReviewTests(BuilderTestCase):
-
-    def test_unsubmitted_world(self):
-        self.assertEqual(
-            self.world.review_status,
-            api_consts.WORLD_REVIEW_STATUS_UNSUBMITTED)
-
-    def test_submit_world_workflow(self):
-        self.assertEqual(WorldReview.objects.count(), 0)
-
-        description = 'This is a world that is ready for review.'
-
-        # Submit review
-        endpoint = reverse('builder-review-list', args=[self.world.pk])
-        resp = self.client.post(endpoint, {
-            'description': description
-        })
-        self.assertEqual(resp.status_code, 201)
-        review = WorldReview.objects.get(pk=resp.data['id'])
-        self.assertEqual(review.status,
-                         api_consts.WORLD_REVIEW_STATUS_SUBMITTED)
-        self.assertEqual(review.description, description)
-        self.assertEqual(resp.data['status'],
-                         api_consts.WORLD_REVIEW_STATUS_SUBMITTED)
-
-        # Submitting the world again gives an error because it's already submitted
-        endpoint = reverse('builder-review-list', args=[self.world.pk])
-        resp = self.client.post(endpoint, {
-            'description': description
-        })
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.data[0],
-                         'Only one review can be submitted at a time.')
-
-        # A non-staff member trying to claim the review fails
-        self.assertFalse(self.user.is_staff)
-        endpoint = reverse('builder-review-detail-claim',
-                           args=[self.world.pk, review.pk])
-        resp = self.client.post(endpoint, {})
-        self.assertEqual(resp.status_code, 403)
-
-        # A staff member claims the review
-        staff = self.create_user('staff@writtenrealms.com', is_staff=True)
-        self.client.force_authenticate(staff)
-        endpoint = reverse('builder-review-detail-claim',
-                           args=[self.world.pk, review.pk])
-        resp = self.client.post(endpoint, {})
-        self.assertEqual(resp.status_code, 201)
-        review.refresh_from_db()
-        self.assertEqual(review.reviewer, staff)
-
-        # A different staff member claims the review
-        staff2 = self.create_user('staff2@writtenrealms.com', is_staff=True)
-        self.client.force_authenticate(staff2)
-        endpoint = reverse('builder-review-detail-claim',
-                           args=[self.world.pk, review.pk])
-        resp = self.client.post(endpoint, {})
-        self.assertEqual(resp.status_code, 201)
-        review.refresh_from_db()
-        self.assertEqual(review.reviewer, staff2)
-
-        # Staff member can now either approve or reject the review.
-        # If they reject, a review must be provided.
-        endpoint = reverse('builder-review-detail-resolve',
-                           args=[self.world.pk, review.pk])
-        resp = self.client.post(endpoint, {
-            'status': api_consts.WORLD_REVIEW_STATUS_REVIEWED})
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.data[0],
-                         "A review must have a text field if it's not "
-                         "approved.")
-        resp = self.client.post(endpoint,
-                                {'status': api_consts.WORLD_REVIEW_STATUS_REVIEWED,
-                                 'text': 'This is a review.'})
-        self.assertEqual(resp.status_code, 201)
-        review.refresh_from_db()
-        self.assertEqual(review.status, api_consts.WORLD_REVIEW_STATUS_REVIEWED)
-        self.assertEqual(review.text, 'This is a review.')
-        # If they approve, a review is optional.
-        review.text = None
-        review.status = api_consts.WORLD_REVIEW_STATUS_SUBMITTED
-        review.save()
-        resp = self.client.post(endpoint,
-                                {'status': api_consts.WORLD_REVIEW_STATUS_APPROVED})
-        self.assertEqual(resp.status_code, 201)
-        review.refresh_from_db()
-        self.assertEqual(review.status, api_consts.WORLD_REVIEW_STATUS_APPROVED)
-
-        # Once a review has been resolved, it can't be claimed again, nor can it be resolved a
-        # second time.
-        endpoint = reverse('builder-review-detail-claim',
-                           args=[self.world.pk, review.pk])
-        resp = self.client.post(endpoint, {})
-        self.assertEqual(resp.status_code, 400)
-        endpoint = reverse('builder-review-detail-resolve',
-                           args=[self.world.pk, review.pk])
-        resp = self.client.post(endpoint, {
-            'status': api_consts.WORLD_REVIEW_STATUS_REVIEWED,
-            'text': ''})
-        self.assertEqual(resp.status_code, 400)
-
-    def test_cannot_resubmit_before_delay(self):
-        # Create review that was just rejected
-        reviewer = self.create_user('staff@writtenrealms.com', is_staff=True)
-        WorldReview.objects.create(
-                status=api_consts.WORLD_REVIEW_STATUS_REVIEWED,
-                world=self.world,
-                reviewer=reviewer)
-
-        endpoint = reverse('builder-review-list', args=[self.world.pk])
-        resp = self.client.post(endpoint, {
-            'description': 'Review description'
-        })
-        self.assertEqual(resp.status_code, 400)
-        self.assertEqual(resp.data[0],
-                         "Cannot resubmit for another 30 days.")
 
 class BuilderAssignmentTests(BuilderTestCase):
 

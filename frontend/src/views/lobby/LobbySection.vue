@@ -39,12 +39,11 @@ onMounted(async () => {
   let endpoint;
   if (router.currentRoute.value.params.section === 'playing') {
     endpoint = 'lobby/worlds/playing/?page_size=100';
-  } else if (router.currentRoute.value.params.section === 'reviewed') {
-    endpoint = 'lobby/worlds/reviewed/?page_size=100';
   } else if (router.currentRoute.value.params.section === 'public') {
     endpoint = 'lobby/worlds/public/?page_size=100';
   } else {
-    router.push({ name: 'lobby' });
+    await router.replace({ name: 'lobby' });
+    return;
   }
 
   const resp = await axios.get(endpoint);
@@ -54,8 +53,6 @@ onMounted(async () => {
 const sectionName = computed(() => {
   if (router.currentRoute.value.params.section === 'playing') {
     return 'Playing Worlds';
-  } else if (router.currentRoute.value.params.section === 'reviewed') {
-    return 'Reviewed Worlds';
   } else if (router.currentRoute.value.params.section === 'public') {
     return 'Public Worlds';
   }

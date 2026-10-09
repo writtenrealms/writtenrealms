@@ -120,11 +120,6 @@
         <input type="text" placeholder="Search for a world" v-model="search_query" @keyup.enter="onSearch">
         <!-- <button class="btn btn-small" @click="onSearch">SEARCH</button> -->
       </div>
-      <div class="mb-8">
-        <label class="color-text-60">
-          <input type="checkbox" v-model="include_unreviewed"> Include unpublished worlds
-        </label>
-      </div>
       <div class="worlds-list-section-worlds search-worlds-results">
         <WorldCard v-for="world in search_worlds" :key="world.id" :world="world" />
       </div>
@@ -164,7 +159,6 @@ let intervalId: ReturnType<typeof setTimeout> | null = null;
 // Search Fields
 const search_query = ref<string>('');
 const search_worlds = ref<World[]>([]);
-const include_unreviewed = ref<boolean>(true);
 
 const store = useStore();
 const router = useRouter();
@@ -240,19 +234,9 @@ watch(search_query, () => {
   }, 500);
 });
 
-watch(include_unreviewed, () => {
-  onSearch();
-});
-
 const onSearch = async () => {
   const query = search_query.value.trim();
   const params = { q: query };
-
-  if (include_unreviewed.value) {
-    params['reviewed'] = false;
-  } else {
-    params['reviewed'] = true;
-  }
 
   const resp = await axios.get('lobby/worlds/search/', {
     params: params

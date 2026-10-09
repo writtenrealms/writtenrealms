@@ -17,8 +17,7 @@ from config import constants as api_consts
 
 from builders.models import (
     LastViewedRoom,
-    WorldBuilder,
-    WorldReview)
+    WorldBuilder)
 
 from core.db import qs_by_pks
 from core.permissions import IsLobbyView, IsRootWorld
@@ -299,9 +298,6 @@ class BuildingWorlds(generics.ListAPIView):
             last_opened=Subquery(LastViewedRoom.objects.filter(
                 world_id=OuterRef('pk'), user=user,
             ).values('modified_ts')[:1]),
-            latest_review_status=Subquery(WorldReview.objects.filter(
-                world_id=OuterRef('pk'),
-            ).order_by('-created_ts').values('status')[:1]),
         ).order_by(F('last_opened').desc(nulls_last=True), '-created_ts', '-pk')[:self.MAX_WORLDS]
 
     def list(self, request, *args, **kwargs):
@@ -320,30 +316,6 @@ class BuildingWorlds(generics.ListAPIView):
         return Response(self.get_serializer(rows, many=True).data)
 
 
-class ReviewedWorlds(generics.ListAPIView):
-
-    serializer_class = LobbyWorldSerializer
-
-    def get_serializer_context(self):
-        return {
-            'request': self.request,
-            'char_counts': 'user'
-        }
-
-    def get_queryset(self):
-        world_ids = []
-
-        world_ids = WorldReview.objects.filter(
-            status=api_consts.WORLD_REVIEW_STATUS_APPROVED
-        ).order_by(
-            '-modified_ts'
-        ).values_list('world_id', flat=True)
-
-        return qs_by_pks(World, world_ids).exclude(
-            lifecycle=api_consts.WORLD_STATE_ARCHIVED,
-        )
-
-
 class IntroWorlds(WorldCardListView):
 
     serializer_class = LobbyWorldCardSerializer
@@ -351,27 +323,6 @@ class IntroWorlds(WorldCardListView):
     def get_queryset(self):
         world_ids = [4, 217, 1]
         return self.get_annotated_queryset(world_ids)
-
-
-class PublishedWorlds(WorldCardListView):
-
-    serializer_class = LobbyWorldCardSerializer
-
-    def get_queryset(self):
-        approved_worlds_ids = WorldReview.objects.filter(
-            status=api_consts.WORLD_REVIEW_STATUS_APPROVED
-        ).order_by(
-            '-modified_ts'
-        ).values_list('world_id', flat=True)
-        world_ids = World.objects.filter(
-            id__in=approved_worlds_ids,
-            context_id__isnull=True,
-        ).order_by(
-            '-last_entered_ts', 'name'
-        ).values_list('id', flat=True)
-        return qs_by_pks(World, world_ids).exclude(
-            lifecycle=api_consts.WORLD_STATE_ARCHIVED,
-        )
 
 
 class PublicWorlds(WorldCardListView):
@@ -408,7 +359,6 @@ class SearchWorlds(generics.ListAPIView):
 
     def get_queryset(self):
         query = self.request.query_params.get('q', '')
-        reviewed = self.request.query_params.get('reviewed', 'true')
         if not query:
             return World.objects.none()
 
@@ -455,14 +405,6 @@ class SearchWorlds(generics.ListAPIView):
             Q(name__icontains=query) |
             Q(description__icontains=query)
         ).order_by('-modified_ts').values_list('id', flat=True)
-
-        if reviewed == 'true' and matched_ids:
-            reviewed_ids = distinct_list(
-                WorldReview.objects.filter(
-                    world_id__in=matched_ids,
-                    status=api_consts.WORLD_REVIEW_STATUS_APPROVED,
-                ).values_list('world', flat=True))
-            matched_ids = [ wid for wid in world_ids if wid in reviewed_ids ]
 
         world_ids = distinct_list(matched_ids)
 

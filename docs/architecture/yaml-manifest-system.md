@@ -49,6 +49,10 @@ state into WR2.
 
 Current required mappings:
 
+- Omit WR1 world publication reviews, reviewer assignments, and approval status.
+  These have no WR2 model or manifest field; hosting and promotion are up to
+  the world owner.
+
 - Omit player channel subscriptions, communication history, and ask counters:
   these are runtime state, outside every manifest contract. New WR2 characters
   listen to `ask` by default; `chat` and `gossip` are opt-in. WR1's default `chat`

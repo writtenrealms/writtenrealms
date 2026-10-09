@@ -30,8 +30,7 @@ from builders.models import (
     SpawnPlacement,
     SpawnPlan,
     SpawnPlanRun,
-    WorldBuilder,
-    WorldReview)
+    WorldBuilder)
 from core.admin import BaseAdmin, DirectRootWorldFilter
 from worlds.models import World
 
@@ -221,11 +220,6 @@ class FactScheduleAdmin(BaseAdmin):
     raw_id_fields = ['world']
 
 
-class WorldReviewAdmin(BaseAdmin):
-    list_display = ('id', 'world', 'status', 'reviewer')
-    raw_id_fields = ['world', 'reviewer']
-
-
 class BuilderActionAdmin(BaseAdmin):
     list_display = ('id', 'action', 'outcome', 'world', 'user')
     raw_id_fields = ['world', 'user']
@@ -267,4 +261,3 @@ admin.site.register(SpawnPlan, SpawnPlanAdmin)
 admin.site.register(SpawnPlanRun, SpawnPlanRunAdmin)
 admin.site.register(SpawnPlacement, SpawnPlacementAdmin)
 admin.site.register(WorldBuilder, WorldBuilderAdmin)
-admin.site.register(WorldReview, WorldReviewAdmin)

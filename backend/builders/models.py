@@ -1367,37 +1367,6 @@ class AbilityDefinition(BaseModel):
         return f"{self.slug} - {self.name}"
 
 
-class WorldReview(BaseModel):
-    """
-    A World Review can be initiated by any a world's builders. They start out
-    in 'submitted' status with no reviewer. Once a staff user picks it up, they
-    get assigned as the reviewer. After that, the reviewer can move the status
-    to either:
-    - approved
-    - reviewed (nice way of saying rejected. Must include a review comment).
-
-    The review can then be placed back in 'submitted' status from 'reviewed'.
-    """
-    world = models.ForeignKey(
-        'worlds.World',
-        related_name='world_reviews',
-        on_delete=models.CASCADE)
-    reviewer = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        related_name='author_reviews',
-        on_delete=models.SET_NULL,
-        **optional)
-
-    # The description of the world
-    description = models.TextField(**optional)
-
-    # Review text left by the reviewer
-    text = models.TextField(**optional)
-    status = models.TextField(
-        choices=list_to_choice(api_consts.WORLD_REVIEW_STATUSES),
-        default=api_consts.WORLD_REVIEW_STATUS_SUBMITTED)
-
-
 class BuilderAction(BaseModel):
 
     action = models.TextField(

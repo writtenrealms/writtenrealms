@@ -80,25 +80,6 @@ export default {
       return resp.data;
     },
 
-    submit_world_for_review: async ({ commit, rootState }, data) => {
-      const world_id = rootState.builder.world.id;
-      const resp = await axios.post(
-        `/builder/worlds/${world_id}/reviews/`,
-        {description: data.description}
-      );
-      if (resp.status, 201) {
-        const world = rootState.builder.world;
-        const review = {
-          'status': resp.data['status'],
-          'text': resp.data['text'],
-          'reviewer': resp.data['reviewer'],
-          'description': resp.data['description']
-        }
-        world.review = review;
-        commit("builder/world_set", world, { root: true });
-      }
-    },
-
     faction_add: async ({ commit, dispatch }, data) => {
       const resp = await dispatch("builder/factions/create", data, {
         root: true

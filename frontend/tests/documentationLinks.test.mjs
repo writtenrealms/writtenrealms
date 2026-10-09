@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const sources = await Promise.all([
-  "../src/components/builder/world/ReviewInstructions.vue",
   "../src/core/forms.ts",
   "../src/views/builder/room/RoomActionList.vue",
   "../src/views/builder/world/EditWorld.vue",
@@ -18,5 +17,4 @@ test("builder help links use the published VitePress guide routes", () => {
   assert.match(combinedSource, /core\.writtenrealms\.com\/docs\/builders\/condition-builder-guide/);
   assert.match(combinedSource, /core\.writtenrealms\.com\/docs\/builders\/social-builder-guide/);
   assert.match(combinedSource, /core\.writtenrealms\.com\/docs\/builders\/room-actions/);
-  assert.match(combinedSource, /core\.writtenrealms\.com\/docs\/builders\/world-publishing/);
 });

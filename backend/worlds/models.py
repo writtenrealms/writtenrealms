@@ -362,13 +362,6 @@ class World(AdventBaseModel):
         return "%s - %s" % (self.id, self.name)
 
     @property
-    def review_status(self):
-        latest_review = self.world_reviews.order_by('-created_ts').first()
-        if latest_review:
-            return latest_review.status
-        return api_consts.WORLD_REVIEW_STATUS_UNSUBMITTED
-
-    @property
     def config_source_world(self):
         return self.context or self
 

@@ -1,6 +1,6 @@
 from rest_framework.reverse import reverse
 
-from builders.models import LastViewedRoom, WorldBuilder, WorldReview
+from builders.models import LastViewedRoom, WorldBuilder
 from config import constants as api_consts
 from system.models import SiteControl
 from tests.base import WorldTestCase
@@ -72,7 +72,6 @@ class TestBuildingInventory(WorldTestCase):
         archived = World.objects.new_world(name='Old Realm', author=self.user)
         archived.lifecycle = api_consts.WORLD_STATE_ARCHIVED
         archived.save(update_fields=['lifecycle'])
-        WorldReview.objects.create(world=shared, status=api_consts.WORLD_REVIEW_STATUS_APPROVED)
         LastViewedRoom.objects.create(world=shared, user=self.user, room=shared.zones.all()[0].rooms.all()[0])
 
         rows = self.rows()
@@ -81,12 +80,10 @@ class TestBuildingInventory(WorldTestCase):
         self.assertEqual(rows[0]['name'], 'Shared Realm')
         self.assertEqual(set(by_name), {'Shared Realm', 'An Island'})
         self.assertEqual(by_name['An Island']['role'], 'author')
-        self.assertEqual(by_name['An Island']['review_status'], api_consts.WORLD_REVIEW_STATUS_UNSUBMITTED)
         self.assertEqual(by_name['An Island']['num_characters'], 1)
         self.assertGreaterEqual(by_name['An Island']['num_rooms'], 1)
         self.assertEqual([i['id'] for i in by_name['An Island']['instances']], [instance.pk])
         self.assertEqual(by_name['Shared Realm']['role'], 'builder')
-        self.assertEqual(by_name['Shared Realm']['review_status'], api_consts.WORLD_REVIEW_STATUS_APPROVED)
         self.assertEqual([i['id'] for i in by_name['Shared Realm']['instances']], [foreign_instance.pk])
         self.assertIsNone(by_name['Shared Realm']['instances'][0]['instance_of'])
 

@@ -288,7 +288,7 @@ World construction may need a short bootstrap interval before a currency row
 exists. Creation should occur in one transaction and set the default before the
 world becomes usable. A defaultless draft permits only recovery operations:
 create a currency, select a default, or apply an atomic import that will provide
-one. Dependent authoring, canonical export, publication, and world start remain
+one. Dependent authoring, canonical export, and world start remain
 blocked until repaired.
 
 Because WR2 launches with an empty database, the implementation replaced
@@ -1533,7 +1533,7 @@ The implementation is not complete until it covers the following.
 - reject code rename through ordinary update
 - reject zero-default and cross-world-default playable states
 - reject deletion when default, referenced, balanced, or pending
-- allow a draft import to be temporarily defaultless but reject publication
+- allow a draft import to be temporarily defaultless but reject world start
 - prove create omission materializes the current default, update omission
   preserves the stored currency, and canonical export is explicit
 - enforce identical REST and manifest permissions/lifecycle rules

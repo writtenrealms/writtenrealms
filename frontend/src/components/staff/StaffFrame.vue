@@ -6,7 +6,6 @@
       <router-link :to="to_signups">Signups</router-link>
       <router-link :to="to_worlds">Worlds</router-link>
       <router-link :to="to_activity">Activity</router-link>
-      <router-link :to="{ name: 'staff_reviews' }">Reviews</router-link>
     </div>
 
     <div class="staff-contents grow">

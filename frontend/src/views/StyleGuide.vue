@@ -203,8 +203,7 @@
         <div class="sg-inline">
           <span class="tag">Builder</span>
           <span class="tag tag-secondary">Yours</span>
-          <span class="tag tag-green">Approved</span>
-          <span class="tag tag-primary">Changes requested</span>
+          <span class="tag tag-green">In game</span>
         </div>
       </div>
       <div class="sg-columns">

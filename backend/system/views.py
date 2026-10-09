@@ -23,9 +23,7 @@ from core.utils import expiration_ts
 from config import constants as api_consts
 from builders.models import (
     FactionRank,
-    FactionAssignment,
-    WorldReview)
-from builders import serializers as builder_serializers
+    FactionAssignment)
 from builders.serializers import MapRoomSerializer
 from core.permissions import IsSystemUser, IsStaffUser
 from core.db import qs_by_pks
@@ -767,40 +765,6 @@ class StaffStats(APIView):
     def get(self, request, format=None):
         data = {}
         return Response(data)
-
-
-class Reviews(ListAPIView):
-
-    serializer_class = builder_serializers.WorldReviewSerializer
-    # queryset = WorldReview.objects.filter(
-    #     status=api_consts.WORLD_REVIEW_STATUS_SUBMITTED)
-
-    def get_queryset(self):
-        assigned = self.request.query_params.get('assigned', None)
-
-        qs = WorldReview.objects.filter(
-            status=api_consts.WORLD_REVIEW_STATUS_SUBMITTED)
-
-        if assigned == 'self':
-            qs = qs.filter(reviewer=self.request.user)
-        elif assigned == 'false':
-            qs = qs.filter(reviewer__isnull=True)
-
-        return qs
-
-
-class ReviewViewSet(viewsets.ModelViewSet):
-
-    serializer_class = builder_serializers.WorldReviewSerializer
-    queryset = WorldReview.objects.all()
-
-
-
-staff_review_detail = ReviewViewSet.as_view({
-    'get': 'retrieve',
-    'put': 'update',
-    'patch': 'partial_update',
-})
 
 
 class StaffSearch(APIView):

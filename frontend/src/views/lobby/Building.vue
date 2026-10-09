@@ -60,9 +60,6 @@
             <div class="world-name-line">
               <router-link class="world-name" :to="builderRoute(world)">{{ world.name }}</router-link>
               <span v-if="world.role === 'builder'" class="tag">Builder</span>
-              <span v-if="reviewTags[world.review_status]" class="tag" :class="reviewTags[world.review_status].className">
-                {{ reviewTags[world.review_status].label }}
-              </span>
             </div>
             <div class="world-meta color-text-50">
               {{ world.is_multiplayer ? 'Multiplayer' : 'Single player' }} · {{ world.is_public ? 'Public' : 'Private' }}
@@ -125,7 +122,6 @@ interface BuildingWorld {
   num_characters: number;
   last_opened: string | null;
   created_ts: string;
-  review_status: string;
   instance_of: { id: number; name: string } | null;
   instances: BuildingWorld[];
 }
@@ -152,12 +148,6 @@ const sortOptions = [
   { value: "rooms", label: "Most rooms" },
   { value: "characters", label: "Most characters" },
 ];
-
-const reviewTags: Record<string, { label: string; className: string }> = {
-  submitted: { label: "In review", className: "tag-secondary" },
-  approved: { label: "Approved", className: "tag-green" },
-  reviewed: { label: "Changes requested", className: "tag-primary" },
-};
 
 async function load() {
   loadError.value = false;

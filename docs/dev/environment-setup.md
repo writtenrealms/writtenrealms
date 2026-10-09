@@ -90,7 +90,7 @@ Leave the field blank (`None` in Python) to restore the multi-world homepage
 and lobby. Reload the browser after changing it. This is a platform setting,
 not part of a world's portable manifest; no frontend rebuild is needed.
 
-The setting does not create or publish a world or grant access to it. A public
+The setting does not create a world or grant access to it. A public
 landing world must be public in its world settings. An unavailable or private
 world displays an error/sign-in state. Builders can use **Build** in the header
 to reach their worlds and **Create World** to author another one. Direct world,

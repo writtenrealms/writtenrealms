@@ -198,8 +198,6 @@ class BuildingWorldSerializer(serializers.ModelSerializer):
     num_rooms = serializers.IntegerField(read_only=True)
     num_characters = serializers.IntegerField(read_only=True)
     last_opened = serializers.DateTimeField(read_only=True)
-    # Same rule as World.review_status, without a query per world.
-    review_status = serializers.SerializerMethodField()
     instance_of = serializers.SerializerMethodField()
     instances = serializers.SerializerMethodField()
 
@@ -208,14 +206,11 @@ class BuildingWorldSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'small_background', 'is_multiplayer', 'is_public',
             'role', 'num_rooms', 'num_characters', 'last_opened', 'created_ts',
-            'review_status', 'instance_of', 'instances',
+            'instance_of', 'instances',
         ]
 
     def get_role(self, world):
         return 'author' if world.author_id == self.context['request'].user.pk else 'builder'
-
-    def get_review_status(self, world):
-        return world.latest_review_status or api_consts.WORLD_REVIEW_STATUS_UNSUBMITTED
 
     def get_instance_of(self, world):
         # Only set for instances listed on their own, without their base world.
