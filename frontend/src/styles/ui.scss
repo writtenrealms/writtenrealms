@@ -725,6 +725,22 @@ svg.lucide {
   }
 }
 
+// Summary metrics and persistent feedback for administration and data views.
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(215px, 100%), 1fr));
+  gap: 1rem;
+}
+.metric-card {
+  background: $color-background-light;
+  border: 1px solid $color-background-light-border;
+  padding: 1.2rem;
+  min-width: 0;
+
+  > span { @include font-title-regular; color: $color-text-hex-70; font-size: 13px; }
+  > strong { @include font-title-light; display: block; font-size: 42px; line-height: 1.2; margin: 0.4rem 0; font-variant-numeric: tabular-nums; }
+  > small { display: block; color: $color-text-hex-60; font-size: 11px; line-height: 1.5; }
+}
 .inline-notice {
   background: $color-background-light;
   border: 1px solid $color-background-border;

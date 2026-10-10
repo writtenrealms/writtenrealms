@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import store from "@/store";
+import { requireStaff } from '@/core/staffAccess';
 
 const ifAuthenticated = (to) => {
   if (store.getters.isAuthenticated) {
@@ -12,14 +13,7 @@ const ifAuthenticated = (to) => {
   }
 };
 
-const ifStaff = () => {
-  if (store.state.auth.user && store.state.auth.user.is_staff) {
-    return true;
-  } else {
-    store.commit("ui/notification_set_error", "Access denied.");
-    return "/lobby";
-  }
-};
+const ifStaff = (to) => requireStaff(store, to);
 
 // Define route components.
 // These can be imported from other files
@@ -146,9 +140,10 @@ const routes = [
   {
     path: '/staff',
     component: () => import('@/components/staff/StaffFrame.vue'),
-    beforeEnter: ifStaff,
+    beforeEnter: [ifAuthenticated, ifStaff],
     children: [
-      { path: 'panel', name: 'staff_index', component: () => import('@/views/staff/Staff.vue') },
+      { path: '', name: 'staff_index', component: () => import('@/views/staff/Staff.vue') },
+      { path: 'panel', redirect: { name: 'staff_index' } },
       { path: 'playing', name: 'staff_playing', component: () => import('@/views/staff/Playing.vue') },
       { path: 'signups', name: 'staff_signups', component: () => import('@/views/staff/Signups.vue') },
       { path: 'worlds', name: 'staff_worlds', component: () => import('@/views/staff/Worlds.vue') },

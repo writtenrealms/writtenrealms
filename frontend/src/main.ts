@@ -13,6 +13,10 @@ import '@/styles/floating-vue-custom.scss';
 
 interceptorSetup();
 
+// Reconcile the persisted account with the server on every page load, including
+// promoted-world entry pages that never visit the old multi-world homepage.
+void store.dispatch('auth/refresh_user').catch(() => {});
+
 const app = createApp(App)
   .use(router)
   .use(store);

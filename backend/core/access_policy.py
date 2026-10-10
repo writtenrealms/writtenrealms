@@ -29,5 +29,5 @@ def access_denial_detail(mode='invite_only'):
 
 
 def token_is_allowed(payload, allowlist):
-    return payload.get('token_type') == 'access' and email_is_allowed(
-        payload.get('email'), allowlist)
+    return payload.get('token_type') == 'access' and (
+        payload.get('is_staff') is True or email_is_allowed(payload.get('email'), allowlist))

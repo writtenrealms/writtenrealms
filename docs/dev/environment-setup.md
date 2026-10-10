@@ -78,7 +78,7 @@ docker compose up -d --build
 
 Core opens a single world's lobby by default: `/`, `/home`, and `/lobby`
 redirect to `/worlds/1`. After creating or importing your world, set **Main
-world id** on the `prod` record in Django admin → System → Site controls
+world id** in the staff Control Panel at `/staff` or on the `prod` record in Django admin → System → Site controls
 (`/admin/system/sitecontrol/`). Use the root world's database ID, not a runtime
 spawn or instance ID. For example, to promote local world 12:
 

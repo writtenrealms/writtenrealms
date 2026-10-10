@@ -123,11 +123,13 @@ export default defineConfig({
       { text: "Home", link: "/" },
       { text: "Builder Guides", link: "/builders/" },
       { text: "Player Guides", link: "/players/" },
+      { text: "Administration", link: "/administrators/control-panel" },
       { text: "Written Realms Core", link: "https://core.writtenrealms.com" },
     ],
     sidebar: {
       "/builders/": builderSidebar,
       "/players/": playerSidebar,
+      "/administrators/": [{ text: "Control Panel", link: "/administrators/control-panel" }],
     },
     search: {
       provider: "local",

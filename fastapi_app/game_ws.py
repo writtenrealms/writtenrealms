@@ -354,6 +354,7 @@ async def handle_game_websocket(websocket: WebSocket):
     player_id = None
     connection_id = None
     authenticated = False
+    user_id = None
 
     def queue_game_command(
         command_type: str,
@@ -371,6 +372,7 @@ async def handle_game_websocket(websocket: WebSocket):
             "command_type": command_type,
             "player_id": player_id,
             "player_key": player_key,
+            "user_id": user_id,
             "payload": command_payload,
         }
         if connection_id:
@@ -426,7 +428,7 @@ async def handle_game_websocket(websocket: WebSocket):
         celery_app = get_celery_app()
         celery_app.send_task(
             'spawns.tasks.exit_current_world',
-            kwargs={"player_id": player_id},
+            kwargs={"player_id": player_id, "user_id": user_id},
         )
 
     try:
@@ -447,8 +449,8 @@ async def handle_game_websocket(websocket: WebSocket):
                     })
                     continue
 
-                user_id = _verify_token(token)
-                if not user_id:
+                verified_user_id = _verify_token(token)
+                if not verified_user_id:
                     await websocket.send_json({
                         'type': 'system.connect.error',
                         'text': 'Invalid authentication token'
@@ -464,6 +466,7 @@ async def handle_game_websocket(websocket: WebSocket):
                     continue
 
                 # Register the authenticated connection
+                user_id = verified_user_id
                 connection_id = await game_manager.authenticate(websocket, player_key)
                 player_id = _parse_player_id(player_key)
                 authenticated = True

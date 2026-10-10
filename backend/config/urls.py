@@ -8,6 +8,9 @@ from lobby import views as lobby_views
 from quests import views as quest_views
 from spawns import views as spawn_views
 from system import views as system_views
+from system.control_overview import StaffOverview, StaffAudit
+from system.control_access import StaffSettingsView, StaffAllowlistView, StaffAllowlistDetailView
+from system.control_jobs import StaffJobsView
 from users import views as user_views
 from users import wr1_sso
 from worlds import views as world_views
@@ -43,8 +46,13 @@ api_v1_urls = [
     path('users/patrons/', user_views.patrons, name='users-patrons'),
 
     # Staff
+    path('staff/overview/', StaffOverview.as_view(), name='staff-overview'),
+    path('staff/audit/', StaffAudit.as_view(), name='staff-audit'),
+    path('staff/jobs/', StaffJobsView.as_view(), name='staff-jobs'),
+    path('staff/allowlist/', StaffAllowlistView.as_view(), name='staff-allowlist'),
+    path('staff/allowlist/<int:pk>/', StaffAllowlistDetailView.as_view(), name='staff-allowlist-detail'),
     path('staff/panel/', system_views.staff_panel, name='staff_panel'),
-    path('staff/site/', system_views.staff_site_settings, name='staff-site-settings'),
+    path('staff/site/', StaffSettingsView.as_view(), name='staff-site-settings'),
     path('staff/init/', system_views.staff_init, name='staff_init'),
     path('staff/teardown/', system_views.staff_teardown, name='staff_teardown'),
     path('staff/worlds/', system_views.RootWorlds.as_view(), name='staff-worlds'),

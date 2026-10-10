@@ -58,6 +58,24 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
         ), patch.object(game_ws, "get_celery_app", return_value=celery_app):
             asyncio.run(game_ws.handle_game_websocket(websocket))
 
+    def test_invalid_reauthentication_preserves_verified_command_identity(self):
+        celery_app = MagicMock()
+        websocket = FakeGameWebSocket([
+            {"type": "system.connect", "token": "valid", "data": {"player_key": "player.42"}},
+            {"type": "system.connect", "token": "invalid", "data": {"player_key": "player.99"}},
+            {"type": "cmd.text", "text": "look"},
+        ])
+        manager = game_ws.GameConnectionManager()
+        manager.start_pubsub_listener = AsyncMock()
+        with patch.object(game_ws, "game_manager", manager), patch.object(
+            game_ws, "_verify_token", side_effect=[1, None]
+        ), patch.object(game_ws, "get_celery_app", return_value=celery_app):
+            asyncio.run(game_ws.handle_game_websocket(websocket))
+        calls = [call.kwargs['kwargs'] for call in celery_app.send_task.call_args_list
+                 if call.args[0] == 'spawns.tasks.handle_game_command']
+        self.assertTrue(calls)
+        self.assertTrue(all(call['user_id'] == 1 and call['player_id'] == 42 for call in calls))
+
     def test_system_disconnect_queues_current_world_exit(self):
         celery_app = MagicMock()
         websocket = FakeGameWebSocket(
@@ -83,6 +101,7 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
             kwargs={
                 "command_type": "state.sync",
                 "player_id": 42,
+                "user_id": 1,
                 "player_key": "player.42",
                 "payload": {},
                 "connection_id": ANY,
@@ -90,7 +109,7 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
         )
         celery_app.send_task.assert_any_call(
             "spawns.tasks.exit_current_world",
-            kwargs={"player_id": 42},
+            kwargs={"player_id": 42, "user_id": 1},
         )
 
     def test_socket_close_queues_current_world_exit(self):
@@ -110,7 +129,7 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
 
         celery_app.send_task.assert_any_call(
             "spawns.tasks.exit_current_world",
-            kwargs={"player_id": 42},
+            kwargs={"player_id": 42, "user_id": 1},
         )
 
     def test_text_command_forwards_client_request_id(self):
@@ -139,6 +158,7 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
             kwargs={
                 "command_type": "text",
                 "player_id": 42,
+                "user_id": 1,
                 "player_key": "player.42",
                 "payload": {
                     "text": "craft a blue-crested helm",
@@ -188,6 +208,7 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
             kwargs={
                 "command_type": "salvage",
                 "player_id": 42,
+                "user_id": 1,
                 "player_key": "player.42",
                 "payload": {
                     "spoils": True,

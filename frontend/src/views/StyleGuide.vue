@@ -170,6 +170,14 @@
       </div>
     </section>
 
+    <section id="metrics" class="sg-section">
+      <h2>Metrics and notices</h2>
+      <p class="sg-note">Use <span class="sg-code">.metric-grid</span> and <span class="sg-code">.metric-card</span> for bounded summary counts. Put the label, value, and context in span, strong, and small elements.</p>
+      <div class="metric-grid"><div class="metric-card"><span>Characters online</span><strong>24</strong><small>Across 3 running worlds</small></div><div class="metric-card"><span>New accounts · 24h</span><strong>8</strong><small>112 total accounts</small></div></div>
+      <p class="inline-notice">.inline-notice — Settings saved. Access changes take effect shortly.</p>
+      <p class="inline-notice inline-notice-error">.inline-notice.inline-notice-error — Could not refresh. Previously loaded values may be out of date.</p>
+    </section>
+
     <!-- Icons -->
     <section id="icons" class="sg-section">
       <h2>Icons</h2>
@@ -350,6 +358,7 @@ const sections = [
   { id: "typography", title: "Typography" },
   { id: "lists", title: "Lists" },
   { id: "panels", title: "Panels" },
+  { id: "metrics", title: "Metrics and notices" },
   { id: "icons", title: "Icons" },
   { id: "feedback", title: "Status" },
   { id: "navigation", title: "Navigation" },

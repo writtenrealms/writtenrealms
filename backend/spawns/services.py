@@ -125,6 +125,10 @@ class WorldGate:
         player = self.player
         world = self.world
 
+        from system.access import email_admitted
+        if not email_admitted(player.user.email, is_staff=player.user.is_staff):
+            raise ServiceError('This server is closed to your account. Contact its administrator for access.')
+
         self._check_instance_owner()
 
         # Site control mechanism to prevent all players from entering worlds

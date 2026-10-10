@@ -23,7 +23,32 @@ const state: State = {
   user: JSON.parse(localStorage.getItem("user") || "{}"),
 };
 
+let userRefresh: { token: string; promise: Promise<Record<string, any> | null> } | null = null;
+
 const actions = {
+  refresh_user: ({ commit, state }: ActionMethods) => {
+    const token = state.token;
+    if (!token) return Promise.resolve(null);
+    if (userRefresh && userRefresh.token === token) return userRefresh.promise;
+
+    // Startup and a staff route can request this together. Share the request,
+    // but never keep permissions cached between separate staff navigations.
+    const pending = {
+      token,
+      promise: axios.get('/user/').then(response => {
+        // A response for a previous login must not restore its account after
+        // logout or overwrite the next account's permissions.
+        if (state.token !== token) return null;
+        commit('user_set', response.data);
+        return response.data;
+      }).finally(() => {
+        if (userRefresh === pending) userRefresh = null;
+      }),
+    };
+    userRefresh = pending;
+    return pending.promise;
+  },
+
   login: async ({ commit, dispatch }: ActionMethods, creds: any) => {
     try {
       await axios.post(LOGIN_REQUEST_ENDPOINT, creds);
@@ -227,6 +252,7 @@ const mutations = {
     state.status = "unauthenticated";
     state.token = "";
     state.refreshToken = "";
+    state.user = {};
     localStorage.removeItem("jwtToken");
     localStorage.removeItem("refreshToken");
     localStorage.removeItem("user");

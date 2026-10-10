@@ -346,6 +346,12 @@ class TestForgeJobPermissions(TestCase):
         users = [User.objects.create_user(f'extra-{i}@example.com') for i in range(30)]
         WorldBuilder.objects.bulk_create([
             WorldBuilder(user=user, world=self.root) for user in users])
+        from system.access import clear_access_cache
+        clear_access_cache()
+        # Cold admission adds one bounded site-policy lookup; warm checks
+        # retain the existing constant three-query world authorization.
+        with self.assertNumQueries(4):
+            require_world_admin(self.instance_spawn.pk, self.builder.pk)
         with self.assertNumQueries(3):
             world, user = require_world_admin(self.instance_spawn.pk, self.builder.pk)
         self.assertEqual(world.pk, self.instance_spawn.pk)

@@ -545,6 +545,7 @@ async def handle_job(data: dict, client_id: str, user_id: int, ip: str | None):
             'spawns.tasks.enter_world',
             kwargs={
                 'player_id': data['player_id'],
+                'user_id': user_id,
                 'world_id': data['world_id'],
                 'client_id': client_id,
                 'ip': ip,

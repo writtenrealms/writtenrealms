@@ -44,7 +44,7 @@ class TestBuildingSiteControl(WorldTestCase):
         staff = self.create_user('staff@example.com', is_staff=True)
         self.client.force_authenticate(staff)
         response = self.client.patch(endpoint, {'building_enabled': False}, format='json')
-        self.assertEqual(response.data, {'building_enabled': False})
+        self.assertEqual(response.data['building_enabled'], False)
         self.assertFalse(SiteControl.objects.get(name='prod').building_enabled)
         self.assertEqual(self.client.patch(endpoint, {'building_enabled': 'no'}, format='json').status_code, 400)
         self.assertFalse(self.client.get(reverse('staff_panel')).data['building_enabled'])

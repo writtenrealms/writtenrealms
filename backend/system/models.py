@@ -1,6 +1,8 @@
 import os
 
+from django.conf import settings
 from django.db import models
+from django.db.models.functions import Lower
 from django.core.validators import MinValueValidator
 from django.utils import timezone
 
@@ -44,6 +46,9 @@ class EdeusUniques(AdventBaseModel):
 class SiteControl(AdventBaseModel):
 
     name = models.TextField()
+    access_mode = models.CharField(max_length=16, default='open', choices=(
+        ('open', 'Open'), ('invite_only', 'Invite only'), ('closed', 'Closed'),
+    ))
     maintenance_mode = models.BooleanField(default=False)
     building_enabled = models.BooleanField(
         default=True,
@@ -61,6 +66,37 @@ class SiteControl(AdventBaseModel):
             'This does not change world visibility or access permissions.'
         ),
     )
+
+
+class AccessAllowlistEntry(BaseModel):
+    email = models.EmailField(unique=True)
+    note = models.CharField(max_length=500, blank=True, default='')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='+')
+
+    class Meta(BaseModel.Meta):
+        ordering = ['email']
+        constraints = [models.UniqueConstraint(
+            Lower('email'), name='system_allowlist_email_ci_unique')]
+
+    def save(self, *args, **kwargs):
+        self.email = self.email.strip().casefold()
+        return super().save(*args, **kwargs)
+
+
+class StaffAuditEvent(models.Model):
+    created_ts = models.DateTimeField(auto_now_add=True, db_index=True)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='+')
+    actor_email = models.EmailField(blank=True, default='')
+    action = models.CharField(max_length=100)
+    target = models.CharField(max_length=255, blank=True, default='')
+    details = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ['-id']
 
 
 class Nexus(BaseModel):

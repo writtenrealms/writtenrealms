@@ -99,6 +99,9 @@ class AdmissionTests(APITestCase):
     def test_api_admission_adds_no_database_query(self):
         from users.access import AllowedEmailJWTAuthentication
         token = RefreshToken.for_user(self.invited).access_token
+        # Admission is process-cached; warm the bounded policy lookup.
+        from system.access import email_admitted
+        email_admitted(self.invited.email)
         with self.assertNumQueries(1):
             self.assertEqual(AllowedEmailJWTAuthentication().get_user(token).pk, self.invited.pk)
 

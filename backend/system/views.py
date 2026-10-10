@@ -35,7 +35,7 @@ from spawns.serializers import PlayerSerializer
 from spawns.services import WorldGate
 from system import serializers as system_serializers
 from system import tasks as system_tasks
-from system.models import Nexus, SiteControl
+from system.models import Nexus
 from system.services import get_staff_panel
 from users import (serializers as user_serializers, models as user_models)
 from users.models import User
@@ -649,7 +649,7 @@ class StaffSortableListMixin:
         return qs
 
 
-class RootWorlds(StaffSortableListMixin, ListAPIView):
+class RootWorlds(StaffViewMixin, StaffSortableListMixin, ListAPIView):
 
     default_ordering = 'name'
     serializer_class = system_serializers.RootWorldSerializer
@@ -668,13 +668,13 @@ class RootWorlds(StaffSortableListMixin, ListAPIView):
     #     return Response(serializer.data)
 
 
-class PlayerEvents(generics.ListAPIView):
+class PlayerEvents(StaffViewMixin, generics.ListAPIView):
 
     serializer_class = system_serializers.PlayerEventSerializer
     queryset = PlayerEvent.objects.order_by('-created_ts')
 
 
-class Playing(StaffSortableListMixin, ListAPIView):
+class Playing(StaffViewMixin, StaffSortableListMixin, ListAPIView):
 
     serializer_class = system_serializers.PlayerStaffViewSerializer
 
@@ -688,7 +688,7 @@ class Playing(StaffSortableListMixin, ListAPIView):
         return self.apply_sorting(qs)
 
 
-class SignUps(StaffSortableListMixin, ListAPIView):
+class SignUps(StaffViewMixin, StaffSortableListMixin, ListAPIView):
 
     default_ordering = '-date_joined'
     serializer_class = user_serializers.UserSerializer
@@ -698,7 +698,7 @@ class SignUps(StaffSortableListMixin, ListAPIView):
         return self.apply_sorting(qs)
 
 
-class Activity(StaffSortableListMixin, ListAPIView):
+class Activity(StaffViewMixin, StaffSortableListMixin, ListAPIView):
 
     serializer_class = user_serializers.UserSerializer
 
@@ -728,7 +728,7 @@ class Activity(StaffSortableListMixin, ListAPIView):
         ).order_by('-last_connection_ts')
 
 
-class UserInfo(APIView):
+class UserInfo(StaffViewMixin, APIView):
 
     def get(self, request, user_pk, format=None):
         data = {}
@@ -760,14 +760,14 @@ class UserInfo(APIView):
         return Response(data)
 
 
-class StaffStats(APIView):
+class StaffStats(StaffViewMixin, APIView):
 
     def get(self, request, format=None):
         data = {}
         return Response(data)
 
 
-class StaffSearch(APIView):
+class StaffSearch(StaffViewMixin, APIView):
 
     def get(self, request):
         query = request.query_params.get('q')
@@ -828,21 +828,6 @@ class StaffPanel(StaffViewMixin, APIView):
 
 staff_panel = StaffPanel.as_view()
 
-
-class StaffSiteSettings(StaffViewMixin, APIView):
-    """Site-wide switches staff can change from the control panel."""
-
-    def patch(self, request, format=None):
-        building_enabled = request.data.get('building_enabled')
-        if not isinstance(building_enabled, bool):
-            raise serializers.ValidationError(
-                {'building_enabled': 'Must be true or false.'})
-        site_control, _ = SiteControl.objects.get_or_create(name='prod')
-        site_control.building_enabled = building_enabled
-        site_control.save(update_fields=['building_enabled', 'modified_ts'])
-        return Response({'building_enabled': site_control.building_enabled})
-
-staff_site_settings = StaffSiteSettings.as_view()
 
 class StaffInit(StaffViewMixin, APIView):
 

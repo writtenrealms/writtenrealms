@@ -13,6 +13,9 @@ def require_user(user_id):
     user = User.objects.filter(pk=user_id, is_active=True).first()
     if user is None:
         raise PermissionDenied('An active user account is required.')
+    from system.access import email_admitted
+    if not email_admitted(user.email, is_staff=user.is_staff):
+        raise PermissionDenied('This server is closed to your account.')
     return user
 
 

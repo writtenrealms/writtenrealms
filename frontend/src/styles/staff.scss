@@ -1,0 +1,96 @@
+@import 'colors';
+@import 'fonts';
+@import 'layout';
+
+.control-panel {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  h1, h2, h3, p { margin: 0; }
+  h1 { @include font-title-light; font-size: 34px; line-height: 1.2; margin: 0.35rem 0 0.5rem; }
+  h2 { @include font-title-regular; font-size: 20px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .control-heading, .control-section-heading, .control-toolbar, .control-job-action { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+  .control-heading { align-items: flex-end; margin-bottom: 1.75rem; }
+  .control-heading p, .control-section-heading p, .control-note { color: $color-text-hex-60; font-size: 12px; line-height: 1.6; }
+  .control-eyebrow { @include font-title-regular; font-size: 10px; color: $color-secondary; display: flex; gap: 7px; align-items: center; }
+  .control-status, .control-actions, .chart-legend, .control-pagination { display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap; }
+  .control-status { justify-content: flex-end; }
+  .control-status a { margin-left: 0.4rem; white-space: nowrap; }
+  .control-tabs { display: flex; border-bottom: 1px solid $color-background-border; margin-bottom: 1.5rem; gap: 1.3rem; overflow-x: auto; }
+  .control-tabs button { @include font-title-regular; display: flex; gap: 7px; align-items: center; white-space: nowrap; font-size: 14px; background: none; color: $color-text-hex-60; border: 0; border-bottom: 2px solid transparent; padding: 0.85rem 0.1rem; }
+  .control-tabs button:hover { color: $color-text; }
+  .control-tabs button.selected { border-bottom-color: $color-secondary; color: $color-secondary; }
+  .control-stack { display: flex; flex-direction: column; gap: 1.25rem; }
+  .control-section { padding: 1.25rem; min-width: 0; }
+  .control-section-heading { margin-bottom: 1rem; align-items: flex-start; }
+  .control-section-heading p { margin-top: 0.25rem; }
+  .control-toolbar .control-actions { justify-content: flex-end; }
+  .control-auto { color: $color-text-hex-70; font-size: 11px; display: flex; gap: 5px; align-items: center; white-space: nowrap; }
+  .control-auto input { accent-color: $color-secondary; }
+  .control-empty { color: $color-text-hex-60; padding: 1.25rem 0; }
+  .control-table { width: 100%; }
+  .control-table small { display: block; color: $color-text-hex-60; font-weight: 300; font-size: 11px; margin-top: 4px; overflow-wrap: anywhere; }
+  .control-table tbody th { white-space: normal; }
+  .data-table th, .data-table td { padding: 0.75rem 0.6rem; font-size: 12px; }
+  .data-table th:first-child, .data-table td:first-child { padding-left: 0; }
+  .data-table th:last-child, .data-table td:last-child { padding-right: 0; }
+  .data-table th { font-weight: 400; }
+  .tag + .tag { margin-left: 4px; }
+  .chart-legend { color: $color-text-hex-70; font-size: 10px; }
+  .chart-legend > span { display: flex; align-items: center; gap: 5px; }
+  .chart-key { display: inline-block; width: 7px; height: 7px; }
+  .chart-key-active { background: $color-secondary; }
+  .chart-key-signups { background: $color-tertiary; }
+  .activity-chart { display: flex; gap: 0.75rem; padding-top: 0.65rem; }
+  .activity-day { flex: 1; min-width: 0; text-align: center; }
+  .activity-day > span { font-size: 10px; color: $color-text-hex-60; display: block; margin-top: 0.45rem; }
+  .activity-bars { height: 110px; display: flex; gap: 3px; align-items: flex-end; border-bottom: 1px solid $color-background-border; }
+  .activity-bar { flex: 1; max-width: 24px; min-width: 0; }
+  .activity-bar-active { background: $color-secondary; opacity: 0.8; }
+  .activity-bar-signups { background: $color-tertiary; }
+  .control-details { margin-top: 1rem; }
+  summary { cursor: pointer; color: $color-text-hex-70; font-size: 12px; }
+  .control-footer-links { display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: 12px; }
+  .control-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 1.5rem; margin: 1.5rem 0 0.5rem; }
+  .control-form-grid .control-note { margin-top: 0.5rem; }
+  .form-group label { white-space: normal; }
+  .access-options { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); padding: 0; border: 0; gap: 0.75rem; margin: 1.25rem 0; }
+  .access-options label { display: flex; align-items: flex-start; gap: 10px; border: 1px solid $color-background-border; padding: 1rem 0.8rem; cursor: pointer; }
+  .access-options label.selected { border-color: $color-secondary; }
+  .access-options input { margin-top: 4px; accent-color: $color-secondary; }
+  .access-options strong { display: block; @include font-title-regular; font-size: 16px; }
+  .access-options small { display: block; color: $color-text-hex-60; font-size: 11px; margin-top: 0.3rem; }
+  .allowlist-add { grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; align-items: center; }
+  .allowlist-add button { margin-top: 0.5rem; }
+  .control-search { display: flex; gap: 0.7rem; align-items: center; border-top: 1px solid $color-background-border; padding-top: 1rem; margin: 1rem 0; }
+  .control-search .form-group { margin: 0; flex: 1; max-width: 380px; }
+  .control-pagination { justify-content: flex-end; border-top: 1px solid $color-background-border; padding-top: 1rem; margin-top: 1rem; color: $color-text-hex-60; font-size: 11px; }
+  .worker-row { border-top: 1px solid $color-background-border; padding-top: 1rem; margin-top: 1rem; }
+  .worker-row strong { overflow-wrap: anywhere; }
+  .control-job-action { padding: 1rem 0; border-top: 1px solid $color-background-light-border; }
+  .control-job-action button { flex-shrink: 0; }
+  .control-job-action strong { font-weight: 400; }
+  .control-job-action p { margin-top: 0.25rem; }
+  .audit-details { @include font-mono; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 360px; color: $color-text-hex-70; }
+  @media ($mobile-site) {
+    h1 { font-size: 28px; }
+    .control-heading { align-items: flex-start; flex-direction: column; gap: 0.75rem; }
+    .control-status { justify-content: flex-start; }
+    .control-tabs { gap: 1rem; }
+    .control-tabs button { font-size: 12px; gap: 5px; }
+    .control-tabs button svg { display: none; }
+    .control-toolbar { align-items: flex-start; flex-direction: column; gap: 0.5rem; }
+    .control-section { padding: 1rem; }
+    .control-form-grid, .access-options, .allowlist-add { grid-template-columns: 1fr; }
+    .allowlist-add button { justify-self: start; margin: 0 0 0.5rem; }
+    .control-section-heading { flex-wrap: wrap; gap: 0.5rem; }
+    .activity-chart { gap: 0.35rem; }
+    .activity-bars { gap: 2px; }
+    .metric-grid { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0.65rem; }
+    .metric-card { padding: 0.85rem; }
+    .metric-card > span { font-size: 11px; }
+    .metric-card > strong { font-size: 34px; }
+    .metric-card > small { font-size: 10px; }
+  }
+}

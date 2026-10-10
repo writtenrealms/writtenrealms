@@ -12,6 +12,7 @@
         <template v-if="isAuthenticated">
           <router-link to="/lobby" :class="{ 'selected': isLobbyActive }">{{ lobbyLabel }}</router-link>
           <router-link v-if="canCreateWorlds" :to="{ name: 'lobby_building' }">Build</router-link>
+          <router-link v-if="store.state.auth.user?.is_staff" to="/staff" aria-label="Control Panel" :class="{ selected: router.currentRoute.value.path.startsWith('/staff') }">Control<span class="control-panel-suffix"> Panel</span></router-link>
           <a href="#" @click.prevent="editAccount" v-if="!isTemporary">Account</a>
           <a href="https://core.writtenrealms.com/docs/">Docs</a>
           <a href="#" @click.prevent="logout">Log Out</a>
@@ -152,13 +153,22 @@ const logout = () => {
     }
 
     .menu {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      row-gap: 8px;
+      min-width: 0;
       text-align: right;
 
       @media ($mobile-site) {
         display: flex;
         flex-wrap: wrap;
         justify-content: flex-end;
-        gap: 8px 12px;
+        gap: 8px 6px;
+
+        .control-panel-suffix {
+          display: none;
+        }
 
       }
 

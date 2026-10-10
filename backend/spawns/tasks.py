@@ -1464,10 +1464,15 @@ def heartbeat_regen():
 
 
 @shared_task
-def enter_world(player_id, world_id, client_id=None, ip=None):
+def enter_world(player_id, world_id, client_id=None, ip=None, user_id=None):
     print("enter_world IDs: player_id=%s, world_id=%s" % (player_id, world_id))
 
     player = Player.objects.get(pk=player_id)
+    if user_id is not None and player.user_id != user_id:
+        if client_id:
+            complete_job(client_id=client_id, job='enter_world', status='error',
+                         data={'error': 'You do not own this character.'})
+        return
 
     if not player.world.context:
         raise RuntimeError('Player is not in a spawn world.')
@@ -1573,8 +1578,10 @@ def exit_world(player_id, world_id,
 
 
 @shared_task
-def exit_current_world(player_id):
+def exit_current_world(player_id, user_id=None):
     player = Player.objects.select_related("world", "world__context").get(pk=player_id)
+    if user_id is not None and player.user_id != user_id:
+        return {"skipped": "not_owner"}
     if not player.in_game:
         return {"skipped": "not_in_game"}
 
@@ -1778,6 +1785,7 @@ def handle_game_command(
     player_key: str | None = None,
     payload: dict | None = None,
     connection_id: str | None = None,
+    user_id: int | None = None,
 ):
     """
     Celery task entry point for game commands.
@@ -1811,6 +1819,13 @@ def handle_game_command(
 
     # Dispatch to handler
     try:
+        from system.access import player_admitted
+        if not player_admitted(player_id, user_id=user_id):
+            _publish_game_error(
+                player_key, command_type,
+                'This server is closed to your account. Contact its administrator for access.',
+                payload=payload, code='platform_access_denied', connection_id=connection_id)
+            return
         dispatch_command(
             command_type=command_type,
             player_id=player_id,

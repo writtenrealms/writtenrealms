@@ -73,7 +73,7 @@ def _hash_token(token):
     return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 def _create_login_link_for_user(user):
-    require_allowed_email(user.email)
+    require_allowed_email(user=user)
     # Invalidate any outstanding login links for this user.
     LoginLinkRequest.objects.filter(
         user=user,
@@ -135,7 +135,7 @@ class EmailLoginConfirmSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         login_request = self.login_request
-        require_allowed_email(login_request.user.email)
+        require_allowed_email(user=login_request.user)
         login_request.used_ts = timezone.now()
         login_request.save(update_fields=['used_ts'])
 
@@ -223,7 +223,7 @@ class EmailConfirmationSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         user = self.confirm_record.user
-        require_allowed_email(user.email)
+        require_allowed_email(user=user)
         user.is_confirmed = True
         user.save()
         user.email_confirmations.all().delete()

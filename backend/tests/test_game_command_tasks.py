@@ -65,6 +65,12 @@ class TestResolveCombatEncounterFailures(SimpleTestCase):
 
 
 class TestHandleGameCommandFailures(SimpleTestCase):
+    def setUp(self):
+        super().setUp()
+        admission = patch('system.access.player_admitted', return_value=True)
+        admission.start()
+        self.addCleanup(admission.stop)
+
     def _assert_failed_receipt(
         self,
         publish_mock,

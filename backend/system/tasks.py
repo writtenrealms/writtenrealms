@@ -1,5 +1,6 @@
 from celery import shared_task
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 
 from core.forge_permissions import reject_job, require_staff, require_world_admin
 from fastapi_app.forge_ws import complete_job, complete_subscription
@@ -10,14 +11,20 @@ from system.services import update_staff_panel
 @shared_task
 def toggle_maintenance_mode(client_id=None, user_id=None):
     try:
-        require_staff(user_id)
+        user = require_staff(user_id)
     except PermissionDenied as exc:
         reject_job(client_id, 'toggle_maintenance_mode', exc)
         return
 
-    site_control = SiteControl.objects.get(name='prod')
-    site_control.maintenance_mode = not site_control.maintenance_mode
-    site_control.save()
+    from system.control_access import record_staff_action
+    with transaction.atomic():
+        site_control = SiteControl.objects.select_for_update().get(name='prod')
+        previous = site_control.maintenance_mode
+        site_control.maintenance_mode = not previous
+        site_control.save(update_fields=['maintenance_mode', 'modified_ts'])
+        record_staff_action(user, 'settings.updated', target='platform', details={
+            'maintenance_mode': {'before': previous, 'after': site_control.maintenance_mode},
+        })
     update_staff_panel()
 
     if client_id:

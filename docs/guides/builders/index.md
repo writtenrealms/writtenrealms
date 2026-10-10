@@ -13,7 +13,7 @@ homepage and lobby feature a single main world. A world's lobby also offers an
 edit button under its name when you have editing access.
 
 Whether anyone who signs up can create worlds is a site setting that staff
-switch in the staff control panel. When it is off, **Build** and
+switch in the [Control Panel](../administrators/control-panel.md). When it is off, **Build** and
 **Create World** only appear for staff, and builders still reach worlds they
 already have access to from each world's lobby.
 
