@@ -108,12 +108,13 @@
 
     <div class="room-quest-callouts" v-if="room.quest_callouts && room.quest_callouts.length">
       <div class="room-quest-callout" v-for="callout in room.quest_callouts" :key="callout.slug + '_' + callout.text">
-        <template v-if="isLastMessage">
-          <span class="interactive" @click="onInspectCallout(callout)">{{ callout.text }}</span>
-        </template>
-        <template v-else>
-          <span>{{ callout.text }}</span>
-        </template>
+        <!-- Keep the interactive span inline so its underline follows each wrapped line. -->
+        <span>
+          <span v-if="isLastMessage" class="interactive"
+            v-interactive="{ target: { ...callout, key: `questnotice.${room.id}.${callout.slug}` } }"
+            @click="onInspectCallout(callout)">{{ callout.text }}</span>
+          <span v-else>{{ callout.text }}</span>
+        </span>
         <span class="quest-indicator-wrapper">[ <span class="quest-indicator">{{ callout.indicator || "!" }}</span> ]</span>
       </div>
     </div>
@@ -311,6 +312,8 @@ const onClickRoomAction = (action) => {
 }
 
 const onInspectCallout = (callout) => {
+  // Mobile taps use the same lookup modal as items and mobs.
+  if (is_mobile.value) return;
   const command = callout && callout.command ? callout.command : "inspect";
   store.dispatch("game/cmd", command);
 }
@@ -374,6 +377,8 @@ const motd_lines = computed(() => {
 
   .quest-indicator-wrapper {
     color: $color-text-gray;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .quest-indicator {

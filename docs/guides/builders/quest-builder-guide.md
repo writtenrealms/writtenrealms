@@ -112,6 +112,10 @@ instead of silently omitting older entries.
 player can follow up on with `talk <mob>`.
 - `[ ! ]` on a room callout means the current room has a visible `room_prompt`
 opportunity the player can inspect with `inspect`.
+Long callouts underline each wrapped line, and the `[ ! ]` marker stays together
+on narrow screens. Hover over a notice on desktop or tap it on mobile to open
+its lookup panel, then choose **INSPECT** to read the quest offer. Clicking the
+notice directly on desktop also inspects it.
 - `[ ? ]` means this mob is currently a ready hand-in or report-back point for
 an active quest.
 

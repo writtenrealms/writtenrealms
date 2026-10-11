@@ -111,6 +111,12 @@
       <p class="sg-note">Titles use Brandon Grotesque (<span class="sg-code">font-title-regular</span> /
         <span class="sg-code">font-title-light</span> mixins). Text uses Roboto Slab, light by default.
         Game output uses Roboto Mono only for briefs and code.</p>
+      <p class="sg-note">In game room notices, keep interactive text inline inside its layout wrapper so the
+        dotted underline follows each wrapped line. Keep bracketed quest markers such as [ ! ] together without wrapping.</p>
+      <p class="sg-note">Quest notices use <span class="sg-code">v-interactive</span> with a
+        <span class="sg-code">questnotice</span> target. Desktop hover and mobile tap open
+        <span class="sg-code">LookupQuestNotice</span>; its <span class="sg-code">.lookup-quest-notice</span>
+        class shares the item and mob lookup styling and offers INSPECT.</p>
       <div class="sg-rows">
         <div class="sg-row"><span class="sg-code">h1</span><h1>Phalanx</h1></div>
         <div class="sg-row"><span class="sg-code">h2</span><h2>Your Characters</h2></div>

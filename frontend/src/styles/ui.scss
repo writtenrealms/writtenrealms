@@ -329,7 +329,10 @@ svg.lucide {
   flex-wrap: nowrap;
 
   .action {
+    border: 0;
     border-left: 1px solid $color-background-black;
+    padding: 0;
+    color: inherit;
     flex-grow: 1;
     flex-shrink: 0;
     flex-basis: 0;
@@ -425,6 +428,7 @@ svg.lucide {
   }
 }
 .lookup-item,
+.lookup-quest-notice,
 .look-item,
 .lookup-char,
 .look-char {

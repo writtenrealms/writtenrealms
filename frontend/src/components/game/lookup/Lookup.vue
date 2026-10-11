@@ -6,7 +6,7 @@
 
 <script lang='ts' setup>
 /*
-  Component to display more information about an item or mob that is being
+  Component to display more information about an item, mob, or quest notice being
   hovered over (desktop) or clicked on (mobile).
 */
 import { computed } from 'vue';
@@ -21,6 +21,7 @@ import {
 } from "@/core/itemActions";
 import LookupItem from '@/components/game/lookup/LookupItem.vue';
 import LookupChar from '@/components/game/lookup/LookupChar.vue';
+import LookupQuestNotice from '@/components/game/lookup/LookupQuestNotice.vue';
 import LookupNotFound from '@/components/game/lookup/LookupNotFound.vue';
 
 const store = useStore();
@@ -120,6 +121,9 @@ const lookupComponent = () => {
   const type = getKeyType(lookupKey);
   if (type === "item") {
     return LookupItem;
+  }
+  if (type === "questnotice") {
+    return LookupQuestNotice;
   }
   return LookupChar;
 };
