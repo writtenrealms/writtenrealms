@@ -1,5 +1,5 @@
 <template>
-  <div class="map-view">
+  <div ref="mapView" class="map-view" :class="{ 'map-view-fluid': fit_width }">
     <canvas ref="canvas" id="map" :width="width" :height="width" @click="onClick"></canvas>
 
     <div class="planes" v-if="show_planes">
@@ -27,7 +27,7 @@
 </template>
 
 <script lang='ts' setup>
-import { computed, ref, onMounted, watch } from "vue";
+import { computed, ref, onMounted, onBeforeUnmount, watch } from "vue";
 import { useStore } from "vuex";
 import { Room } from "@/core/interfaces";
 import { get_map_width } from "@/core/map";
@@ -45,10 +45,14 @@ const props = defineProps<{
   rooms_filter?: Array<Room>;
   modified_rooms?: Array<Room>;
   display_planes?: boolean;
+  fit_width?: boolean;
 }>();
 
 const canvas = ref(null);
+const mapView = ref<HTMLElement | null>(null);
+const availableWidth = ref(0);
 const mapRenderer: any = ref(null);
+let resizeObserver: ResizeObserver | undefined;
 
 const center = computed(() => props.map[props.center_key]);
 
@@ -63,7 +67,12 @@ const show_planes = computed(() => {
   return false;
 });
 
-const width = computed(() => get_map_width(props.radius, props.unit));
+const width = computed(() => props.fit_width && availableWidth.value
+  ? availableWidth.value
+  : get_map_width(props.radius, props.unit));
+const radius = computed(() => props.fit_width
+  ? Math.max(1, Math.ceil((width.value - 4 * props.unit) / (6 * props.unit)))
+  : props.radius);
 
 const rooms_filter_index = computed(() => {
   if (!props.rooms_filter) return {};
@@ -168,7 +177,7 @@ const get_rooms_around = (room, radius) => {
 const renderMap = () => {
   const room = props.map[props.center_key];
   if (!room) return;
-  let rooms = get_rooms_around(room, props.radius);
+  let rooms = get_rooms_around(room, radius.value);
 
   // Now go through each room and see if any have a connection to some other
   // room within the greater map, but that is not in the shown rooms.
@@ -215,7 +224,7 @@ const renderMap = () => {
   rooms = { ...rooms, ...connectedExits };
 
   mapRenderer.value = new MapRenderer(rooms, canvas.value, {
-    radius: props.radius,
+    radius: radius.value,
     width: width.value,
     unit: props.unit,
     in_game: Boolean(store.state.game.player) ? true : false
@@ -226,19 +235,22 @@ const renderMap = () => {
 
 onMounted(() => {
   renderMap();
+  if (props.fit_width && mapView.value) {
+    resizeObserver = new ResizeObserver(([entry]) => {
+      // Keep canvas pixels aligned with its CSS size; do not stretch the map.
+      availableWidth.value = Math.max(1, Math.floor(entry.contentRect.width) - 2);
+    });
+    resizeObserver.observe(mapView.value);
+  }
 });
 
-watch(() => props.center_key, () => {
-  if (props.center_key) renderMap();
-});
+onBeforeUnmount(() => resizeObserver?.disconnect());
 
-watch(() => props.rooms_filter, () => {
-  renderMap();
-});
-
-watch(() => props.map, () => {
-  renderMap();
-});
+watch(
+  [() => props.center_key, () => props.rooms_filter, () => props.map, width, radius, () => props.unit],
+  renderMap,
+  { flush: 'post' },
+);
 </script>
 
 <style lang='scss' scoped>
@@ -246,6 +258,14 @@ watch(() => props.map, () => {
 
 .map-view {
   position: relative;
+
+  &.map-view-fluid {
+    width: 100%;
+    min-width: 0;
+
+    canvas { display: block; max-width: calc(100% - 2px); }
+    .planes { bottom: 1px; }
+  }
 
   canvas {
     border: 1px solid #444;

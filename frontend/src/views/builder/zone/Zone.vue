@@ -18,71 +18,69 @@
 
     <template v-if="loaded">
       <div class="zone-map-and-data">
-        <div class="zone-data-error color-text-70" v-if="zoneDataError">
-          {{ zoneDataError }}
-        </div>
-
-        <div class="map-and-edit" v-else-if="isReady">
-          <Map
-            :center_key="center_key"
-            :radius="5"
-            :unit="8"
-            :map="map"
-            :rooms_filter="zone_rooms"
-            :display_planes="true"
-            @clickRoom="onClickRoom"
-          />
-          <div>
-            <button class="btn-thin edit-mob" @click="editInfo">EDIT</button>
-          </div>
-        </div>
-
-        <div class="empty-zone" v-else-if="!zone_rooms.length">
-          <div class="color-text-70">
-            Zone has no rooms. Go to an existing room and assign it to this zone to see a map.
-          </div>
-          <div class="mt-4">
-            <button class="btn-thin edit-mob" @click="editInfo">EDIT</button>
-            <button class="btn-thin" @click="deleteZone">DELETE</button>
-          </div>
-        </div>
-
-        <div v-else class="emptymap">Loading...</div>
-
-        <div class="zone-side-data">
-          <div class="zone-policies">
-            <h3>ZONE POLICIES</h3>
-            <dl>
-              <dt>Spawn plan default</dt>
-              <dd>{{ formatPolicy(zone.respawn) }}</dd>
-              <dt>Door reset</dt>
-              <dd>{{ formatPolicy(zone.door_reset) }}</dd>
-            </dl>
-            <router-link
-              class="btn-thin policy-config-link"
-              :to="{
-                name: 'builder_zone_config',
-                params: {
-                  world_id: route.params.world_id,
-                  zone_relative_id: route.params.zone_relative_id,
-                },
-              }"
-            >EDIT YAML</router-link>
+        <div class="zone-map">
+          <div class="zone-data-error color-text-70" v-if="zoneDataError">
+            {{ zoneDataError }}
           </div>
 
-          <div class="zone-spawn-plans">
-            <h3>SPAWN PLANS</h3>
-            <div v-if="zone_spawn_plans.length">
-              <div class="spawn-plan-row" v-for="spawnPlan in zone_spawn_plans" :key="spawnPlan.id">
-                <div>{{ spawnPlan.name || spawnPlan.slug }}</div>
-                <div class="color-text-50">
-                  {{ spawnPlan.num_entries }} entries
-                  <span v-if="spawnPlan.respawn_mode">/ {{ spawnPlan.respawn_mode }}</span>
-                </div>
-              </div>
+          <div class="map-and-edit" v-else-if="isReady">
+            <Map
+              :center_key="center_key"
+              :radius="5"
+              :unit="8"
+              :map="map"
+              :rooms_filter="zone_rooms"
+              :display_planes="true"
+              :fit_width="true"
+              @clickRoom="onClickRoom"
+            />
+            <div>
+              <button class="btn-thin edit-mob" @click="editInfo">EDIT</button>
             </div>
-            <div v-else class="color-text-50">No spawn plans.</div>
           </div>
+
+          <div class="empty-zone" v-else-if="!zone_rooms.length">
+            <div class="color-text-70">
+              Zone has no rooms. Go to an existing room and assign it to this zone to see a map.
+            </div>
+            <div class="mt-4">
+              <button class="btn-thin edit-mob" @click="editInfo">EDIT</button>
+              <button class="btn-thin" @click="deleteZone">DELETE</button>
+            </div>
+          </div>
+
+          <div v-else class="emptymap">Loading...</div>
+        </div>
+
+        <div class="zone-spawn-plans">
+          <h3>SPAWN PLANS</h3>
+          <div v-if="zone_spawn_plans.length">
+            <SpawnPlanPreview v-for="spawnPlan in zone_spawn_plans"
+              :key="`${route.params.world_id}-${zone.id}-${spawnPlan.id}`" :plan="spawnPlan"
+              :world-id="String(route.params.world_id)" :zone-id="zone.id"
+              :zone-relative-id="String(route.params.zone_relative_id)" />
+          </div>
+          <div v-else class="color-text-50">No spawn plans.</div>
+        </div>
+
+        <div class="zone-policies">
+          <h3>ZONE POLICIES</h3>
+          <dl>
+            <dt>Spawn plan default</dt>
+            <dd>{{ formatPolicy(zone.respawn) }}</dd>
+            <dt>Door reset</dt>
+            <dd>{{ formatPolicy(zone.door_reset) }}</dd>
+          </dl>
+          <router-link
+            class="btn-thin policy-config-link"
+            :to="{
+              name: 'builder_zone_config',
+              params: {
+                world_id: route.params.world_id,
+                zone_relative_id: route.params.zone_relative_id,
+              },
+            }"
+          >EDIT YAML</router-link>
         </div>
       </div>
 
@@ -135,6 +133,7 @@ const router = useRouter();
 
 import { Room } from "@/core/interfaces";
 import Map from "@/components/ui/Map.vue";
+import SpawnPlanPreview from "@/components/builder/zone/SpawnPlanPreview.vue";
 import axios from "axios";
 import { FormElement } from "@/core/forms.ts";
 import { builderZoneIndexRoute } from "@/core/builderRoutes";
@@ -442,6 +441,7 @@ const buildZoneDeleteYaml = (zoneValue: any): string => {
 @import "@/styles/colors.scss";
 
 #zone-details {
+  min-width: 0;
   width: 100%;
 
   .zone-name {
@@ -462,37 +462,25 @@ const buildZoneDeleteYaml = (zoneValue: any): string => {
   }
 
   .zone-map-and-data {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "map" "spawns" "policies";
+    align-items: start;
+    gap: 1.5rem;
 
-    // The builder's desktop side navigation leaves too little horizontal
-    // room for both 300px panels on narrow desktop/tablet viewports.
-    @media (max-width: 819px) {
-      flex-direction: column;
-      .zone-side-data {
-        margin-top: 15px;
-      }
-    }
+    // Allow for the builder's side navigation before showing two columns.
     @media (min-width: 820px) {
-      .zone-side-data {
-        margin-left: 25px;
-      }
+      grid-template-columns: minmax(0, 1fr) 300px;
+      grid-template-rows: auto 1fr;
+      grid-template-areas: "map spawns" "policies spawns";
     }
 
-    .zone-side-data {
-      display: flex;
-      flex-direction: column;
-      max-width: 100%;
-      width: 300px;
-
-      .zone-spawn-plans {
-        margin-top: 30px;
-      }
-
-      h3 {
-        margin-bottom: 10px;
-      }
-    }
+    > div { min-width: 0; }
+    h3 { margin-bottom: 10px; }
   }
+
+  .zone-map { grid-area: map; }
+  .zone-spawn-plans { grid-area: spawns; }
 
   .emptymap {
     border: 1px solid #444;
@@ -535,6 +523,7 @@ const buildZoneDeleteYaml = (zoneValue: any): string => {
   }
 
   .zone-policies {
+    grid-area: policies;
     border: 1px solid #444;
     box-sizing: border-box;
     padding: 0.75rem;

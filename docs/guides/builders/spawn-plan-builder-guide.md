@@ -8,6 +8,18 @@ A spawn plan does not create rooms or exits. Build the zone layout with `zone`
 and `room` manifests first, add any path groupings with `path` manifests, then
 use a spawn plan to decide which mobs or items populate that layout.
 
+On the zone overview, **Spawn Plans** sits beside the map, or directly below it
+on mobile. **Zone Policies** appears beneath the map on desktop and after the
+spawn plans on mobile. Expand a plan under **Spawn Plans** to see its entries,
+counts, and destinations. Weighted source pools show each possible mob or item
+and its relative weight. Inactive entries and entries with conditions are marked.
+This is the authored population plan, not a live count of surviving mobs.
+
+Hover over a mob name, focus it with the keyboard, or tap it on mobile to see its
+description, properties, attributes, traits, and randomization. Close the preview
+with its close button, Escape, or a tap outside it. **View Mob YAML** opens the
+full definition; **Edit YAML** below the expanded entries opens the spawn plan.
+
 ## Basic Shape
 
 ```yaml

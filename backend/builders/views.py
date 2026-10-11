@@ -63,6 +63,7 @@ from builders.doors import (
 from builders import permissions as builder_permissions
 from builders import serializers as builder_serializers
 from builders import world_export as builder_world_export
+from builders.spawn_plan_previews import serialize_spawn_plan_preview
 from quests import manifests as quest_manifests
 from builders.models import (
     AbilityDefinition,
@@ -909,6 +910,8 @@ class ZoneBuilderViewSet(WorldCreationMixin,
             )),
             pk=spawn_plan_pk,
         )
+        if request.query_params.get('preview') == 'true':
+            return Response(serialize_spawn_plan_preview(spawn_plan, world=self.world))
         return Response(
             builder_world_export.serialize_spawn_plan_payload(spawn_plan)
         )

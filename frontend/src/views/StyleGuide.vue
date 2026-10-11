@@ -313,6 +313,22 @@
         @close="closePreview" @keep-open="keepPreviewOpen" @leave="leavePreview" />
     </section>
 
+    <section id="mob-previews" class="sg-section">
+      <h2>Builder mob previews</h2>
+      <p class="sg-note">
+        Use <span class="sg-code">MobDefinitionPreview</span> for an authored mob name with details
+        on hover, keyboard focus, or tap. It uses the shared floating menu and
+        <span class="sg-code">ManifestValue</span> for readable properties and attributes.
+        Spawn plans use a native disclosure, loading their entries only when expanded.
+        The zone overview gives the map the remaining width beside a 300px spawn-plan column,
+        with zone policies below the map. Narrow screens stack map, plans, then policies.
+        The shared <span class="sg-code">Map</span> component's optional
+        <span class="sg-code">fit_width</span> prop expands its canvas and visible area while
+        keeping the room scale unchanged.
+      </p>
+      <MobDefinitionPreview :mob="previewMob" world-id="example" />
+    </section>
+
     <!-- Color tokens -->
     <section id="colors" class="sg-section">
       <h2>Color tokens</h2>
@@ -345,6 +361,7 @@ import {
 } from "@lucide/vue";
 import ManifestValue from "@/components/builder/world/ManifestValue.vue";
 import ItemPreview from "@/components/ui/ItemPreview.vue";
+import MobDefinitionPreview from "@/components/builder/world/MobDefinitionPreview.vue";
 import { useItemPreview } from "@/composables/useItemPreview";
 
 const { preview, bindings: previewBindings, close: closePreview,
@@ -356,6 +373,12 @@ const previewItem = {
 };
 const previewPlayer = { level: 5, archetype: "warrior", equipment: {}, marks: {} };
 const previewWorld = { allow_combat: true };
+const previewMob = {
+  id: 1, name: 'a Persian spearman', slug: 'persian-spearman', type: 'humanoid',
+  room_description: 'A Persian spearman watches the field.',
+  description: 'A linen-clad soldier grips a long ash spear behind a wicker shield.',
+  base_properties: { level: 5, health_max: 80 }, attributes: { strength: 12 },
+};
 
 const sections = [
   { id: "text-color", title: "Text color" },
@@ -370,6 +393,7 @@ const sections = [
   { id: "navigation", title: "Navigation" },
   { id: "data", title: "Data" },
   { id: "item-previews", title: "Item previews" },
+  { id: "mob-previews", title: "Mob previews" },
   { id: "colors", title: "Color tokens" },
 ];
 
