@@ -8,14 +8,12 @@ This provides WebSocket connectivity for the Forge, handling:
 """
 import logging
 import os
-from backend.core.access_policy import environment_allowlist, token_is_allowed
-
-ACCESS_EMAIL_ALLOWLIST = environment_allowlist()
 
 from fastapi import FastAPI, WebSocket
 
 from .forge_ws import handle_forge_websocket
 from .game_ws import handle_game_websocket
+from .access import user_admitted
 
 # Configure logging
 logging.basicConfig(
@@ -79,7 +77,7 @@ def _decode_token(token: str) -> dict | None:
     try:
         # SimpleJWT uses HS256 by default with the Django SECRET_KEY
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        if not token_is_allowed(payload, ACCESS_EMAIL_ALLOWLIST):
+        if payload.get('token_type') != 'access':
             return None
         logger.debug(f"Successfully decoded token for user_id: {payload.get('user_id')}")
         return payload
@@ -96,9 +94,7 @@ async def _get_user_from_token(token: str) -> tuple[int | None, str | None]:
 
     Returns (user_id, user_email) or (None, None) if invalid.
 
-    Note: For full Django integration, this could query the database
-    to get the user object, but for WebSocket auth we just need the
-    user_id from the token payload.
+    Admission uses the account and access policy currently in the database.
     """
     payload = _decode_token(token)
     if payload is None:
@@ -111,6 +107,9 @@ async def _get_user_from_token(token: str) -> tuple[int | None, str | None]:
     try:
         user_id = int(user_id)
     except (TypeError, ValueError):
+        return None, None
+
+    if not await user_admitted(user_id):
         return None, None
 
     # Email might be in the token payload depending on SimpleJWT config

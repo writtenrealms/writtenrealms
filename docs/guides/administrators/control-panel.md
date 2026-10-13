@@ -10,11 +10,11 @@ For a new installation, create the first administrator with:
 docker compose exec backend python manage.py createsuperuser
 ```
 
-Use that account's email with the normal sign-in flow. Staff accounts can always pass the platform access policy, including the deployment email restriction, so administrators can reopen a closed installation. Normal account activation and authentication still apply.
+Use that account's email with the normal sign-in flow. Staff accounts can always pass the platform access policy, so administrators can reopen a closed installation. Normal account activation and authentication still apply.
 
 ## Access and invitations
 
-The status badges show the saved access policy, including any deployment restriction. Unsaved edits do not change the status. Without a deployment restriction, the access settings are:
+The database is the source of truth for platform access and invitations. The status badges and selected mode show that saved policy. Unsaved edits do not change the status. The access settings are:
 
 | Mode | Who can use Core |
 | --- | --- |
@@ -24,15 +24,9 @@ The status badges show the saved access policy, including any deployment restric
 
 The whitelist uses exact email addresses, ignoring case and surrounding whitespace. Add an address before inviting someone to sign in. Adding an address grants eligibility; it does not send an email or create an account. Removing it withdraws invite-only access. The whitelist is retained when you switch modes.
 
-Access changes apply to sign-in, authenticated API calls, and gameplay command processing. Cached decisions can take up to five seconds to expire. Existing WebSocket connections may receive passive updates until they disconnect; changing access mode is not a server shutdown or a forced disconnect.
+Access changes apply to sign-in, authenticated API calls, WebSocket authentication, and gameplay command processing. Cached decisions can take up to five seconds to expire. Existing WebSocket connections may receive passive updates until they disconnect; changing access mode is not a server shutdown or a forced disconnect.
 
-If your deployment sets `WR_ACCESS_RESTRICTED` / `WR_ALLOWED_EMAILS`, the status is **Invite only** unless the saved panel policy is **Closed**. The panel shows how many addresses are invited through deployment settings and offers these controls:
-
-- **Use deployment invitations** admits staff and the deployment's invited addresses.
-- **Limit to whitelist** additionally requires non-staff addresses to appear in the panel's **Additional email whitelist**. Both lists must contain the address. An empty additional whitelist blocks all non-staff access in this mode.
-- **Closed** admits staff only.
-
-An empty deployment invitation list admits only staff. Adding an address to the panel cannot override deployment restrictions, and the additional whitelist is inactive until **Limit to whitelist** is saved. Update the deployment environment to remove its restriction when you are ready to manage admission entirely through the panel.
+Existing accounts are separate from invitations: creating an account does not automatically add it to the whitelist. Staff can always sign in, even without a whitelist entry. A database export includes both the saved mode and the invitations; importing it into another installation carries that access policy with it.
 
 **Open building** controls who can create worlds. Turning it off preserves existing builder assignments and staff access. The **main world** setting controls where the homepage and lobby lead; leaving it blank restores the multi-world entry page. Selecting a main world does not publish it or grant permission to enter a private world.
 

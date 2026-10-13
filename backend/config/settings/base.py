@@ -14,7 +14,6 @@ import datetime
 import os
 
 from corsheaders.defaults import default_headers
-from core.access_policy import environment_allowlist
 
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
@@ -31,7 +30,6 @@ SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
-ACCESS_EMAIL_ALLOWLIST = environment_allowlist()
 
 ALLOWED_HOSTS = []
 

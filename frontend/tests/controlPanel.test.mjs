@@ -16,7 +16,7 @@ const server = await createServer({
 after(()=>server.close());
 const {default:Overview}=await server.ssrLoadModule('/src/components/staff/StaffOverview.vue');
 const {default:Header}=await server.ssrLoadModule('/src/components/Header.vue');
-const {changedStaffSettings,chartHeight,effectiveAccessMode,staffAccessOptions,staffError,staffTime}=await server.ssrLoadModule('/src/core/staff.ts');
+const {changedStaffSettings,chartHeight,staffAccessOptions,staffError,staffTime}=await server.ssrLoadModule('/src/core/staff.ts');
 const router=createRouter({history:createMemoryHistory(),routes:[
   ...['builder_world_admin','builder_world_admin_instance','builder_world_player_details','staff_user_info','lobby_building'].map(name=>({path:`/${name}/:world_id?/:player_id?/:instance_id?/:user_id?`,name,component:{}})),
   {path:'/staff',name:'staff_index',component:{}},{path:'/lobby',name:'lobby',component:{}},
@@ -67,22 +67,10 @@ test('saving one setting does not overwrite unrelated concurrent administrator c
   assert.deepEqual(changedStaffSettings({...original,building_enabled:true},original),{building_enabled:true});
 });
 
-test('access status includes deployment restrictions for every panel mode',()=>{
-  for (const access_mode of ['open','invite_only','closed']) {
-    assert.equal(effectiveAccessMode({access_mode,deployment_restricted:false,deployment_allowlist_count:null}),access_mode);
-    for (const deployment_allowlist_count of [0,2]) {
-      assert.equal(effectiveAccessMode({access_mode,deployment_restricted:true,deployment_allowlist_count}),
-        access_mode==='closed'?'closed':'invite_only');
-    }
-  }
-});
-
-test('restricted access controls explain the intersection instead of promising public access',()=>{
-  const options=staffAccessOptions(true);
-  assert.equal(options.find(option=>option.value==='open').label,'Use deployment invitations');
-  assert.match(options.find(option=>option.value==='invite_only').description,/both invitation lists/);
-  assert.ok(options.every(option=>!option.description.includes('Anyone')));
-  assert.equal(staffAccessOptions(false).find(option=>option.value==='open').label,'Open');
+test('access controls offer the three database policies without deployment overrides',()=>{
+  assert.deepEqual(staffAccessOptions.map(option=>option.value),['open','invite_only','closed']);
+  assert.deepEqual(staffAccessOptions.map(option=>option.label),['Open','Invite only','Closed']);
+  assert.match(staffAccessOptions.find(option=>option.value==='invite_only').description,/whitelisted emails/);
 });
 
 test('API errors preserve validation messages and missing telemetry stays unavailable',()=>{

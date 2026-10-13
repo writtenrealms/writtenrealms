@@ -5,24 +5,13 @@ export const accessLabels: Record<AccessMode, string> = {
 
 export interface StaffAccessPolicy {
   access_mode: AccessMode;
-  deployment_restricted: boolean;
-  deployment_allowlist_count: number | null;
 }
 
-export function effectiveAccessMode(settings: StaffAccessPolicy): AccessMode {
-  if (settings.access_mode === 'closed') return 'closed';
-  return settings.deployment_restricted ? 'invite_only' : settings.access_mode;
-}
-
-export function staffAccessOptions(deploymentRestricted: boolean): { value: AccessMode; label: string; description: string }[] {
-  return [
-    { value: 'open', label: deploymentRestricted ? 'Use deployment invitations' : 'Open',
-      description: deploymentRestricted ? 'Staff and emails invited in deployment settings.' : 'Anyone can sign in and play.' },
-    { value: 'invite_only', label: deploymentRestricted ? 'Limit to whitelist' : 'Invite only',
-      description: deploymentRestricted ? 'Staff and emails on both invitation lists.' : 'Only staff and whitelisted emails.' },
-    { value: 'closed', label: 'Closed', description: 'Only staff can sign in and play.' },
-  ];
-}
+export const staffAccessOptions: { value: AccessMode; label: string; description: string }[] = [
+  { value: 'open', label: 'Open', description: 'Anyone can sign in and play.' },
+  { value: 'invite_only', label: 'Invite only', description: 'Only staff and whitelisted emails.' },
+  { value: 'closed', label: 'Closed', description: 'Only staff can sign in and play.' },
+];
 
 export interface StaffAudit {
   id: number;

@@ -18,13 +18,12 @@ import uuid
 from itertools import islice
 from typing import Iterable
 
-from backend.core.access_policy import environment_allowlist, token_is_allowed
+from .access import user_admitted
 
 from fastapi import WebSocket, WebSocketDisconnect
 import redis.asyncio as aioredis
 
 logger = logging.getLogger('game_ws')
-ACCESS_EMAIL_ALLOWLIST = environment_allowlist()
 
 # JWT configuration
 JWT_SECRET = os.getenv("JWT_SECRET", "")
@@ -294,10 +293,10 @@ def _verify_token(token: str) -> int | None:
 
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        if not token_is_allowed(payload, ACCESS_EMAIL_ALLOWLIST):
+        if payload.get('token_type') != 'access':
             return None
-        return payload.get("user_id")
-    except PyJWTError as e:
+        return int(payload['user_id'])
+    except (PyJWTError, KeyError, TypeError, ValueError) as e:
         logger.error(f"JWT verification failed: {e}")
         return None
 
@@ -454,6 +453,14 @@ async def handle_game_websocket(websocket: WebSocket):
                     await websocket.send_json({
                         'type': 'system.connect.error',
                         'text': 'Invalid authentication token'
+                    })
+                    continue
+
+                if not await user_admitted(verified_user_id):
+                    await websocket.send_json({
+                        'type': 'system.connect.error',
+                        'text': 'Platform access is not available for this account.',
+                        'data': {'code': 'platform_access_denied'},
                     })
                     continue
 

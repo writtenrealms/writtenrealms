@@ -1,6 +1,5 @@
 from datetime import timedelta
 import hashlib
-import os
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -10,16 +9,20 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 
-from core.access_policy import environment_allowlist
+from system.access import clear_access_cache
+from system.models import AccessAllowlistEntry, SiteControl
 from users.models import LoginLinkRequest
 from users.tokens import build_token_response
 
 User = get_user_model()
 
 
-@override_settings(ACCESS_EMAIL_ALLOWLIST=frozenset({'invited@example.com'}))
 class AdmissionTests(APITestCase):
     def setUp(self):
+        clear_access_cache()
+        self.addCleanup(clear_access_cache)
+        SiteControl.objects.update_or_create(name='prod', defaults={'access_mode': 'invite_only'})
+        AccessAllowlistEntry.objects.create(email='invited@example.com')
         self.invited = User.objects.create_user('invited@example.com')
         self.outsider = User.objects.create_user('outsider@example.com')
 
@@ -91,8 +94,8 @@ class AdmissionTests(APITestCase):
         self.assertEqual(self.client.post(reverse('game-play'), {}).status_code, 403)
         self.assertEqual(User.objects.count(), count)
 
-    @override_settings(ACCESS_EMAIL_ALLOWLIST=frozenset())
-    def test_empty_enabled_allowlist_denies_everyone(self):
+    def test_empty_database_allowlist_denies_nonstaff(self):
+        AccessAllowlistEntry.objects.all().delete()
         self.assertEqual(self.client.post(reverse('email-login-request'),
             {'email': self.invited.email}).status_code, 403)
 
@@ -107,24 +110,16 @@ class AdmissionTests(APITestCase):
 
 
 class GatewayAdmissionTests(SimpleTestCase):
-    def test_gateway_checks_signed_email_and_rejects_refresh_tokens(self):
+    def test_gateway_validates_token_type_before_database_admission(self):
         import jwt
         from fastapi_app import main, game_ws
-        allowlist = frozenset({'invited@example.com'})
         for module, method in [(main, main._decode_token), (game_ws, game_ws._verify_token)]:
-            with patch.object(module, 'ACCESS_EMAIL_ALLOWLIST', allowlist), \
-                    patch.object(module, 'JWT_SECRET', 'test-signing-key'):
-                for claims, allowed in [
+            with patch.object(module, 'JWT_SECRET', 'test-signing-key'):
+                for claims, valid in [
                     ({'email': 'invited@example.com', 'token_type': 'access'}, True),
-                    ({'email': 'outsider@example.com', 'token_type': 'access'}, False),
+                    ({'token_type': 'access'}, True),
                     ({'email': 'invited@example.com', 'token_type': 'refresh'}, False),
-                    ({'token_type': 'access'}, False),
+                    ({}, False),
                 ]:
                     token = jwt.encode({'user_id': 1, **claims}, 'test-signing-key', algorithm='HS256')
-                    self.assertEqual(method(token) is not None, allowed)
-
-    def test_disabled_and_enabled_empty_environment_are_distinct(self):
-        with patch.dict(os.environ, {'WR_ACCESS_RESTRICTED': '0', 'WR_ALLOWED_EMAILS': ''}):
-            self.assertIsNone(environment_allowlist())
-        with patch.dict(os.environ, {'WR_ACCESS_RESTRICTED': '1', 'WR_ALLOWED_EMAILS': ''}):
-            self.assertEqual(environment_allowlist(), frozenset())
+                    self.assertEqual(method(token) is not None, valid)

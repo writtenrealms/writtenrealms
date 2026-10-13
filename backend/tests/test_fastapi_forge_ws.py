@@ -16,12 +16,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 from django.db import close_old_connections
 from django.test import TestCase, TransactionTestCase
 
 from builders.models import WorldBuilder
 from core.forge_permissions import require_world_admin
 from system import tasks as system_tasks
+from system.access import clear_access_cache
 from system.models import SiteControl
 from users.models import User
 from worlds.models import World
@@ -54,6 +56,9 @@ class TestForgeWebSocketAuth(unittest.TestCase):
     """Tests for WebSocket authentication."""
 
     def setUp(self):
+        admission = patch('fastapi_app.main.user_admitted', AsyncMock(return_value=True))
+        admission.start()
+        self.addCleanup(admission.stop)
         self.client = TestClient(app)
         self.valid_token = create_test_token(user_id=1, email="test@example.com")
 
@@ -107,6 +112,9 @@ class TestForgeWebSocketHeartbeat(unittest.TestCase):
     """Tests for heartbeat functionality."""
 
     def setUp(self):
+        admission = patch('fastapi_app.main.user_admitted', AsyncMock(return_value=True))
+        admission.start()
+        self.addCleanup(admission.stop)
         self.client = TestClient(app)
         self.token = create_test_token(user_id=1)
 
@@ -148,6 +156,8 @@ class TestForgeWebSocketSubscription(TransactionTestCase):
     """Exercise JWT -> gateway -> Django worker -> correlated Redis approval."""
 
     def setUp(self):
+        clear_access_cache()
+        self.addCleanup(clear_access_cache)
         permission_fixtures(self)
         self.manager = ConnectionManager()
         self.client = TestClient(app)
@@ -220,13 +230,19 @@ class TestForgeWebSocketSubscription(TransactionTestCase):
     def test_deleted_inactive_and_revoked_users_are_rejected(self):
         self.staff.is_active = False
         self.staff.save(update_fields=['is_active'])
-        self.assert_subscription(self.staff, 'staff.panel')
+        with self.assertRaises(WebSocketDisconnect) as denied:
+            with self.client.websocket_connect(f'/ws/forge/?token={create_test_token(self.staff.pk)}') as ws:
+                ws.receive_json()
+        self.assertEqual(denied.exception.code, 4401)
         WorldBuilder.objects.filter(user=self.builder).delete()
         self.assert_subscription(self.builder, 'builder.admin', self.root.pk)
         deleted_id = self.stranger.pk
         self.stranger.delete()
         self.stranger.pk = deleted_id
-        self.assert_subscription(self.stranger, 'staff.panel')
+        with self.assertRaises(WebSocketDisconnect) as denied:
+            with self.client.websocket_connect(f'/ws/forge/?token={create_test_token(deleted_id)}') as ws:
+                ws.receive_json()
+        self.assertEqual(denied.exception.code, 4401)
 
     def test_invalid_and_unknown_channels_fail_closed(self):
         for world_id in (None, True, [], {}, 1.5, 'oops', '9' * 100):

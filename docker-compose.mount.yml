@@ -13,4 +13,5 @@ services:
       - ./fastapi_app:/code/fastapi_app
   fastapi:
     volumes:
+      - ./backend:/code/backend
       - ./fastapi_app:/code/fastapi_app

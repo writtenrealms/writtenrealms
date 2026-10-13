@@ -55,7 +55,7 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
 
         with patch.object(game_ws, "game_manager", manager), patch.object(
             game_ws, "_verify_token", return_value=1
-        ), patch.object(game_ws, "get_celery_app", return_value=celery_app):
+        ), patch.object(game_ws, "user_admitted", AsyncMock(return_value=True)), patch.object(game_ws, "get_celery_app", return_value=celery_app):
             asyncio.run(game_ws.handle_game_websocket(websocket))
 
     def test_invalid_reauthentication_preserves_verified_command_identity(self):
@@ -69,7 +69,7 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
         manager.start_pubsub_listener = AsyncMock()
         with patch.object(game_ws, "game_manager", manager), patch.object(
             game_ws, "_verify_token", side_effect=[1, None]
-        ), patch.object(game_ws, "get_celery_app", return_value=celery_app):
+        ), patch.object(game_ws, "user_admitted", AsyncMock(return_value=True)), patch.object(game_ws, "get_celery_app", return_value=celery_app):
             asyncio.run(game_ws.handle_game_websocket(websocket))
         calls = [call.kwargs['kwargs'] for call in celery_app.send_task.call_args_list
                  if call.args[0] == 'spawns.tasks.handle_game_command']

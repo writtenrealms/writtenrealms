@@ -1,5 +1,4 @@
 """Staff-only configuration and invitation management for an installation."""
-from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 
@@ -61,9 +60,6 @@ class SettingsSerializer(serializers.ModelSerializer):
 def settings_data(control):
     return {
         **SettingsSerializer(control).data,
-        'deployment_restricted': settings.ACCESS_EMAIL_ALLOWLIST is not None,
-        'deployment_allowlist_count': (
-            len(settings.ACCESS_EMAIL_ALLOWLIST) if settings.ACCESS_EMAIL_ALLOWLIST is not None else None),
         'access_propagation_seconds': ACCESS_CACHE_SECONDS,
     }
 

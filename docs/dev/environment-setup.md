@@ -227,17 +227,16 @@ to leave the stack stopped.
 
 ## Production Deployment
 
-Servers may enable email admission restrictions with `WR_ACCESS_RESTRICTED=1`
-and a comma-separated `WR_ALLOWED_EMAILS`. Addresses are matched without case
-sensitivity. An enabled, empty list denies all accounts; the default is public
-registration. Pass both variables to Django, Celery, and the FastAPI gateway.
-Recreate those services after editing the list: this reloads the policy and
-disconnects existing WebSocket sessions. HTTP access is checked against the
-current account email without an additional database query. Gateways check the
-signed email claim when a connection authenticates. Older access tokens without
-that claim require a fresh login or token refresh when restrictions are enabled.
-Guest play is disabled on restricted servers. Keep the actual list and
-provider-specific operations instructions outside the public repository.
+Platform access is managed in the database through the [Control Panel](../guides/administrators/control-panel.md). Choose **Invite only** and add invited emails before exposing a private installation. Existing accounts are not automatically invited. The default for an unconfigured installation is **Open**; deployment/bootstrap tooling must explicitly initialize its intended policy.
+
+`SiteControl.access_mode` and `AccessAllowlistEntry` govern sign-in, API access,
+WebSocket authentication, and gameplay commands. Policy caches expire within
+five seconds; no service restart is needed. The gateway needs the same Django
+settings, database configuration, and backend source as the API so it can resolve
+current account privileges and invitations. Legacy `WR_ACCESS_RESTRICTED` and
+`WR_ALLOWED_EMAILS` variables have no effect. Before upgrading an installation
+that used them, copy its invitations into the database and save **Invite only**
+while the old restriction is still active, then remove those variables.
 
 For production:
 

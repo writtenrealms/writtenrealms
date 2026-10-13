@@ -8,11 +8,10 @@ from collections import OrderedDict
 from threading import RLock
 from time import monotonic
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework.exceptions import PermissionDenied
 
-from core.access_policy import access_denial_detail, email_is_allowed
+from core.access_policy import access_denial_detail
 
 ACCESS_CACHE_SECONDS = 5
 _CACHE_LIMIT = 4096
@@ -53,8 +52,6 @@ def email_admitted(email, *, is_staff=False):
     if is_staff:
         return True
     normalized = email.strip().casefold() if isinstance(email, str) else ''
-    if not email_is_allowed(normalized, settings.ACCESS_EMAIL_ALLOWLIST):
-        return False
     mode = access_mode()
     if mode == 'open':
         return True
@@ -63,6 +60,15 @@ def email_admitted(email, *, is_staff=False):
     from system.models import AccessAllowlistEntry
     return _cached(('email', normalized), lambda: AccessAllowlistEntry.objects.filter(
         email=normalized).exists())
+
+
+def user_admitted(user_id):
+    # Socket tokens identify the account; current database state supplies its
+    # email, activation and staff privileges, never stale signed claims.
+    user = _cached(('user', user_id), lambda: get_user_model().objects.filter(
+        pk=user_id).values('email', 'is_active', 'is_staff').first())
+    return bool(user and user['is_active'] and email_admitted(
+        user['email'], is_staff=user['is_staff']))
 
 
 def require_platform_access(email=None, *, user=None):

@@ -1,10 +1,10 @@
 """Platform admission and staff settings must also cover existing identities."""
 from datetime import timedelta
+import os
 from unittest.mock import patch
 import hashlib
 
 from django.contrib.auth import get_user_model
-from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
@@ -18,7 +18,6 @@ from tests.base import WorldTestCase
 User = get_user_model()
 
 
-@override_settings(ACCESS_EMAIL_ALLOWLIST=None)
 class PlatformAdmissionTests(APITestCase):
     def setUp(self):
         clear_access_cache()
@@ -81,14 +80,24 @@ class PlatformAdmissionTests(APITestCase):
         self.assertIn(self.client.get(reverse('logged-in-user')).status_code, (401, 403))
 
     @patch('core.mail.send_login_link')
-    @override_settings(ACCESS_EMAIL_ALLOWLIST=frozenset())
-    def test_staff_can_recover_closed_installation_even_under_environment_restriction(self, mail):
+    def test_staff_can_recover_closed_installation(self, mail):
         self.set_mode('closed')
         response = self.client.post(reverse('email-login-request'), {'email': self.staff.email})
         self.assertEqual(response.status_code, 201)
         token = RefreshToken.for_user(self.staff).access_token
         self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + str(token))
         self.assertEqual(self.client.get(reverse('logged-in-user')).status_code, 200)
+
+    def test_database_policy_is_authoritative_even_with_obsolete_environment_values(self):
+        with patch.dict(os.environ, {'WR_ACCESS_RESTRICTED': '1', 'WR_ALLOWED_EMAILS': ''}):
+            self.assertTrue(email_admitted(self.user.email))
+        self.set_mode('invite_only')
+        with patch.dict(os.environ, {'WR_ACCESS_RESTRICTED': '0', 'WR_ALLOWED_EMAILS': self.user.email}):
+            self.assertFalse(email_admitted(self.user.email))
+            AccessAllowlistEntry.objects.create(email=self.user.email)
+            self.assertTrue(email_admitted(self.user.email))
+            self.set_mode('closed')
+            self.assertFalse(email_admitted(self.user.email))
 
     def test_previous_login_link_does_not_consume_link_after_removal(self):
         self.set_mode('invite_only')
@@ -125,7 +134,6 @@ class PlatformAdmissionTests(APITestCase):
             self.assertLessEqual(len(access._cache), 4)
 
 
-@override_settings(ACCESS_EMAIL_ALLOWLIST=None)
 class StaffAccessSettingsTests(APITestCase):
     def setUp(self):
         clear_access_cache()
@@ -135,6 +143,13 @@ class StaffAccessSettingsTests(APITestCase):
         self.client.force_authenticate(self.staff)
         self.settings_url = reverse('staff-site-settings')
         self.list_url = reverse('staff-allowlist')
+
+    def test_settings_report_only_the_database_policy(self):
+        SiteControl.objects.update_or_create(name='prod', defaults={'access_mode': 'invite_only'})
+        response = self.client.get(self.settings_url)
+        self.assertEqual(response.data['access_mode'], 'invite_only')
+        self.assertNotIn('deployment_restricted', response.data)
+        self.assertNotIn('deployment_allowlist_count', response.data)
 
     def test_all_operations_require_staff(self):
         for user in (None, self.regular):
@@ -205,7 +220,6 @@ class StaffAccessSettingsTests(APITestCase):
         self.assertEqual(self.client.get(self.list_url, {'q': 'person01'}).data['count'], 1)
 
 
-@override_settings(ACCESS_EMAIL_ALLOWLIST=None)
 class GameplayAdmissionTests(WorldTestCase):
     def setUp(self):
         super().setUp()

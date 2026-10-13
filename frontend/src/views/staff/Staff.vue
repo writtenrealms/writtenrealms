@@ -25,7 +25,7 @@ import StaffOverview from '@/components/staff/StaffOverview.vue';
 import StaffAccess from '@/components/staff/StaffAccess.vue';
 import StaffJobs from '@/components/staff/StaffJobs.vue';
 import StaffAudit from '@/components/staff/StaffAudit.vue';
-import { accessLabels, effectiveAccessMode, staffError, staffTime, type AccessMode, type StaffAccessPolicy, type StaffOverview as Overview } from '@/core/staff';
+import { accessLabels, staffError, staffTime, type AccessMode, type StaffAccessPolicy, type StaffOverview as Overview } from '@/core/staff';
 const tab = ref('overview');
 const autoRefresh = ref(false);
 const overview = ref<Overview | null>(null);
@@ -43,7 +43,7 @@ let timer: ReturnType<typeof setInterval> | undefined;
 let disposed = false;
 
 function settingsChanged(settings: StaffAccessPolicy & { maintenance_mode: boolean }) {
-  accessMode.value = effectiveAccessMode(settings);
+  accessMode.value = settings.access_mode;
   maintenance.value = settings.maintenance_mode;
 }
 
