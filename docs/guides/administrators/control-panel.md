@@ -14,7 +14,7 @@ Use that account's email with the normal sign-in flow. Staff accounts can always
 
 ## Access and invitations
 
-The access settings control the entire installation:
+The status badges show the saved access policy, including any deployment restriction. Unsaved edits do not change the status. Without a deployment restriction, the access settings are:
 
 | Mode | Who can use Core |
 | --- | --- |
@@ -26,7 +26,13 @@ The whitelist uses exact email addresses, ignoring case and surrounding whitespa
 
 Access changes apply to sign-in, authenticated API calls, and gameplay command processing. Cached decisions can take up to five seconds to expire. Existing WebSocket connections may receive passive updates until they disconnect; changing access mode is not a server shutdown or a forced disconnect.
 
-If your deployment sets `WR_ACCESS_RESTRICTED` / `WR_ALLOWED_EMAILS`, that restriction remains an additional limit and is shown in the panel. Opening the site or adding a database whitelist entry cannot override it for non-staff accounts. Update the deployment environment to remove that restriction when you are ready to manage admission entirely through the panel.
+If your deployment sets `WR_ACCESS_RESTRICTED` / `WR_ALLOWED_EMAILS`, the status is **Invite only** unless the saved panel policy is **Closed**. The panel shows how many addresses are invited through deployment settings and offers these controls:
+
+- **Use deployment invitations** admits staff and the deployment's invited addresses.
+- **Limit to whitelist** additionally requires non-staff addresses to appear in the panel's **Additional email whitelist**. Both lists must contain the address. An empty additional whitelist blocks all non-staff access in this mode.
+- **Closed** admits staff only.
+
+An empty deployment invitation list admits only staff. Adding an address to the panel cannot override deployment restrictions, and the additional whitelist is inactive until **Limit to whitelist** is saved. Update the deployment environment to remove its restriction when you are ready to manage admission entirely through the panel.
 
 **Open building** controls who can create worlds. Turning it off preserves existing builder assignments and staff access. The **main world** setting controls where the homepage and lobby lead; leaving it blank restores the multi-world entry page. Selecting a main world does not publish it or grant permission to enter a private world.
 

@@ -6,8 +6,8 @@
     <button v-if="!settings && !loading" class="btn-small" @click="loadSettings">RETRY SETTINGS</button>
     <template v-if="settings">
       <section class="panel control-section">
-        <div class="control-section-heading"><div><h2>Platform access</h2><p>Staff can always access the platform and this control panel.</p></div><span class="tag" :class="{'tag-green': settings.access_mode === 'open','tag-secondary': settings.access_mode !== 'open'}">{{ accessLabels[settings.access_mode] }}</span></div>
-        <p v-if="settings.deployment_restricted" class="inline-notice">This deployment also restricts access through its environment configuration ({{ settings.deployment_allowlist_count }} allowed addresses). Changes here cannot override that restriction.</p>
+        <div class="control-section-heading"><div><h2>Platform access</h2><p>{{ accessSummary }}</p></div><span class="tag" :class="effectiveMode === 'open' ? 'tag-green' : 'tag-secondary'">{{ accessLabels[effectiveMode] }}</span></div>
+        <p v-if="settings.deployment_restricted" class="inline-notice">Invitations are managed in deployment settings ({{ settings.deployment_allowlist_count }} allowed addresses). This panel can further restrict access, but cannot admit other addresses.</p>
         <form @submit.prevent="saveSettings">
           <fieldset class="access-options" :disabled="saving">
             <legend class="sr-only">Access policy</legend>
@@ -26,7 +26,7 @@
         </form>
       </section>
       <section class="panel control-section">
-        <div class="control-section-heading"><div><h2>Email whitelist</h2><p>Exact email addresses admitted when access is invite only. Adding an address does not send email.</p></div><span class="tag">{{ allowlist.count }} addresses</span></div>
+        <div class="control-section-heading"><div><h2>{{ settings.deployment_restricted ? 'Additional email whitelist' : 'Email whitelist' }}</h2><p>{{ whitelistSummary }} Adding an address does not send email.</p></div><span class="tag">{{ allowlist.count }} addresses</span></div>
         <form class="allowlist-add control-form-grid" @submit.prevent="addEmail">
           <div class="form-group"><label for="invite-email">Email address</label><input id="invite-email" v-model="email" type="email" required maxlength="254" :disabled="adding" placeholder="name@example.com" /></div>
           <div class="form-group"><label for="invite-note">Note (optional)</label><input id="invite-note" v-model="note" maxlength="500" :disabled="adding" placeholder="Reason or reference" /></div>
@@ -48,14 +48,11 @@ import { onBeforeRouteLeave } from 'vue-router';
 import { Trash } from '@lucide/vue';
 import axios from 'axios';
 import { platformConfig } from '@/core/platform';
-import { accessLabels, changedStaffSettings, staffError, staffTime, type AccessMode } from '@/core/staff';
-interface Settings {
-  access_mode: AccessMode;
+import { accessLabels, changedStaffSettings, effectiveAccessMode, staffAccessOptions, staffError, staffTime, type AccessMode, type StaffAccessPolicy } from '@/core/staff';
+interface Settings extends StaffAccessPolicy {
   maintenance_mode: boolean;
   building_enabled: boolean;
   main_world_id: number | null;
-  deployment_restricted: boolean;
-  deployment_allowlist_count: number | null;
   access_propagation_seconds: number;
 }
 interface AllowedEmail {
@@ -82,11 +79,27 @@ const listLoading = ref(false);
 const listError = ref('');
 const allowlist = ref({ count: 0, page: 1, page_size: 25, results: [] as AllowedEmail[] });
 let listRequest = 0;
-const accessOptions: { value: AccessMode; label: string; description: string }[] = [
-  { value: 'open', label: 'Open', description: 'Anyone can sign in and play.' },
-  { value: 'invite_only', label: 'Invite only', description: 'Only staff and whitelisted emails.' },
-  { value: 'closed', label: 'Closed', description: 'Only staff can sign in and play.' },
-];
+const accessOptions = computed(() => staffAccessOptions(settings.value?.deployment_restricted ?? false));
+// Status describes the saved policy; changing a radio only changes the draft.
+const effectiveMode = computed(() => settings.value ? effectiveAccessMode(settings.value) : 'closed');
+const accessSummary = computed(() => {
+  if (effectiveMode.value === 'closed' || (settings.value?.deployment_restricted && settings.value.deployment_allowlist_count === 0)) {
+    return 'Only staff can sign in and use the platform.';
+  }
+  return effectiveMode.value === 'open'
+    ? 'Anyone can sign in and use the platform.'
+    : 'Only staff and invited email addresses can sign in and use the platform.';
+});
+const whitelistSummary = computed(() => {
+  if (settings.value?.deployment_restricted) {
+    return settings.value.access_mode === 'invite_only'
+      ? 'Non-staff emails must appear here and in deployment invitations to gain access.'
+      : 'This list only applies when Limit to whitelist is saved. Emails must also be invited in deployment settings.';
+  }
+  return settings.value?.access_mode === 'invite_only'
+    ? 'Only staff and emails on this list are admitted.'
+    : 'This list only applies when Invite only is saved.';
+});
 const payload = computed(() => ({
   ...draft,
   main_world_id: mainWorldDraft.value === '' ? null : Number(mainWorldDraft.value),
@@ -123,7 +136,7 @@ async function saveSettings() {
   const accessChanged = payload.value.access_mode !== settings.value?.access_mode ||
     payload.value.maintenance_mode !== settings.value?.maintenance_mode;
   if (accessChanged && !window.confirm(
-    `Apply ${accessLabels[payload.value.access_mode].toLowerCase()} access${payload.value.maintenance_mode ? ' with maintenance mode' : ''}? This changes who can use the platform. Staff retain access.`
+    `Apply this access policy${payload.value.maintenance_mode ? ' with maintenance mode' : ''}? ${accessOptions.value.find(option => option.value === payload.value.access_mode)!.description} Staff retain access.`
   )) return;
   saving.value = true;
   error.value = '';

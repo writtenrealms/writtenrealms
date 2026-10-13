@@ -19,6 +19,12 @@ Queue inspections use a one-second broker socket timeout and a one-second deadli
 
 With the frontend running, open `/tests/browser/controlPanel.html?test=1`. This renders the real components with synthetic data and intercepts all API requests. It checks rendering, draft preservation between tabs, failed and successful saves, unavailable queue data, audit history, and page overflow. It creates no accounts and changes no backend data. The harness is not a production application route.
 
+Add `&restricted=1` to check a deployment with two invited addresses and an open panel policy. Both status badges must say **Invite only**, the first option must say **Use deployment invitations**, and unsaved edits or unrelated saves must preserve the effective status. The display uses the existing settings response and adds no API requests or admission-path work.
+
+The restricted preview passed all 21 browser checks at 1,280 × 960 and 390 × 844 on October 12, 2026. The unrestricted preview also passed its 13 checks at 390 × 844.
+
+![Access page reflecting deployment invitations, with synthetic data](screenshots/core-control-panel-restricted-access.png)
+
 These screenshots use synthetic data. The browser checks passed at desktop (1,280 × 960) and mobile (390 × 844) sizes:
 
 ![Desktop Control Panel with synthetic data](screenshots/core-control-panel-desktop.jpg)

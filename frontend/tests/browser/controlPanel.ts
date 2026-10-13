@@ -12,12 +12,15 @@ import { overview, settings, allowlist, jobs, audit } from '../fixtures/controlP
 import '../../src/styles/app.scss';
 
 const sampleSettings={...settings};
+const restricted=new URLSearchParams(location.search).has('restricted');
+if(restricted)Object.assign(sampleSettings,{access_mode:'open',deployment_restricted:true,deployment_allowlist_count:2});
+const sampleAllowlist=restricted?{...allowlist,count:0,results:[]}:allowlist;
 let settingsFailure=false;
 let writes=0;
 axios.defaults.adapter=async config=>{
   let data:unknown;
   if(config.method==='get') {
-    const responses:Record<string,unknown>={'/staff/overview/':overview,'/staff/site/':sampleSettings,'/staff/allowlist/':allowlist,'/staff/jobs/':jobs,'/staff/audit/':audit,'/lobby/config/':{main_world_id:12,building_enabled:false}};
+    const responses:Record<string,unknown>={'/staff/overview/':overview,'/staff/site/':sampleSettings,'/staff/allowlist/':sampleAllowlist,'/staff/jobs/':jobs,'/staff/audit/':audit,'/lobby/config/':{main_world_id:12,building_enabled:false}};
     if(!(config.url! in responses))throw new Error(`Unexpected preview request: ${config.url}`);
     data=responses[config.url!];
   } else if(config.method==='patch' && config.url==='/staff/site/') {
@@ -44,6 +47,18 @@ async function run(){
   check(document.querySelectorAll('.metric-card').length===4,'Missing overview metrics');
   check(document.documentElement.scrollWidth<=innerWidth,'Horizontal page overflow');
   button('Access').click();await frame();await frame();
+  if(restricted){
+    const badges=[document.querySelector('.control-status .tag')!,document.querySelector('.access-options')!.closest('section')!.querySelector('.tag')!];
+    check(badges.length===2 && badges.every(badge=>badge.textContent==='Invite only'),'Deployment restriction missing from access badges');
+    check(!document.body.textContent!.includes('Anyone can sign in'),'Restricted controls promise public access');
+    check(document.body.textContent!.includes('Use deployment invitations'),'Deployment invitations option missing');
+    check(document.body.textContent!.includes('both invitation lists'),'Additional whitelist requirement missing');
+    check(document.body.textContent!.includes('This list only applies when Limit to whitelist is saved'),'Inactive whitelist not explained');
+    const closed=document.querySelector<HTMLInputElement>('input[name="access-mode"][value="closed"]')!;
+    closed.click();await frame();
+    check(badges.every(badge=>badge.textContent==='Invite only'),'Unsaved draft changed live access status');
+    button('DISCARD CHANGES').click();await frame();
+  }
   const world=document.querySelector<HTMLInputElement>('#main-world-id')!;
   world.value='24';world.dispatchEvent(new Event('input',{bubbles:true}));await frame();
   check(document.body.textContent!.includes('Unsaved changes'),'Changed setting is not marked unsaved');
@@ -55,6 +70,10 @@ async function run(){
   settingsFailure=false;button('SAVE SETTINGS').click();await frame();await frame();
   check(document.body.textContent!.includes('Settings saved.'),'Successful save not confirmed');
   check(button('SAVE SETTINGS').disabled,'Successful save left form dirty');
+  if(restricted){
+    check(document.querySelector('.control-status .tag')!.textContent==='Invite only','Saving another setting removed the effective access restriction');
+    check(document.querySelector('.access-options')!.closest('section')!.querySelector('.tag')!.textContent==='Invite only','Access section lost the effective restriction after save');
+  }
   button('Queues & jobs').click();await frame();await frame();
   check(document.body.textContent!.includes('Unavailable'),'Unknown queue values rendered as zero');
   check(document.body.textContent!.includes('configured') || document.body.textContent!.includes('Configured'),'Schedule caveat missing');
