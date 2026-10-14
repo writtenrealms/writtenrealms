@@ -1211,7 +1211,7 @@ const actions = {
     commit("reset_state");
     commit(
       "ui/notification_set",
-      { text: "Entering world...", expires: false },
+      { text: "Entering world...", type: "loading", expires: false },
       { root: true });
 
     await dispatch('forge/send', {
@@ -1236,7 +1236,7 @@ const actions = {
     commit("reset_state");
     commit(
       "ui/notification_set",
-      { text: "Entering world...", expires: false },
+      { text: "Entering world...", type: "loading", expires: false },
       { root: true }
     );
     try {

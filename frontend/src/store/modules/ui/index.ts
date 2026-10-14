@@ -40,7 +40,7 @@ const mutations = {
       - text: the text of the notification
       - expires: how long to wait to expire the message, where a false
         value means never expire.
-      - type: success or error
+      - type: success, error, or loading
     */
     let expires = 3000;
     if (typeof notification === "string") {

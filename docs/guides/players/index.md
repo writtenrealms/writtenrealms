@@ -21,6 +21,12 @@ to make another, or **Play** next to any character in your list. Private worlds
 require an account with access. Servers configured for multiple worlds show a
 **Worlds** directory instead; direct links to a world work in either setup.
 
+While connecting, a compact notice at the top of the screen says **Entering
+world...** with a gold loading indicator. Success notices use a green check;
+errors use a red alert icon and explain what went wrong. Use the notice's **×**
+button to dismiss it with a click, tap, or keyboard. Dismissing a connection
+notice only hides the message; it does not cancel entry.
+
 ## Character Pages
 
 Click a character in your list, or a name in a world's rankings, to open its

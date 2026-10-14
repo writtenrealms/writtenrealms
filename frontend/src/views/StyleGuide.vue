@@ -73,6 +73,22 @@
         <span class="sg-code">.button-red</span> (small). Keyboard focus shows a gold ring on every control.</p>
     </section>
 
+    <section id="notifications" class="sg-section">
+      <h2>Notifications</h2>
+      <p class="sg-note">The shared Notification component uses Quiet charcoal: a compact, top-centered dark surface,
+        a thin border, and an icon for loading, success, or error. Only the icon changes color. Multiline messages
+        have more room and preserve line breaks. The dismiss button supports keyboard and touch; loading motion
+        respects reduced-motion settings.</p>
+      <div class="sg-inline">
+        <button class="btn-small button-gray" @click="previewNotification('loading')">PREVIEW LOADING</button>
+        <button class="btn-small button-gray" @click="previewNotification('success')">PREVIEW SUCCESS</button>
+        <button class="btn-small button-gray" @click="previewNotification('error')">PREVIEW ERROR</button>
+        <button class="btn-small button-gray" @click="previewNotification('multiline')">PREVIEW LONG ERROR</button>
+      </div>
+      <p class="sg-note">By default, success messages disappear after 3 seconds, errors after 5. Loading remains until the
+        operation completes or the notice is dismissed. Dismissal only hides the notice.</p>
+    </section>
+
     <!-- Forms -->
     <section id="forms" class="sg-section">
       <h2>Forms</h2>
@@ -354,6 +370,7 @@
 </template>
 
 <script lang="ts" setup>
+import { useStore } from "vuex";
 import {
   Backpack, Check, ChevronDown, Coins, Copy, Ellipsis, ExternalLink, Heart, Info,
   Map as MapIcon, Pencil, Plus, Scroll, Search, Settings, Share, Shield, Skull,
@@ -363,6 +380,21 @@ import ManifestValue from "@/components/builder/world/ManifestValue.vue";
 import ItemPreview from "@/components/ui/ItemPreview.vue";
 import MobDefinitionPreview from "@/components/builder/world/MobDefinitionPreview.vue";
 import { useItemPreview } from "@/composables/useItemPreview";
+
+const store = useStore();
+const previewNotification = (type: 'loading' | 'success' | 'error' | 'multiline') => {
+  const messages = {
+    loading: 'Entering world...',
+    success: 'Changes saved.',
+    error: 'Could not enter world. Please try again.',
+    multiline: 'Could not apply manifest.\nrooms[0].exits.north: Unknown room reference "room@999".\nCheck the destination and try again.',
+  };
+  store.commit('ui/notification_set', {
+    text: messages[type],
+    type: type === 'multiline' ? 'error' : type,
+    expires: type === 'loading' ? false : type === 'success' ? 3000 : 5000,
+  });
+};
 
 const { preview, bindings: previewBindings, close: closePreview,
   keepOpen: keepPreviewOpen, leave: leavePreview } = useItemPreview();
@@ -383,6 +415,7 @@ const previewMob = {
 const sections = [
   { id: "text-color", title: "Text color" },
   { id: "buttons", title: "Buttons" },
+  { id: "notifications", title: "Notifications" },
   { id: "forms", title: "Forms" },
   { id: "typography", title: "Typography" },
   { id: "lists", title: "Lists" },
