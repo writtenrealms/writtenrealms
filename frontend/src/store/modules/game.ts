@@ -28,6 +28,7 @@ import { playerRoundEffectSnapshot } from "@/core/roundEffects";
 import { applyCombatSnapshot, currentCombatTarget, initialCombatState } from "@/core/combatState";
 import { applyInstanceTimeControl, pendingTurnCommandState, simulationTimeMs } from "@/core/instanceTimeControl";
 import { applyRoomActions } from "@/core/roomActions";
+import { applyItemExpiration } from "@/core/itemUpkeep";
 import _ from "lodash";
 import router from "@/router";
 
@@ -665,6 +666,9 @@ const receiveMessage = async ({
   if (message_data.type === 'notification.room.actions_changed') {
     commit('room_actions_update', message_data.data);
     return;
+  }
+  if (message_data.type === 'item.expired') {
+    commit('item_expiration_apply', message_data.data);
   }
   if (
     message_data.type === TRIGGER_MOBS_CHANGED_MESSAGE &&
@@ -1952,6 +1956,8 @@ const mutations = {
       },
     };
   },
+
+  item_expiration_apply: applyItemExpiration,
 
   trigger_items_changed_apply: (state, payload) => {
     if (!payload) return;

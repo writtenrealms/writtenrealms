@@ -4,6 +4,8 @@ import hashlib
 import json
 import copy
 import random
+import uuid
+from collections import defaultdict
 from spawns.instance_clock import serialized_world
 
 from dataclasses import dataclass
@@ -94,6 +96,7 @@ class SpawnReconcileContext:
         items = Item.objects.filter(
             world_id=self.spawn_world_id,
             spawn_placement_id__isnull=False,
+            spawn_placement__source_type__startswith='mob',
             is_pending_deletion=False,
         )
         if self.zone_id is not None:
@@ -201,6 +204,7 @@ def _plan_spec_hash(plan: SpawnPlan, *, entries: list[SpawnEntry] | None = None)
             "placement": entry.placement,
             "traits": entry.traits,
             "loot": entry.loot,
+            "upkeep": entry.upkeep,
             "conditions": entry.conditions,
         }
         if entry.initial_state:
@@ -1484,32 +1488,6 @@ def _placement_spawn_room(
     return anchor.room
 
 
-def _parent_instance(*, placement: SpawnPlacement, spawn_world: World):
-    if not placement.parent_entry_slug:
-        return None
-    parent = SpawnPlacement.objects.filter(
-        run=placement.run,
-        entry_slug=placement.parent_entry_slug,
-        slot_index=placement.parent_slot_index,
-    ).first()
-    if parent is None:
-        return None
-    from spawns.models import Item, Mob
-
-    mob = Mob.objects.filter(
-        world=spawn_world,
-        spawn_placement=parent,
-        is_pending_deletion=False,
-    ).first()
-    if mob is not None:
-        return mob
-    return Item.objects.filter(
-        world=spawn_world,
-        spawn_placement=parent,
-        is_pending_deletion=False,
-    ).first()
-
-
 def _placement_has_live_output(
     *,
     placement: SpawnPlacement,
@@ -1525,22 +1503,21 @@ def _materialize_placement(
     placement: SpawnPlacement,
     spawn_world: World,
     reconcile_context: SpawnReconcileContext,
+    target=None,
+    check_live_output=True,
+    entry=None,
 ):
-    if _placement_has_live_output(
+    if check_live_output and _placement_has_live_output(
         placement=placement,
         reconcile_context=reconcile_context,
     ):
         return []
-    target = placement.room
-    if placement.parent_entry_slug:
-        parent_target = _parent_instance(placement=placement, spawn_world=spawn_world)
-        if parent_target is None and not (
+    if target is None:
+        if placement.parent_entry_slug and not (
             placement.source_type.startswith("mob")
             and _live_cohort_members(placement=placement, spawn_world=spawn_world)
         ):
             return []
-        target = parent_target or placement.room
-    else:
         target = placement.room
     if placement.source_type.startswith("mob"):
         roams = _placement_roams(placement)
@@ -1557,7 +1534,8 @@ def _materialize_placement(
     source = _placement_source(placement)
     if source is None:
         return []
-    entry = placement.run.plan.entries.filter(slug=placement.entry_slug).first()
+    if entry is None:
+        entry = placement.run.plan.entries.filter(slug=placement.entry_slug).first()
     if placement.source_type.startswith("mob"):
         spawn_kwargs = {
             "target": spawn_room,
@@ -1612,12 +1590,16 @@ def _materialize_placement(
     }
     if placement.source_type in {"itemdefinition", "itembundle"}:
         spawn_kwargs["rng"] = _rng_for_placement(placement)
-    spawned_items = source.spawn(**spawn_kwargs)
+    from spawns.item_lifecycle import authored_placement
+    with authored_placement(entry.upkeep if entry else {}):
+        spawned_items = source.spawn(**spawn_kwargs)
     if not isinstance(spawned_items, list):
         spawned_items = [spawned_items]
+    stock_unit = str(uuid.uuid4())
     for item in spawned_items:
         item.spawn_placement = placement
         _apply_spawn_origin_metadata(item, placement)
+        item.roll_metadata['spawn_plan']['stock_unit'] = stock_unit
         modifier_fields = _apply_spawn_modifiers(item, placement)
         item.save(update_fields=[
             "spawn_placement",
@@ -1770,27 +1752,60 @@ def reconcile_spawn_plan(
             "room",
             "run__plan",
         ).order_by("id")
-        if not is_due:
-            # A builder edit applies its changed logical slots immediately but
-            # does not refill unrelated missing slots before their deadline.
-            placements = placements.filter(pk__in=hot_placement_ids)
         placements = list(placements)
+        eligible_ids = {p.pk for p in placements if is_due or p.pk in hot_placement_ids}
         reconcile_context.refresh_live_output_placement_ids(
-            placement.id for placement in placements
+            p.id for p in placements if p.source_type.startswith('mob')
         )
-        spawned_count = 0
+        from spawns.item_stock import reconcile_item_entry
+        from spawns.models import Mob
+        grouped = defaultdict(list)
         for placement in placements:
-            entry = entries_by_slug.get(placement.entry_slug)
-            if entry is None:
+            grouped[placement.entry_slug].append(placement)
+        parent_entries = {p.parent_entry_slug for p in placements if p.parent_entry_slug}
+        parents = {}
+        spawned_count, busy = 0, False
+        # Authored entry order is topological, including when a hot edit adds
+        # a new parent slot whose database ID is newer than its children.
+        for entry in entries:
+            if entry.slug not in entries_by_slug:
                 continue
-            if not _entry_conditions_pass(spawn_world=spawn_world, plan=plan, entry=entry):
-                continue
-            spawned_count += len(_materialize_placement(
-                placement=placement,
-                spawn_world=spawn_world,
-                reconcile_context=reconcile_context,
-            ))
-        if is_due:
+            slots = grouped[entry.slug]
+            allowed = eligible_ids if _entry_conditions_pass(spawn_world=spawn_world, plan=plan, entry=entry) else set()
+            mob_slots = [p for p in slots if p.source_type.startswith('mob')]
+            for placement in mob_slots:
+                if placement.pk in allowed:
+                    target = parents.get((placement.parent_entry_slug, placement.parent_slot_index))
+                    spawned_count += len(_materialize_placement(placement=placement, spawn_world=spawn_world,
+                        reconcile_context=reconcile_context, target=target, entry=entry))
+            if entry.slug in parent_entries and mob_slots:
+                live_mobs = list(Mob.objects.filter(world=spawn_world, is_pending_deletion=False,
+                    spawn_placement_id__in=[p.pk for p in mob_slots]).order_by('pk'))
+                claimed = {mob.pk for mob in Mob.objects.select_for_update(skip_locked=True).filter(
+                    pk__in=[mob.pk for mob in live_mobs], is_pending_deletion=False)}
+                busy |= len(claimed) != len(live_mobs)
+                if busy:
+                    break
+                slot_indices = {p.pk: p.slot_index for p in mob_slots}
+                for mob in live_mobs:
+                    if mob.pk in claimed:
+                        parents.setdefault((entry.slug, slot_indices[mob.spawn_placement_id]), mob)
+            item_slots = [p for p in slots if p.source_type.startswith('item')]
+            if item_slots and (entry.slug in parent_entries or any(p.pk in allowed for p in item_slots)):
+                count, entry_busy = reconcile_item_entry(world=spawn_world, run=run, entry=entry,
+                    placements=item_slots, eligible_ids=allowed, parents=parents,
+                    has_children=entry.slug in parent_entries, context=reconcile_context)
+                spawned_count += count
+                busy |= entry_busy
+                if busy:
+                    break
+        if busy:
+            # Roll back the whole plan, including hot-edit bookkeeping. This
+            # preserves one-time materialization for respawn:none plans too;
+            # a skipped destination must not silently consume its hot slots.
+            transaction.set_rollback(True)
+            spawned_count = 0
+        if is_due and not busy:
             run.last_reconciled_at = gameplay_now(spawn_world)
             run.save(update_fields=["last_reconciled_at", "modified_ts"])
         return {
@@ -1798,6 +1813,7 @@ def reconcile_spawn_plan(
             "placements": active_count,
             "spawned": spawned_count,
             "skipped": False,
+            "busy": busy,
         }
 
 

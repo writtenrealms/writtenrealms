@@ -13,6 +13,7 @@ const builderSidebar: DefaultTheme.SidebarItem[] = [
       { text: "Rooms and doors", link: "/builders/room-builder-guide" },
       { text: "Instances", link: "/builders/instance-builder-guide" },
       { text: "Spawn plans", link: "/builders/spawn-plan-builder-guide" },
+      { text: "World upkeep", link: "/builders/world-upkeep" },
     ],
   },
   {
@@ -76,6 +77,7 @@ const playerSidebar: DefaultTheme.SidebarItem[] = [
   { text: "Map", link: "/players/map" },
   { text: "Following", link: "/players/following" },
   { text: "Doors and keys", link: "/players/doors-and-keys" },
+  { text: "Items, corpses, and storage", link: "/players/items-and-storage" },
   { text: "Scripted interactions", link: "/players/scripted-interactions" },
   { text: "Combat", link: "/players/combat" },
   { text: "Abilities and training", link: "/players/abilities" },

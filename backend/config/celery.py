@@ -36,6 +36,16 @@ def _spawn_plan_interval_seconds() -> float:
 
 
 app.conf.beat_schedule = {
+    'dispatch-item-upkeep': {
+        'task': 'spawns.tasks.dispatch_item_upkeep',
+        'schedule': 5.0,
+        'options': {'expires': 5},
+    },
+    'run-world-door-upkeep': {
+        'task': 'worlds.tasks.run_world_door_upkeep',
+        'schedule': 5.0,
+        'options': {'expires': 5},
+    },
     'cleanup-wr1-sign-ins': {
         'task': 'users.tasks.cleanup_wr1_sign_ins',
         'schedule': crontab(minute='*/10'),

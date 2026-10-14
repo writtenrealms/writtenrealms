@@ -142,7 +142,7 @@ class TestMultiContainerGet(WorldTestCase):
         pending = self.container("Decaying Corpse", is_pending_deletion=True)
         nested = self.container("Nested Corpse", owner=visible)
         for source in [other, private, pending, nested]:
-            self.item(source, "Hidden Coin")
+            create_test_item(self.world, source.world, source, "Hidden Coin")
         result = GetAction().execute(self.player.id, "all", "all.corpse")
         self.assertEqual([item["key"] for item in result.events[0].data["items"]], [coin.key])
 

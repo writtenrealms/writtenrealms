@@ -335,6 +335,14 @@ In this example, a new Hoplite carries the spear as an alternate weapon, starts
 with the sword and shield equipped, and knows both abilities. Other classes
 receive none of these class-specific entries.
 
+### World Upkeep
+
+Use `spec.upkeep` to configure NPC corpse lifetimes, empty player-corpse
+lifetimes, and abandoned-item cleanup. Empty player corpses default to ten
+minutes **after first becoming empty**; unrecovered player equipment has no
+automatic expiry. Ground items default to one hour. See [World Upkeep](world-upkeep.md)
+for the complete typed YAML, instance inheritance, and zone/storage policies.
+
 ### Combat, Roaming, And Runtime Rules
 
 | Field | Type | Default | Notes |
@@ -530,7 +538,8 @@ manifests.
 | `starting_eq` | Removed legacy starter-equipment relation. | Configure `starting_equipment` with item-definition references. |
 | `exits_to` | Cross-world instance transfer field; not accepted inside `kind: world`. | Configure it through the family bundle's `world_config.exits_to` link. |
 | `can_create_chars` | Destination character-creation closure switch; import leaves it unchanged. | Manage access on the destination; author starting choices through `player_creation`. |
-| `autoflee`, `has_corpse_decay` | Retained compatibility values with no active gameplay consumer in the current code. | These fields are not part of world manifests. |
+| `autoflee` | Retained compatibility value with no active gameplay consumer. | Not part of world manifests. |
+| `has_corpse_decay` | Removed. | Use `spec.upkeep` instead. |
 | `death_routing_generation`, `death_routing_source_generation` | Internal destination cache versions. | Import rebuilds routing state; do not copy version numbers. |
 
 ## Instance Templates
@@ -541,7 +550,7 @@ manifests:
 - identity text: `name`, `short_description`, `description`, `motd`,
   `is_public`
 - local rooms: `starting_room`, `death_room`
-- local gameplay rules: `never_reload`, `cross_race_cooldown`
+- local gameplay rules: `never_reload`, `cross_race_cooldown`, and `upkeep` overrides
 - local death/PvP/presentation fields: `death_mode`, `death_routing`,
   `death_routing_source`, `death_currency`, `death_currency_penalty`,
   `pvp_mode`, `built_by`, `small_background`, `large_background`,

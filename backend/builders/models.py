@@ -738,6 +738,7 @@ class SpawnEntry(AdventBaseModel):
     name = models.TextField(blank=True)
     order = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    upkeep = models.JSONField(default=dict, blank=True)
     source = models.JSONField(default=dict, blank=True)
     target_room = models.ForeignKey(
         'worlds.Room',

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from worlds.upkeep_policy import normalize_timer, normalize_storage
 
 import copy
 import json
@@ -592,6 +593,7 @@ def _serialize_zone_manifest(zone: Zone) -> dict[str, Any]:
             "description": zone.description or "",
             "notes": zone.notes or "",
             "default_roam_chance": zone.default_roam_chance,
+            "ground_item_upkeep": zone.ground_item_upkeep or {"mode": "inherit_world"},
             "initial_state": get_initial_state_snapshot(STATE_SCOPE_ZONE, zone),
             "respawn": _serialize_zone_policy(
                 mode=zone.respawn_mode,
@@ -649,6 +651,7 @@ def serialize_zone_payload(
         "description": zone.description or "",
         "notes": zone.notes or "",
         "default_roam_chance": zone.default_roam_chance,
+            "ground_item_upkeep": zone.ground_item_upkeep or {"mode": "inherit_world"},
         "respawn": _serialize_zone_policy(
             mode=zone.respawn_mode,
             seconds=zone.respawn_seconds,
@@ -1116,6 +1119,8 @@ def _serialize_spawn_entry(
         data["initial_state"] = copy.deepcopy(entry.initial_state)
     if entry.rewards:
         data["rewards"] = copy.deepcopy(entry.rewards)
+    if entry.upkeep:
+        data["upkeep"] = normalize_storage(entry.upkeep)
     if entry.loot:
         data["loot"] = _canonicalize_nested_conditions(
             copy.deepcopy(entry.loot),
@@ -4641,6 +4646,7 @@ def apply_zone_manifest(
             "default_roam_chance",
             "respawn",
             "door_reset",
+            "ground_item_upkeep",
             "pvp_zone",
             "center",
         }
@@ -4741,6 +4747,9 @@ def apply_zone_manifest(
                     "to this zone."
                 )
 
+        if 'ground_item_upkeep' in spec:
+            zone.ground_item_upkeep = normalize_timer(
+                spec['ground_item_upkeep'], field='spec.ground_item_upkeep', inherit=True)
         previous_door_reset_policy = (
             zone.door_reset_mode,
             zone.door_reset_seconds,
@@ -5969,6 +5978,10 @@ def apply_spawn_plan_manifest(
             source=source,
             field_name=f"{entry_field}.source",
         )
+        if 'upkeep' in entry_spec and any(
+            resolved.source_type not in {'itemdefinition', 'itembundle'} for resolved in resolved_sources
+        ):
+            raise serializers.ValidationError(f'{entry_field}.upkeep is only supported for item sources.')
         try:
             initial_state = normalize_state_snapshot(
                 entry_spec.get("initial_state"),
@@ -6042,6 +6055,7 @@ def apply_spawn_plan_manifest(
             "initial_state": initial_state,
             "traits": traits,
             "loot": loot,
+            "upkeep": normalize_storage(entry_spec["upkeep"]) if "upkeep" in entry_spec else {},
             "rewards": rewards,
             "conditions": entry_conditions,
         })
@@ -6091,6 +6105,7 @@ def apply_spawn_plan_manifest(
                 "initial_state",
                 "traits",
                 "loot",
+                "upkeep",
                 "rewards",
                 "conditions",
             ):

@@ -809,13 +809,21 @@ def _clear_equipment_slots(player: Player, slots: list[str]) -> None:
 
 
 def _transfer_items_to_container(items: list[Item], container) -> None:
-    if not items or container is None:
+    if container is None:
         return
-    container_ct = ContentType.objects.get_for_model(container.__class__)
-    Item.objects.filter(pk__in=[item.id for item in items]).update(
-        container_type=container_ct,
-        container_id=container.id,
-    )
+    from spawns.item_lifecycle import arm_corpse
+    if items:
+        # Death already owns the character lock. Transfer its top-level
+        # inventory without applying the interactive bag-movement limit.
+        # Descendant ownership is reconciled through the root index when
+        # the completed corpse is armed below.
+        item_ids = sorted({item.pk for item in items})
+        list(Item.objects.select_for_update().filter(pk__in=item_ids).order_by('pk').values_list('pk', flat=True))
+        Item.objects.filter(pk__in=item_ids).update(
+            container_type=ContentType.objects.get_for_model(Item), container_id=container.pk,
+        )
+    if container.type == adv_consts.ITEM_TYPE_CORPSE:
+        arm_corpse(container, kind='player', owner_id=container.upkeep_owner_id)
 
 
 def _create_player_corpse(player: Player, room: Room | None) -> Item | None:
@@ -827,6 +835,7 @@ def _create_player_corpse(player: Player, room: Room | None) -> Item | None:
         room_description=f"The corpse of {player.name} is lying here.",
         type=adv_consts.ITEM_TYPE_CORPSE,
         world=player.world,
+        upkeep_owner_id=player.pk,
         level=player.level,
         is_pickable=False,
         container=room,

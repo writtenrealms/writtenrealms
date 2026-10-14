@@ -99,6 +99,8 @@ def _render_item_text(item: dict | None) -> str | None:
     description = item.get("description")
     if item_type not in ("container", "corpse") and description:
         lines.append(description)
+    if item.get("upkeep_notice"):
+        lines.append(item["upkeep_notice"])
 
     if item_type == "container":
         contents = [entry.get("name") for entry in (item.get("inventory") or []) if entry]

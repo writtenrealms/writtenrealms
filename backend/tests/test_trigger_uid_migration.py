@@ -35,9 +35,12 @@ class TriggerUidMigrationTests(TransactionTestCase):
             super().tearDown()
 
     def test_existing_authored_triggers_get_distinct_persistent_uids(self):
-        before = [('builders', '0261_participant_combat_integrity')]
-        after = [('builders', '0262_trigger_uid')]
         executor = MigrationExecutor(connection)
+        # Builders rollback does not roll back independent worlds migrations.
+        # Match the fixture model to that table's actual schema.
+        worlds_targets = executor.loader.graph.leaf_nodes('worlds')
+        before = [('builders', '0261_participant_combat_integrity'), *worlds_targets]
+        after = [('builders', '0262_trigger_uid'), *worlds_targets]
         executor.migrate(before)
         old_apps = executor.loader.project_state(before).apps
         OldWorld = old_apps.get_model('worlds', 'World')

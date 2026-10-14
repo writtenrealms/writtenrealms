@@ -1926,3 +1926,49 @@ def resume_instance_schedulers(run_id, expected_generation):
 def recover_instance_time():
     from spawns.instance_time import recover_due_instances
     return recover_due_instances()
+
+
+@shared_task(ignore_result=True)
+def dispatch_item_upkeep():
+    """Bounded fair discovery; an indexed EXISTS never loads retained inventory."""
+    from django.db.models import Exists, OuterRef, Q, F
+    from datetime import timedelta
+    from config import game_settings
+    from spawns.models import Item
+    from worlds.models import World
+    from spawns.instance_clock import live_worlds
+    if not game_settings.ITEM_UPKEEP_ENABLED:
+        return 0
+    now = timezone.now()
+    due = Item.objects.filter(world_id=OuterRef('pk'), upkeep_retiring=False,
+                              is_pending_deletion=False, upkeep_due_ts__lte=now)
+    retiring = Item.objects.filter(world_id=OuterRef('pk'), upkeep_retiring=True)
+    with transaction.atomic():
+        worlds = list(live_worlds(World.objects.filter(context__isnull=False, lifecycle='running')
+            .filter(Q(upkeep_next_poll_ts__isnull=True) | Q(upkeep_next_poll_ts__lte=now))
+            .annotate(has_due=Exists(due), has_retiring=Exists(retiring))
+            .filter(Q(has_due=True) | Q(has_retiring=True)), world_field='id')
+            .order_by(F('upkeep_next_poll_ts').asc(nulls_first=True), 'id')
+            .select_for_update(skip_locked=True)[:game_settings.ITEM_UPKEEP_WORLD_BATCH])
+        for world in worlds:
+            world.upkeep_next_poll_ts = now + timedelta(seconds=game_settings.ITEM_UPKEEP_INTERVAL_SECONDS)
+        World.objects.bulk_update(worlds, ['upkeep_next_poll_ts'])
+    for world in worlds:
+        try:
+            run_item_upkeep.apply_async(args=[world.pk], expires=game_settings.ITEM_UPKEEP_INTERVAL_SECONDS)
+        except Exception:
+            logger.exception('Could not enqueue item upkeep for runtime %s', world.pk)
+    return len(worlds)
+
+
+@shared_task(ignore_result=True)
+def run_item_upkeep(world_id):
+    from config import game_settings
+    from spawns.item_lifecycle import process_due_items
+    from spawns.instance_clock import live_worlds
+    from worlds.models import World
+    if not game_settings.ITEM_UPKEEP_ENABLED:
+        return
+    if not live_worlds(World.objects.filter(pk=world_id, lifecycle='running'), world_field='id').exists():
+        return
+    return process_due_items(world_id, budget=game_settings.ITEM_UPKEEP_ROW_BUDGET)

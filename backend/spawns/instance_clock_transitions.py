@@ -52,6 +52,9 @@ def _rebase_timers(run, delta):
     from worlds.models import World, ZoneDoorResetSchedule
 
     world = run.spawned_world_id
+    from spawns.models import Item
+    _shift(Item.objects.filter(world_id=world, upkeep_started_ts__isnull=False),
+           ['upkeep_due_ts', 'upkeep_started_ts', 'upkeep_empty_ts'], delta)
     _shift(ActiveEffect.objects.filter(world_id=world), ['next_tick_ts', 'last_tick_ts'], delta)
     _shift(ScheduledTriggerRun.objects.filter(runtime_world_id=world, status='active'),
            ['next_run_ts', 'started_ts'], delta)

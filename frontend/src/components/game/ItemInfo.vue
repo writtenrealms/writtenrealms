@@ -32,6 +32,7 @@
     <div class="description">
       <div class="description-line" v-for="(line, index) in lines" :key="index">{{ line }}</div>
     </div>
+    <div v-if="item.upkeep_notice" class="color-text-50 mt-2">{{ item.upkeep_notice }}</div>
 
     <template v-if="item.type === 'equippable' && itemStats.length">
       <div class="list-title stats" v-if="itemStats.length">Stats:</div>

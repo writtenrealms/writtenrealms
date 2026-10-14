@@ -347,6 +347,8 @@ def advance(*, run_id, player_id=None, expected_tick=None, expected_generation=N
                 elapsed = run.simulation_tick * SIMULATION_STEP_SECONDS
                 if int(elapsed // spawn_period) > int((elapsed - SIMULATION_STEP_SECONDS) // spawn_period):
                     run_spawn_plans_for_world(world=run.spawned_world)
+                from spawns.item_lifecycle import process_due_items
+                process_due_items(run.spawned_world_id, now=run.simulation_time)
                 from spawns.merchants import process_due_merchant_restocks
                 process_due_merchant_restocks(world_id=run.spawned_world_id, now=run.simulation_time)
                 _drain_reactions(state)

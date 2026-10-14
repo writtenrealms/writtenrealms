@@ -69,3 +69,9 @@ display an error without changing the world or subscribing to its updates.
 - [Quest Reference](quest-reference.md)
 - [WR1-Like Classed Demo World](wr1-like-demo-world-guide.md)
 - [WR1-Like Classless Demo World](wr1-like-classless-demo-world-guide.md)
+
+## World Upkeep
+
+Configure corpse decay, abandoned-item cleanup, and authored storage through
+[World Upkeep](world-upkeep.md). These policies run alongside spawn plans and
+independent zone door resets.

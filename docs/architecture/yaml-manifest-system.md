@@ -2970,3 +2970,18 @@ When adding YAML support for another entity (ItemDefinition, MobDefinition, Ques
    - apply updates expected entity
    - permission gate behavior
 8. Prefer additive evolution (`apiVersion` bumps, new optional fields) over breaking format changes.
+
+## World upkeep contract and optional WR1 conversion
+
+WR2 world manifests export typed `spec.upkeep` corpse/ground policies. Zones
+export `spec.ground_item_upkeep` with `inherit_world`, `fixed`, or `none`. Item
+spawn entries optionally export `upkeep: {contents: preserve}` for explicit
+placement storage; `cleanup` is the default. Runtime corpse owners, deadlines,
+root pointers, and retirement progress are never authored/exported.
+
+The optional WR1 authored-world exporter must omit `has_corpse_decay`; that
+inert field has been removed from WR2. Do not infer a duration from the old
+boolean or interpret an authored chest as permanent storage without an explicit
+builder policy. This changes authored-content conversion only: no WR1 users,
+inventories, live corpses, or runtime state are migrated. See the
+[upkeep contract](../guides/builders/world-upkeep.md).

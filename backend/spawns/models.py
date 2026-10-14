@@ -691,6 +691,7 @@ class Player(CharMixin, AdventBaseModel):
         eq_qs = Item.objects.filter(
             container_type=eq_ct,
             container_id=player_eq.id,
+            upkeep_retiring=False,
             is_pending_deletion=True)
         if item_id:
             eq_qs = eq_qs.filter(id=item_id)
@@ -701,12 +702,13 @@ class Player(CharMixin, AdventBaseModel):
                 item.save(update_fields=['is_pending_deletion'])
                 contents = item.inventory.all()
                 if contents:
-                    contents.update(is_pending_deletion=False)
+                    contents.filter(upkeep_retiring=False).update(is_pending_deletion=False)
 
         # Restore inventory
         inv_qs = Item.objects.filter(
             container_type=player_ct,
             container_id=player.id,
+            upkeep_retiring=False,
             is_pending_deletion=True,)
         if item_id:
             inv_qs = inv_qs.filter(id=item_id)
@@ -717,7 +719,7 @@ class Player(CharMixin, AdventBaseModel):
                 item.save(update_fields=['is_pending_deletion'])
                 contents = item.inventory.all()
                 if contents:
-                    contents.update(is_pending_deletion=False)
+                    contents.filter(upkeep_retiring=False).update(is_pending_deletion=False)
 
         print("Done.")
 
@@ -1770,12 +1772,17 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
             is_pickable=False,
             container=self)
 
+    @transaction.atomic
     def delete(self):
+        from spawns.item_lifecycle import arm_corpse, raw_writes
         try:
-            corpse = self.inventory.get(
+            corpse = self.inventory.select_for_update().get(
                 type=adv_consts.ITEM_TYPE_CORPSE)
             corpse.container = self.room
-            corpse.save()
+            # Finish death before arming retention. Moving this precreated
+            # corpse must not apply the interactive bag-transfer size limit.
+            with raw_writes():
+                corpse.save(update_fields=['container_type', 'container_id'])
 
             inventory_items = self.inventory.exclude(
                 pk=corpse.pk,
@@ -1791,6 +1798,8 @@ class Mob(CharMixin, MobMixin, AdventBaseModel):
             )
         except Item.DoesNotExist:
             pass
+        if 'corpse' in locals():
+            arm_corpse(corpse, kind='npc')
         return super().delete()
 
     @property
@@ -2068,6 +2077,20 @@ class Item(ItemMixin, AdventBaseModel):
     is_pending_deletion = models.BooleanField(default=False)
     pending_deletion_ts = models.DateTimeField(db_index=True, **optional)
 
+    # No deadline is assigned to preexisting rows without lifecycle provenance.
+    upkeep_kind = models.CharField(max_length=20, default='', blank=True)
+    upkeep_owner_id = models.BigIntegerField(null=True, blank=True)
+    upkeep_root = models.ForeignKey('self', null=True, blank=True,
+                                    on_delete=models.SET_NULL, related_name='upkeep_members')
+    upkeep_placed = models.BooleanField(default=False)
+    upkeep_storage = models.BooleanField(default=False)
+    upkeep_policy = models.JSONField(default=dict, blank=True)
+    upkeep_started_ts = models.DateTimeField(null=True, blank=True)
+    upkeep_empty_ts = models.DateTimeField(null=True, blank=True)
+    upkeep_due_ts = models.DateTimeField(null=True, blank=True)
+    upkeep_retiring = models.BooleanField(default=False)
+    upkeep_revision = models.PositiveBigIntegerField(default=0)
+
     label = models.TextField(**optional)
 
     augment = models.ForeignKey('spawns.Item',
@@ -2077,6 +2100,12 @@ class Item(ItemMixin, AdventBaseModel):
 
     class Meta:
         indexes = [
+            models.Index(fields=['world', 'upkeep_due_ts', 'id'],
+                         condition=models.Q(upkeep_due_ts__isnull=False, upkeep_retiring=False),
+                         name='item_upkeep_due'),
+            models.Index(fields=['world', 'id'], condition=models.Q(upkeep_retiring=True),
+                         name='item_upkeep_retiring'),
+
             models.Index(fields=['container_id']),
             models.Index(fields=['type']),
             models.Index(fields=['is_pending_deletion']),
@@ -2101,6 +2130,14 @@ class Item(ItemMixin, AdventBaseModel):
                 ),
                 name='spawns_item_money_pair'),
         ]
+
+    def save(self, *args, **kwargs):
+        from spawns.item_lifecycle import save_item, lifecycle_write
+        fields = kwargs.get('update_fields')
+        if not lifecycle_write.get() and (self._state.adding or fields is None or
+                {'container', 'container_type', 'container_type_id', 'container_id'} & set(fields)):
+            return save_item(self, args, kwargs)
+        return super().save(*args, **kwargs)
 
     def get_contained_ids(self):
         """

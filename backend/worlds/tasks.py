@@ -1,7 +1,7 @@
 import logging
 
 from django.db import transaction
-from django.db.models import Exists, F, OuterRef
+from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
@@ -353,7 +353,7 @@ def run_world_spawn_plans():
                 continue
 
             try:
-                run_spawn_plans_for_world(world=spawn_world)
+                run_spawn_plans_for_world(world=spawn_world, process_doors=False)
                 processed += 1
             except Exception:
                 logger.exception(
@@ -365,3 +365,45 @@ def run_world_spawn_plans():
         return {'processed': processed}
     finally:
         cache.delete(SPAWN_PLANS_TASK_LOCK_KEY)
+
+
+@shared_task(ignore_result=True)
+def run_world_door_upkeep():
+    """Fair, bounded wakeups, separate from population and item cleanup."""
+    from datetime import timedelta
+    from config import game_settings
+    if not game_settings.DOOR_UPKEEP_ENABLED:
+        return 0
+    now = timezone.now()
+    period = _spawn_plan_interval_seconds()
+    with transaction.atomic():
+        worlds = list(live_worlds(World.objects.filter(context__isnull=False,
+            lifecycle=constants.WORLD_LIFECYCLE_RUNNING, config__never_reload=False)
+            .filter(Q(door_upkeep_next_poll_ts__isnull=True) | Q(door_upkeep_next_poll_ts__lte=now)),
+            world_field='id').order_by(F('door_upkeep_next_poll_ts').asc(nulls_first=True), 'id')
+            .select_for_update(of=('self',), skip_locked=True)[:game_settings.DOOR_UPKEEP_WORLD_BATCH])
+        for world in worlds:
+            world.door_upkeep_next_poll_ts = now + timedelta(seconds=period)
+        World.objects.bulk_update(worlds, ['door_upkeep_next_poll_ts'])
+    for world in worlds:
+        try:
+            run_runtime_door_upkeep.apply_async(args=[world.pk], expires=period)
+        except Exception:
+            logger.exception('Could not enqueue door upkeep for runtime %s', world.pk)
+    return len(worlds)
+
+
+@shared_task(ignore_result=True)
+def run_runtime_door_upkeep(world_id):
+    from config import game_settings
+    from spawns.door_upkeep import process_due_door_resets
+    if not game_settings.DOOR_UPKEEP_ENABLED:
+        return
+    world = live_worlds(World.objects.filter(pk=world_id, context__isnull=False,
+        lifecycle=constants.WORLD_LIFECYCLE_RUNNING).select_related('config', 'context'), world_field='id').first()
+    if world:
+        try:
+            return process_due_door_resets(world=world, budget=game_settings.DOOR_UPKEEP_ZONE_BUDGET)
+        except Exception:
+            logger.exception('Door upkeep failed for runtime %s', world.pk)
+            raise

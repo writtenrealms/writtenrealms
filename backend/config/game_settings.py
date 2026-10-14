@@ -103,3 +103,12 @@ def ILF(level):
     if level >= 20:
         value *= 1.02
     return value
+
+# World upkeep is independent of population replacement and combat cadence.
+ITEM_UPKEEP_ENABLED = os.environ.get('WR_ITEM_UPKEEP_ENABLED', 'true').lower() == 'true'
+DOOR_UPKEEP_ENABLED = os.environ.get('WR_DOOR_UPKEEP_ENABLED', 'true').lower() == 'true'
+ITEM_UPKEEP_INTERVAL_SECONDS = 30
+ITEM_UPKEEP_WORLD_BATCH = 128
+ITEM_UPKEEP_ROW_BUDGET = 128
+DOOR_UPKEEP_WORLD_BATCH = 128
+DOOR_UPKEEP_ZONE_BUDGET = 100

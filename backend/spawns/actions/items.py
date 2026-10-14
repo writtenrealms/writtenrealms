@@ -412,8 +412,8 @@ class DropAction:
                         "Quest items stay with you until you turn them in.",
                         code="quest_item_bound",
                     )
-                item.container = room
-                item.save(update_fields=["container_type", "container_id"])
+            from spawns.item_lifecycle import move_items
+            items = move_items(items, room)
 
         updated_player = get_player_with_related(player_id)
         actor_payload = serialize_actor(updated_player, updated_player.room)
@@ -912,15 +912,8 @@ class GetAction:
             ]
 
             if moved_items:
-                player_content_type = ContentType.objects.get_for_model(Player)
-                for item in moved_items:
-                    item.container_type_id = player_content_type.id
-                    item.container_id = player.id
-                # Loot can contain many items, so keep the move to one write.
-                Item.objects.bulk_update(
-                    moved_items,
-                    ["container_type", "container_id"],
-                )
+                from spawns.item_lifecycle import move_items
+                moved_items = move_items(moved_items, player)
 
             claimed_items: list[Item] = []
             for quest_room_item in quest_room_items:
@@ -960,7 +953,9 @@ class GetAction:
         for item in moved_items:
             if item.id in item_source_ids:
                 source_item_keys[item_source_ids[item.id]].append(item.key)
-        used_sources = [source for source in source_containers if source_item_keys[source.id]]
+        used_sources = list(Item.objects.filter(pk__in=[
+            source.id for source in source_containers if source_item_keys[source.id]
+        ]).select_related('definition', 'currency').order_by('id'))
         source_groups = [
             {"source": payload.model_dump(), "item_keys": source_item_keys[source.id]}
             for source, payload in zip(used_sources, serialize_inventory(used_sources))
@@ -1081,28 +1076,12 @@ class PutAction:
                             "Quest items can only be carried or turned in.",
                             code="quest_item_bound",
                         )
-                if item.type == adv_consts.ITEM_TYPE_CONTAINER:
-                    contained_ids = item.get_contained_ids()
-                    if target_container.id in contained_ids:
-                        raise ActionError(
-                            "You cannot place a container inside itself.",
-                            code="invalid_target",
-                        )
 
             if not selected_items:
                 raise ActionError("Put what?", code="missing_item")
 
-            item_ids = [item.id for item in selected_items]
-            locked_items = {
-                item.id: item
-                for item in Item.objects.select_for_update()
-                .filter(pk__in=item_ids)
-            }
-            moved_items = [locked_items[item_id] for item_id in item_ids if item_id in locked_items]
-
-            for item in moved_items:
-                item.container = target_container
-                item.save(update_fields=["container_type", "container_id"])
+            from spawns.item_lifecycle import move_items
+            moved_items = move_items(selected_items, target_container)
 
         # Offline callers only need the mutation, not game event payloads.
         if not build_events:
@@ -1208,16 +1187,8 @@ class GiveAction:
             if not selected_items:
                 raise ActionError("Give what?", code="missing_item")
 
-            item_ids = [item.id for item in selected_items]
-            locked_items = {
-                item.id: item
-                for item in Item.objects.select_for_update().filter(pk__in=item_ids)
-            }
-            moved_items = [locked_items[item_id] for item_id in item_ids if item_id in locked_items]
-
-            for item in moved_items:
-                item.container = target_mob
-                item.save(update_fields=["container_type", "container_id"])
+            from spawns.item_lifecycle import move_items
+            moved_items = move_items(selected_items, target_mob)
 
         updated_player = get_player_with_related(player_id)
         refreshed_target_mob = Mob.objects.select_related("definition").get(pk=target_mob.id)

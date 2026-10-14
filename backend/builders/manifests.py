@@ -1,4 +1,5 @@
 from __future__ import annotations
+from worlds.upkeep_policy import authored_upkeep, normalize_upkeep
 
 from dataclasses import dataclass
 import copy
@@ -458,6 +459,7 @@ class ParsedWorldConfigManifest:
     update_death_routing_source: bool = False
     death_routing_source: str | None = None
     player_creation_patch: Any = None
+    upkeep_patch: Any = None
 
 
 @dataclass
@@ -1146,6 +1148,7 @@ def world_config_to_manifest(
         ),
         "pvp_mode": config.pvp_mode,
         "never_reload": bool(config.never_reload),
+        "upkeep": authored_upkeep(world),
         "cross_race_cooldown": int(config.cross_race_cooldown),
         "built_by": config.built_by or "",
         "small_background": config.small_background or "",
@@ -1278,6 +1281,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         "large_background": config.large_background or "",
         "pvp_mode": config.pvp_mode,
         "never_reload": bool(config.never_reload),
+        "upkeep": authored_upkeep(world),
         "cross_race_cooldown": int(config.cross_race_cooldown),
         "built_by": config.built_by or "",
     }
@@ -7629,6 +7633,7 @@ def parse_world_config_manifest(
     allowed_fields.add(_WORLD_CONFIG_STARTING_EQUIPMENT_FIELD)
     allowed_fields.add(_WORLD_CONFIG_DEATH_ROUTING_FIELD)
     allowed_fields.add(_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD)
+    allowed_fields.add("upkeep")
     allowed_fields.add("initial_state")
     allowed_fields.add("instance_goal")
     allowed_fields.add("leaderboards")
@@ -7775,6 +7780,12 @@ def parse_world_config_manifest(
             config_updates['instance_goal'] = normalize_instance_goal(spec['instance_goal'])
         except ValueError as exc:
             raise serializers.ValidationError(str(exc)) from exc
+
+    if 'upkeep' in spec:
+        config_updates['upkeep'] = normalize_upkeep(
+            spec['upkeep'], existing=config.upkeep or ({} if world.instance_of_id else None),
+            instance=bool(world.instance_of_id),
+        )
 
     for field_name in _WORLD_CONFIG_CONFIG_TEXT_FIELDS:
         if field_name in spec:
@@ -8038,6 +8049,7 @@ def parse_world_config_manifest(
         update_death_routing_source=update_death_routing_source,
         death_routing_source=death_routing_source,
         player_creation_patch=copy.deepcopy(spec.get(_WORLD_CONFIG_PLAYER_CREATION_FIELD)),
+        upkeep_patch=copy.deepcopy(spec.get('upkeep')),
     )
 
 
@@ -8056,6 +8068,11 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
             shared=False,
         )
         config = WorldConfig.objects.select_for_update().get(pk=config.pk)
+        if 'upkeep' in parsed.config_updates:
+            parsed.config_updates['upkeep'] = normalize_upkeep(
+                parsed.upkeep_patch, existing=config.upkeep or ({} if world.instance_of_id else None),
+                instance=bool(world.instance_of_id),
+            )
         if 'player_creation' in parsed.config_updates:
             parsed.config_updates['player_creation'] = normalize_player_creation_config(
                 parsed.player_creation_patch, world=world, existing=config.player_creation,

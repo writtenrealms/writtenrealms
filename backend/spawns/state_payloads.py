@@ -371,9 +371,11 @@ def serialize_item(
     include_inventory: bool = False,
     salvageable_definition_ids: set[int] | None = None,
     action_labels: list[str] | None = None,
+    upkeep_now=None,
 ) -> ItemSchema:
     """Serialize an item into the WR2 Item schema."""
     from spawns.triggers import get_item_action_labels_for_actor
+    from spawns.item_lifecycle import upkeep_notice
 
     name = resolve_item_name(item)
     description = item.description
@@ -434,6 +436,7 @@ def serialize_item(
         type=item_type,
         armor_class=item.armor_class,
         description=description,
+        upkeep_notice=upkeep_notice(item, now=upkeep_now),
         room_description=(
             item.room_description
             or (item.definition.room_description if item.definition else None)
@@ -494,6 +497,9 @@ def serialize_inventory(
     from spawns.triggers import get_items_action_labels_for_actor
 
     item_list = list(items)
+    from spawns.instance_clock import gameplay_now
+    upkeep_now = (gameplay_now(viewer.world if viewer else item_list[0].world_id)
+                  if any(item.upkeep_due_ts for item in item_list) else None)
     action_labels = get_items_action_labels_for_actor(viewer, item_list)
     salvageable_definition_ids: set[int] = set()
     unresolved_definition_ids: set[int] = set()
@@ -524,6 +530,7 @@ def serialize_inventory(
             include_inventory=include_inventory,
             salvageable_definition_ids=salvageable_definition_ids,
             action_labels=action_labels.get(item.id, []),
+            upkeep_now=upkeep_now,
         )
         for item in item_list
     ]
@@ -1212,7 +1219,6 @@ def serialize_world(world: World) -> Dict:
                 if config and config.death_currency_id else None),
             "death_currency_penalty": (
                 float(config.death_currency_penalty) if config else 0.0),
-            "has_corpse_decay": config.has_corpse_decay if config else True,
             "auto_equip": config.auto_equip if config else True,
             "globals_enabled": config.globals_enabled if config else False,
             "factions": {},

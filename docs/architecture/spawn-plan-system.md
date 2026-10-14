@@ -8,6 +8,12 @@ scripts should translate those rows directly into `kind: spawnplan` manifests.
 WR2 should not reintroduce loader/rule import paths, API endpoints, runtime
 foreign keys, or builder screens.
 
+[World upkeep](../guides/builders/world-upkeep.md) supplies configurable corpse
+and ground-item retention. Item cleanup, population reconciliation, and door
+resets have separate periodic jobs and budgets. Initial population and explicit
+repopulation still use their existing coordinated lifecycle flows. The
+[implementation plan](world-upkeep-plan.md) records the design decisions.
+
 ## Core Model
 
 A spawn plan is authored content. It describes how a world, zone, room, or path
@@ -123,10 +129,15 @@ and rewritten by canonical export as `room@<relative_id>`.
 - Runtime rows do not keep source template foreign keys.
 - Runtime rows should point back to spawn-plan placements when provenance is
   needed.
-- Reconciliation should create missing runtime entities and avoid duplicating
-  existing live placements.
+- Mob reconciliation counts surviving placements throughout the runtime.
+  Item reconciliation fills the deficit per run, entry, and concrete target.
+  Only direct contents at that target count; carried/equipped items, arbitrary
+  nested bags, other rooms, and retiring items do not. Returned surplus can
+  satisfy other slots without rewriting its origin or restoring cleanup
+  protection. Item bundle outputs share a runtime stock-unit identity so a
+  partially looted roll remains one unit rather than triggering a full refill.
 - Running-world plan edits should upsert deterministic slots by stable entry and
-  slot identity. Existing output satisfies an edited slot until it leaves, so
+  slot identity. Existing mobs satisfy an edited slot until they leave, so
   changing a mob slot to an item slot cannot create both at once.
 - Retired placements are excluded from materialization. Their existing output
   is not forcibly destroyed, which avoids interrupting combat or deleting

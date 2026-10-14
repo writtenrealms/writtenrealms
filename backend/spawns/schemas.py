@@ -42,6 +42,7 @@ class Item(BaseModel):
     type: Optional[str] = None  # "equippable", "container", "food", etc.
     armor_class: Optional[str] = None  # "light", "heavy"
     description: Optional[str] = None
+    upkeep_notice: Optional[str] = None
     room_description: Optional[str] = None
     level: int = 1
     quality: str = "normal"  # "normal", "imbued", "enchanted", "epic", "legendary"
@@ -514,7 +515,6 @@ class World(BaseModel):
 
     # Config flags
     never_reload: bool = False
-    has_corpse_decay: bool = True
     auto_equip: bool = True
     globals_enabled: bool = False
     classless: bool = False
@@ -1207,7 +1207,6 @@ def build_mock_state_sync(
         tier=1,
         leader=None,
         never_reload=False,
-        has_corpse_decay=True,
         auto_equip=True,
         globals_enabled=True,
         classless=False,

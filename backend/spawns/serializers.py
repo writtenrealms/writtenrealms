@@ -370,8 +370,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
 
     # Config
     never_reload = serializers.BooleanField(source='config.never_reload')
-    has_corpse_decay = serializers.BooleanField(
-        source='config.has_corpse_decay')
     auto_equip = serializers.BooleanField(source='config.auto_equip')
 
     starting_room = KeyField(source='config.starting_room')
@@ -424,7 +422,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'combat_resolution_interval',
             'death_currency',
             'death_currency_penalty',
-            'has_corpse_decay',
             'auto_equip',
             'globals_enabled',
             'factions',

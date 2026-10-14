@@ -1328,3 +1328,10 @@ own place inside that game.
 
 Use inherited definitions for what things are. Use the instance template for
 where those things are, how they load, and what a run is trying to accomplish.
+
+## Corpse decay and item retention
+
+See [World Upkeep](world-upkeep.md) for `spec.upkeep`, zone
+`ground_item_upkeep`, and spawn-entry `upkeep.contents` storage protection.
+Item cleanup runs independently of spawn plans and door resets. Running
+instances snapshot upkeep policy and respect gameplay pause/advance/resume.

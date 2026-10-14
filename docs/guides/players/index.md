@@ -70,6 +70,7 @@ reference, other chat channels, and private messages.
 - [Map](map.md)
 - [Following](following.md)
 - [Doors and Keys](doors-and-keys.md)
+- [Items, Corpses, and Storage](items-and-storage.md)
 - [Combat](combat.md)
 - [Abilities and Training](abilities.md)
 - [Duels](duels.md)

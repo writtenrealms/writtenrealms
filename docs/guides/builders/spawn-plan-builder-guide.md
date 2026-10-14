@@ -471,6 +471,32 @@ The generated run stores the chosen count and placements. Ordinary
 reconciliation fills missing copies for those placements; it does not reroll the
 whole plan every tick.
 
+### Items available at the destination
+
+Item entries count their surviving output **at the configured destination**,
+within the current runtime world. A room entry counts items directly on that
+room's floor. A container entry counts items directly in the selected container.
+Items in player inventories, equipment, arbitrary bags, or other rooms do not
+block replacement. Unrelated items from another entry or a manual load do not
+satisfy this entry, even when they use the same definition.
+
+Picking up an item allows a replacement on the next eligible spawn pass.
+Dropping it back before that pass prevents replacement. If a replacement
+already appeared, returning the original leaves both copies; subsequent passes
+spawn nothing until the local stock falls below the configured count. Returned
+copies from one historical slot can satisfy other slots of the same entry at
+that destination. Existing surplus is not deleted or moved.
+
+Spawn provenance is retained, but returning an item does not restore its
+cleanup protection or restart its ground timer. Carried chests neither block
+replacement nor receive new spawn-plan contents. Nested contents use eligible
+parents at their intended destinations, including returned parent copies.
+
+A bundle roll remains one stock unit while any of its output remains at the
+destination. Taking only part of a bundle does not generate another full bundle;
+different rolls count separately. Mob entries retain their existing population
+rules, including roaming mobs continuing to occupy their spawn slots.
+
 ## Respawn
 
 `spec.respawn` controls how often missing placements are refilled.
@@ -554,7 +580,7 @@ work per world.
 Live edits are rolling and non-destructive:
 
 - Adding an entry or increasing its count creates the new logical slots on the
-  next pass. New slots are populated once even when the plan uses
+  next pass. Missing local item stock or mob slots are populated once even when the plan uses
   `respawn.mode: none` or its ordinary respawn deadline has not arrived.
   Existing randomized slots retain their source, room, and traits when only the
   count changes.
@@ -562,7 +588,8 @@ Live edits are rolling and non-destructive:
   a source, target, traits, initial state, loot, or currency rewards does not
   kill or move a mob in combat and does not delete an item a player may be
   carrying. The new settings take effect when that slot next needs to be
-  materialized.
+  materialized. Carried items do not block that materialization; item stock
+  already at the configured destination does.
 - Cohort membership metadata is refreshed during reconciliation so newly added
   followers can join a surviving patrol without duplicating its leader.
 - Removing or disabling an entry, or decreasing its count, retires the excess
@@ -696,3 +723,10 @@ Transition-only fields such as `metadata.legacy`, `spec.legacy`,
 `source_legacy_ref`, or target display names are ignored by the runtime. They
 can stay in local migration YAML for auditability, but spawn-plan ingestion
 does not depend on the old ids.
+
+## Corpse decay and item retention
+
+See [World Upkeep](world-upkeep.md) for `spec.upkeep`, zone
+`ground_item_upkeep`, and spawn-entry `upkeep.contents` storage protection.
+Item cleanup runs independently of spawn plans and door resets. Running
+instances snapshot upkeep policy and respect gameplay pause/advance/resume.

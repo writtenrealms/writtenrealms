@@ -870,7 +870,12 @@ def move_player_carried_items_to_world(player, world):
 
     item_ids = player_carried_item_ids(player)
     if item_ids:
-        Item.objects.filter(id__in=item_ids).update(world=world)
+        # These are owned items; no abandoned episode follows a character
+        # across runtimes. Corpse rows stay in the source runtime.
+        Item.objects.filter(id__in=item_ids).update(
+            world=world, upkeep_due_ts=None, upkeep_started_ts=None, upkeep_policy={},
+            upkeep_kind='', upkeep_placed=False, upkeep_storage=False,
+        )
     return item_ids
 
 

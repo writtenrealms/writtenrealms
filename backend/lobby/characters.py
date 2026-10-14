@@ -188,8 +188,12 @@ class CharacterItems(CharacterView):
 
         # Entering the game and item actions lock this same row. Keep the
         # offline and ownership checks valid until the item change commits.
-        with transaction.atomic():
+        from spawns.instance_clock import clock_guard
+        preflight, _ = self.get_player(pk, owner_only=True)
+        with clock_guard(preflight.world), transaction.atomic():
             player, _ = self.get_player(pk, owner_only=True, lock=True)
+            if player.world_id != preflight.world_id:
+                raise ValidationError({'detail': 'This character moved worlds. Please try again.'})
             if player.in_game:
                 raise ValidationError({'detail': f'{player.name} is in the game. Manage items there.'})
             item = self._owned_item(player, request.data.get('item'))

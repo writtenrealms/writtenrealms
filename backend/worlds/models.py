@@ -56,6 +56,11 @@ ZONE_POLICY_MAX_SECONDS = 2_147_483_647
 
 class World(AdventBaseModel):
 
+    upkeep_snapshot = models.JSONField(default=dict, blank=True)
+    upkeep_zone_snapshot = models.JSONField(default=dict, blank=True)
+    upkeep_next_poll_ts = models.DateTimeField(null=True, blank=True, db_index=True)
+    door_upkeep_next_poll_ts = models.DateTimeField(null=True, blank=True, db_index=True)
+
     objects = WorldManager()
 
     name = models.TextField()
@@ -783,7 +788,12 @@ class World(AdventBaseModel):
         if not effective_config:
             raise ValueError("Cannot create a spawn world without a world config.")
 
+        from worlds.upkeep_policy import effective_upkeep
+
         spawn_world = World.objects.create(
+            upkeep_snapshot=effective_upkeep(self) if self.instance_of_id else {},
+            upkeep_zone_snapshot={str(zone.pk): zone.ground_item_upkeep for zone in self.zones.all()}
+                if self.instance_of_id else {},
             name=self.name,
             config=effective_config,
             description=self.description,
@@ -1346,7 +1356,7 @@ class WorldConfig(BaseModel):
     # Operational flags, compatibility fields, and world-level gameplay rules
 
     can_create_chars = models.BooleanField(default=True)
-    has_corpse_decay = models.BooleanField(default=True)
+    upkeep = models.JSONField(default=dict, blank=True)
     never_reload = models.BooleanField(default=False)
     autoflee = models.IntegerField(default=0)
     flee_to_unknown_rooms = models.BooleanField(default=True)
@@ -1657,6 +1667,8 @@ class Zone(AdventWorldBaseModel):
     default_roam_chance = models.PositiveIntegerField(
         validators=[MaxValueValidator(100)],
         **optional)
+
+    ground_item_upkeep = models.JSONField(default=dict, blank=True)
 
     zone_data = models.TextField(default="{}", blank=True)
     # Authored defaults copied into per-runtime ZoneState rows.

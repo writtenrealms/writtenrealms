@@ -61,7 +61,8 @@ typed references are resolved within the imported family.
 | `allow_combat` | Derived from `is_narrative`; not independently exported. |
 | `is_classless` | Derived from `stats.class_profiles`; accepted as a legacy import field but not exported independently. |
 | `can_create_chars` | Destination admission control. Not accepted or exported by world manifests. |
-| `autoflee`, `has_corpse_decay` | Retained compatibility values without active gameplay consumers in this checkout. Not accepted or exported. |
+| `autoflee` | Retained compatibility value without an active gameplay consumer. Not accepted or exported. |
+| `has_corpse_decay` | Removed; `spec.upkeep` is the portable authority. |
 | `death_routing_generation`, `death_routing_source_generation` | Local cache/routing version identities. Rebuilt by the destination; never imported. |
 
 Model identity and timestamps (`id`, `created_ts`, `modified_ts`) are local
@@ -73,10 +74,9 @@ destination implementation details.
 It is an operational closure switch, like world maintenance, rather than a
 character's authored starting policy. Import deliberately leaves the
 destination value unchanged. The current `autoflee` references are legacy
-payload serialization; `has_corpse_decay` is likewise serialized but has no
-current corpse-processing consumer. Preserving these bytes would imply
-gameplay guarantees the current implementation does not provide. If either
-rule is revived, define its runtime ownership and manifest contract together.
+payload serialization. The old `has_corpse_decay` field has been removed.
+`spec.upkeep` now supplies the validated corpse and abandoned-item policy,
+including instance overrides and runtime policy snapshots.
 
 ## Surrounding World Metadata
 

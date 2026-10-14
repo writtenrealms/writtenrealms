@@ -13,10 +13,8 @@ from rest_framework import serializers
 from builders import world_export as builder_world_export
 from builders.models import ItemDefinition, MobDefinition, Path, PathRoom, SpawnEntry, SpawnPlan, SpawnPlacement, SpawnPlanRun
 from config import constants as adv_consts
-from spawns.loading import (
-    _initialize_door_reset_schedules,
-    run_spawn_plans_for_world,
-)
+from spawns.loading import run_spawn_plans_for_world
+from spawns.door_upkeep import _initialize_door_reset_schedules
 from spawns.models import DoorState, Item, Mob
 from spawns.spawn_plans import (
     SpawnReconcileContext,
@@ -1825,7 +1823,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             return real_now()
 
         with mock.patch(
-            "spawns.loading.timezone.now",
+            "spawns.door_upkeep.timezone.now",
             side_effect=change_policy_before_lock,
         ):
             output = run_spawn_plans_for_world(world=spawn_world)
@@ -2065,7 +2063,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
 
         with (
             mock.patch(
-                "spawns.loading.DOOR_RESET_SCHEDULE_BATCH_SIZE",
+                "spawns.door_upkeep.DOOR_RESET_SCHEDULE_BATCH_SIZE",
                 4,
             ),
             mock.patch(
@@ -2125,11 +2123,11 @@ class TestSpawnPlanRuntime(WorldTestCase):
 
         with (
             mock.patch(
-                "spawns.loading.DOOR_RESET_SCHEDULE_BATCH_SIZE",
+                "spawns.door_upkeep.DOOR_RESET_SCHEDULE_BATCH_SIZE",
                 1,
             ),
             mock.patch(
-                "spawns.loading.timezone.now",
+                "spawns.door_upkeep.timezone.now",
                 side_effect=advancing_now,
             ),
         ):
@@ -2159,7 +2157,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
 
         with (
             mock.patch(
-                "spawns.loading.DOOR_RESET_SCHEDULE_BATCH_SIZE",
+                "spawns.door_upkeep.DOOR_RESET_SCHEDULE_BATCH_SIZE",
                 4,
             ),
             mock.patch(

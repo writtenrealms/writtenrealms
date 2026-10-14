@@ -621,3 +621,15 @@ class TestInstanceTimeControl(WorldTestCase):
             previous_count = count
         print('Combat-pause turn profile (offscreen mobs, queries, milliseconds):', samples)
         self.assertLessEqual(samples[-1][1], samples[0][1] + 8)
+
+    def test_item_expiration_during_advance_and_rollback(self):
+        from spawns.models import Item
+        self._fight()
+        item = Item.objects.create(world=self.run.spawned_world, container=self.entry, name='a stone')
+        Item.objects.filter(pk=item.pk).update(upkeep_due_ts=self.run.simulation_time+timedelta(seconds=1))
+        with patch('spawns.instance_time._reconcile_rooms', side_effect=RuntimeError('turn failed')):
+            with self.assertRaisesRegex(RuntimeError, 'turn failed'):
+                self._advance()
+        self.assertTrue(Item.objects.filter(pk=item.pk, upkeep_retiring=False).exists())
+        self._advance()
+        self.assertFalse(Item.objects.filter(pk=item.pk).exists())

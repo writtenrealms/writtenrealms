@@ -68,7 +68,7 @@ class WorldSettingsPortabilityTests(APITestCase):
             )
         target = self._target()
         # Import must not overwrite destination admission or retained compatibility flags.
-        excluded = {'can_create_chars': False, 'autoflee': 44, 'has_corpse_decay': False}
+        excluded = {'can_create_chars': False, 'autoflee': 44}
         self._set_config(target, **excluded)
         for never_reload, flee_to_unknown_rooms, cooldown in ((True, False, 7), (False, True, 0)):
             values = {

@@ -249,6 +249,7 @@ class APIExtractor:
         # pending deletion.
         Item.objects.filter(
             pk__in=extracted_item_ids,
+            upkeep_retiring=False,
             is_pending_deletion=True,
         ).update(is_pending_deletion=False)
 
@@ -269,7 +270,7 @@ class APIExtractor:
             # Get the existing data for all the extracted items
             extracted_items = Item.objects\
                                 .select_for_update()\
-                                .filter(pk__in=extracted_item_ids)
+                                .filter(pk__in=extracted_item_ids, upkeep_retiring=False)
 
             # Create an index of the extracted items, with the id as they key
             extracted_items_map = {
