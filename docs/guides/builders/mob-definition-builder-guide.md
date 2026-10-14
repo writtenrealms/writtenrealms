@@ -66,6 +66,19 @@ stands at attention.` See the [`/set` command reference](builder-command-referen
 The override does not edit this definition; fresh spawns retain the authored
 text, and a later definition resync can replace the runtime value.
 
+## Gender
+
+When a mob definition has no `gender` override, spawned copies use the base
+world's `default_gender`, which defaults to `male`. This also applies when the
+mob appears inside an instance. Set `spec.gender` to `male`, `female`, or
+`non_binary` to override that default for a particular mob.
+
+Omitting `gender` from a partial edit preserves an existing override. Set
+`gender: null` to remove it and return to the world's default. Definition edits
+apply the resolved gender to existing spawned copies as well as future spawns.
+Changing only the world default takes effect when mobs next spawn or their
+definitions are synchronized.
+
 ## Talking
 
 Set `spec.talkable: false` for mobs that cannot be spoken to, such as practice

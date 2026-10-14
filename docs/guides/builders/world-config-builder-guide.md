@@ -266,7 +266,7 @@ merged with the base world's runtime state.
 | `player_creation` | mapping | `{}` | Player creation policy, including core faction choices and initial instance routes. |
 | `ability_progression` | mapping | `max_known: 8` | Known ability cap and starting abilities. |
 | `can_select_gender` | boolean | `true` | If false, new characters use `default_gender`. |
-| `default_gender` | choice | `male` | `male`, `female`, or `non_binary`. |
+| `default_gender` | choice | `male` | `male`, `female`, or `non_binary`. Also used by mobs without an explicit `gender` override, including in instances. |
 | `non_ascii_names` | boolean | `false` | Allows non-ASCII character names. |
 | `name_exclusions` | text | empty | Names or tokens to block during character creation. |
 

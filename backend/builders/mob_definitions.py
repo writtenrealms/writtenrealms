@@ -22,6 +22,7 @@ from core.mob_traits import (
 )
 from core.stat_system import DIRECT_STAT_KEYS, compute_attribute_formula_stats
 from core.model_mixins import CharMixin, MobMixin
+from core.world_config import inherited_system_config
 from config import constants as adv_consts
 
 
@@ -113,7 +114,12 @@ def _mob_fields_from_definition(definition, attributes: dict[str, float]) -> dic
     fields["keywords"] = definition.keywords or None
     fields["type"] = definition.mob_type or fields.get("type")
 
-    for key, value in (definition.base_properties or {}).items():
+    base_properties = definition.base_properties or {}
+    if "gender" not in base_properties:
+        config = inherited_system_config(definition.world)
+        fields["gender"] = config.default_gender if config else adv_consts.GENDER_MALE
+
+    for key, value in base_properties.items():
         if key not in MOB_BASE_FIELD_NAMES | MOB_DEFINITION_RUNTIME_FIELD_NAMES or key in {
             "attributes",
             "name",

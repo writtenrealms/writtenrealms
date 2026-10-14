@@ -3,6 +3,8 @@ import yaml
 
 from rest_framework.reverse import reverse
 
+from builders.instance_templates import create_instance_template
+from builders.mob_definitions import _mob_fields_from_definition
 from builders.models import (
     AbilityDefinition,
     FACTION_TYPE_CORE,
@@ -24,6 +26,60 @@ class TestMobDefinitions(WorldTestCase):
         super().setUp()
         self.client.force_authenticate(self.user)
         apply_basic_stat_system(self.world)
+
+    def test_spawn_inherits_world_gender_when_omitted(self):
+        definition = MobDefinition.objects.create(world=self.world, slug="watchman")
+        for gender in adv_consts.GENDERS:
+            with self.subTest(gender=gender):
+                self.world.config.default_gender = gender
+                self.world.config.save(update_fields=["default_gender"])
+                mob = definition.spawn(self.room, self.spawn_world)
+                mob.refresh_from_db()
+                self.assertEqual(mob.gender, gender)
+                self.assertNotIn("gender", definition.base_properties)
+
+    def test_spawn_preserves_explicit_gender_overrides(self):
+        for index, gender in enumerate((*adv_consts.GENDERS, "")):
+            with self.subTest(gender=gender):
+                definition = MobDefinition.objects.create(
+                    world=self.world,
+                    slug=f"guard-{index}",
+                    base_properties={"gender": gender},
+                )
+                mob = definition.spawn(self.room, self.spawn_world)
+                mob.refresh_from_db()
+                self.assertEqual(mob.gender, gender)
+                definition.name = "an experienced guard"
+                definition.save(update_fields=["name"])
+                mob.refresh_from_db()
+                self.assertEqual(mob.gender, gender)
+
+    def test_instance_mobs_inherit_base_world_gender(self):
+        self.world.is_multiplayer = True
+        self.world.save(update_fields=["is_multiplayer"])
+        template = create_instance_template(
+            base_world=self.world, author=self.user, name="Orientation",
+        )
+        # The instance's copied config must not freeze the base world's default.
+        self.world.config.default_gender = adv_consts.GENDER_NON_BINARY
+        self.world.config.save(update_fields=["default_gender"])
+        self.assertEqual(template.config.default_gender, adv_consts.GENDER_MALE)
+        instance = template.create_spawn_world()
+        definition = MobDefinition.objects.create(world=self.world, slug="watchman")
+
+        mob = definition.spawn(template.config.starting_room, instance)
+        mob.refresh_from_db()
+        self.assertEqual(mob.gender, adv_consts.GENDER_NON_BINARY)
+
+    def test_gender_resolution_reuses_loaded_world_config(self):
+        definition = MobDefinition.objects.create(world=self.world, slug="watchman")
+        definition = MobDefinition.objects.select_related("world__config").get(
+            pk=definition.pk,
+        )
+        with self.assertNumQueries(0):
+            for _ in range(20):
+                fields = _mob_fields_from_definition(definition, {})
+                self.assertEqual(fields["gender"], adv_consts.GENDER_MALE)
 
     def test_spawn_rolls_declared_attributes_and_ignores_stale_keys(self):
         definition = MobDefinition.objects.create(
@@ -142,6 +198,42 @@ class TestMobDefinitionManifests(WorldTestCase):
         apply_basic_stat_system(self.world)
         self.apply_ep = reverse("builder-world-manifest-apply", args=[self.world.pk])
         self.export_ep = reverse("builder-world-export", args=[self.world.pk])
+
+    def test_gender_override_round_trips_and_null_restores_world_default(self):
+        manifest = {
+            "kind": "mobdefinition",
+            "metadata": {"slug": "watchman"},
+            "spec": {"type": "humanoid"},
+        }
+        response = self.client.post(
+            self.apply_ep, {"manifest": yaml.safe_dump(manifest)}, format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        definition = MobDefinition.objects.get(pk=response.data["mob_definition"]["id"])
+        mob = definition.spawn(self.room, self.spawn_world)
+        self.assertEqual(mob.gender, adv_consts.GENDER_MALE)
+
+        for spec, expected in (
+            ({"gender": "female"}, "female"),
+            ({"notes": "Keep the explicit gender"}, "female"),
+            ({"gender": None}, "male"),
+        ):
+            with self.subTest(spec=spec):
+                manifest["spec"] = spec
+                response = self.client.post(
+                    self.apply_ep, {"manifest": yaml.safe_dump(manifest)}, format="json",
+                )
+                self.assertEqual(response.status_code, 200, response.data)
+                definition.refresh_from_db()
+                mob.refresh_from_db()
+                self.assertEqual(mob.gender, expected)
+                self.assertEqual(definition.spawn(self.room, self.spawn_world).gender, expected)
+                exported = yaml.safe_load(response.data["mob_definition"]["yaml"])["spec"]
+                if expected == "female":
+                    self.assertEqual(exported["gender"], "female")
+                else:
+                    self.assertNotIn("gender", definition.base_properties)
+                    self.assertNotIn("gender", exported)
 
     def test_talkable_round_trips_and_syncs_spawned_mobs(self):
         from builders.serializers import MobDefinitionSerializer
