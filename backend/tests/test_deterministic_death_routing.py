@@ -1013,6 +1013,11 @@ class TestDeterministicDeathRoutingRuntime(WorldTestCase):
             [event.type for event in first_events],
         )
         self.assertEqual(retry_events, [])
+        from system.models import SupportEvent
+        support_event = SupportEvent.objects.get(kind='player.died', player_id=self.player.pk)
+        self.assertEqual(support_event.world_id, self.spawn_world.pk)
+        self.assertEqual(support_event.details['destination_room_id'], destination.pk)
+        self.assertEqual(support_event.details['death_sequence'], original_death_sequence + 1)
         self.assertEqual(
             (
                 retry_player.health,

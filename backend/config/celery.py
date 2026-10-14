@@ -36,6 +36,11 @@ def _spawn_plan_interval_seconds() -> float:
 
 
 app.conf.beat_schedule = {
+    'prune-support-events': {
+        'task': 'system.tasks.prune_support_events',
+        'schedule': crontab(minute='40'),
+        'options': {'expires': 3300},
+    },
     'dispatch-item-upkeep': {
         'task': 'spawns.tasks.dispatch_item_upkeep',
         'schedule': 5.0,

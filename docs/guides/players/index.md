@@ -49,6 +49,11 @@ stats remain private, and invisible characters stay hidden from non-staff.
 
 ## First Steps: Ask for Help
 
+When reporting a problem to the team, include your character name, world,
+approximate time and timezone, what you expected, and what happened. Reports
+made promptly are easier to investigate: key gameplay history is retained for
+30 days. Include the exact error message or a screenshot when available.
+
 Unsure where to go or how something works? Type `ask` followed by your question
 in the command input, then press Enter:
 

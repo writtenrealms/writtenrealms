@@ -150,6 +150,7 @@ For engineering setup, architecture, and troubleshooting, see:
 - [WR2 Trigger YAML Manifest System](docs/architecture/yaml-manifest-system.md)
 - [Ambient Command Issuers Plan](docs/ambient-command-issuers-plan.md)
 - [World Upkeep Operations](docs/dev/world-upkeep.md)
+- [Support Event History](docs/dev/support-events.md)
 - [World Upkeep Implementation Plan](docs/architecture/world-upkeep-plan.md)
 - [Architecture Notes](docs/architecture/)
 

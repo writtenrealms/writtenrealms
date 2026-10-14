@@ -472,7 +472,7 @@ class World(AdventBaseModel):
         #     speed=time.time() - start)
         pass
 
-    def cleanup(self, spw=False):
+    def cleanup(self, spw=False, *, reason='world_cleanup'):
         """
         Rid a world of all of its mobs, and all of its items on the ground.
         This is meant to be done before an initial spawn-plan run in a multiplayer
@@ -489,6 +489,9 @@ class World(AdventBaseModel):
                 % self.lifecycle)
 
         lifecycle_logger.info("Starting full Cleanup for %s (%s)" % (self.name, self.id))
+        if self.context.instance_of_id:
+            from system.support_events import record_support_event
+            record_support_event('instance.cleanup', world=self, reason=reason)
 
         # We don't invoke self.start_cleanup because this cleanup happens as
         # we're shutting down and the deletions are transactional, so even
@@ -537,6 +540,7 @@ class World(AdventBaseModel):
                 self.leave_instance(
                     player=player,
                     force_active_duel=True,
+                    reason=reason,
                 )
 
         # Every successful world-stop path converges here. Clear both outgoing
@@ -864,11 +868,12 @@ class World(AdventBaseModel):
         return run.spawned_world
 
     @classmethod
-    def leave_instance(cls, player, force_active_duel=False):
+    def leave_instance(cls, player, force_active_duel=False, *, reason='left'):
         from worlds.instances import leave_instance
         return leave_instance(
             player=player,
             force_active_duel=force_active_duel,
+            reason=reason,
         )
 
     def exit_instance(self, player):

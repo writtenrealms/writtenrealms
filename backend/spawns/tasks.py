@@ -1544,7 +1544,8 @@ def exit_world(player_id, world_id,
                transfer_from=None,
                ref=None,
                leave_instance=False,
-               member_ids=None):
+               member_ids=None,
+               reason='connection_closed'):
     """
     Unlike the enter_world task, there is no client id being passed in.
     This is because we can't rely on it. Users may use the 'quit' command
@@ -1567,7 +1568,8 @@ def exit_world(player_id, world_id,
                     transfer_from=transfer_from,
                     ref=ref,
                     leave_instance=leave_instance,
-                    member_ids=member_ids)
+                    member_ids=member_ids,
+                    reason=reason)
     _notify_world_lifecycle(player, world, "leave")
 
     # Notify frontend
@@ -1588,6 +1590,7 @@ def exit_current_world(player_id, user_id=None):
     exit_world(
         player_id=player.id,
         world_id=player.world_id,
+        reason='logout_requested',
     )
     return {"exited": True, "world_id": player.world_id}
 

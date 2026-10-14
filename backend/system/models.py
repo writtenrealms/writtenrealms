@@ -99,6 +99,33 @@ class StaffAuditEvent(models.Model):
         ordering = ['-id']
 
 
+class SupportEvent(models.Model):
+    """Small historical snapshots, retained independently of runtime objects."""
+
+    created_ts = models.DateTimeField(default=timezone.now, db_index=True)
+    kind = models.CharField(max_length=48)
+    reason = models.CharField(max_length=64, blank=True)
+    # Deliberately not foreign keys: instance/character deletion must not erase
+    # the evidence or add locks to the gameplay objects being diagnosed.
+    player_id = models.PositiveBigIntegerField(null=True)
+    user_id = models.PositiveBigIntegerField(null=True)
+    player_name = models.CharField(max_length=100, blank=True)
+    world_id = models.PositiveBigIntegerField(null=True)
+    world_name = models.CharField(max_length=100, blank=True)
+    base_world_id = models.PositiveBigIntegerField(null=True)
+    template_world_id = models.PositiveBigIntegerField(null=True)
+    run_id = models.PositiveBigIntegerField(null=True)
+    room_id = models.PositiveBigIntegerField(null=True)
+    details = models.JSONField(default=dict)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['player_id', 'created_ts'], name='support_player_time'),
+            models.Index(fields=['base_world_id', 'created_ts'], name='support_world_time'),
+            models.Index(fields=['run_id', 'created_ts'], name='support_run_time'),
+        ]
+
+
 class Nexus(BaseModel):
     "Maps to a Kubernetes pod / service / ingress package."
 

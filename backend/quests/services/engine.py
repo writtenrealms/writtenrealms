@@ -636,6 +636,9 @@ def enter_step(
             quest_instance.resolution = str(step.get("resolution") or "complete")
             quest_instance.resolved_at = timezone.now()
             quest_instance.save(update_fields=["status", "resolution", "resolved_at", "modified_ts"])
+            from system.support_events import record_quest_event
+            record_quest_event('quest.resolved', player=player, quest=quest_instance,
+                               reason=quest_instance.resolution)
 
             offer_state, _ = QuestOfferState.objects.get_or_create(
                 **offer_lookup(player, quest_instance.template),
@@ -754,6 +757,8 @@ def start_quest_instance(
         offer_state.is_visible = False
         offer_state.last_accepted_at = timezone.now()
         offer_state.save(update_fields=["is_visible", "last_accepted_at", "modified_ts"])
+        from system.support_events import record_quest_event
+        record_quest_event('quest.started', player=player, quest=quest_instance, reason=reason)
 
     return enter_step(
         quest_instance,
@@ -844,6 +849,8 @@ def abandon_instance(player, identity: str) -> QuestTransitionResult:
         quest_instance.interaction_state = {}
         quest_instance.interaction_due_at = None
         quest_instance.save(update_fields=["status", "resolution", "resolved_at", "interaction_state", "interaction_due_at", "modified_ts"])
+        from system.support_events import record_quest_event
+        record_quest_event('quest.resolved', player=player, quest=quest_instance, reason='abandoned')
         append_journal_entry(
             quest_instance,
             entry_type="resolved",

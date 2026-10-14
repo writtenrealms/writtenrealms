@@ -90,6 +90,8 @@ class WorldGate:
                     player=player,
                     event=constants.PLAYER_EVENT_LOGIN,
                     ip=ip)
+                from system.support_events import record_support_event
+                record_support_event('session.login', player=player)
 
         # Keep the context write outside the Player/combat lock transaction.
         # Instance run creation owns the inverse World -> Player aggregate
@@ -279,7 +281,9 @@ class WorldGate:
              transfer_from=None,
              ref=None,
              leave_instance=False,
-             member_ids=None):
+             member_ids=None,
+             reason='logout',
+             idle_seconds=None):
         """
         Exit a world
         """
@@ -298,6 +302,8 @@ class WorldGate:
                 break
             time.sleep(WAIT_INTERVAL)
 
+        was_in_game = player.in_game
+        origin_room_id = player.room_id
         # spw / mpw specific exits
         if self.world.is_multiplayer:
             self.exit_mpw(player_data_id=player_data_id,
@@ -343,6 +349,13 @@ class WorldGate:
                 player=player,
                 event=constants.PLAYER_EVENT_LOGOUT,
             )
+            if was_in_game:
+                from system.support_events import record_support_event
+                record_support_event(
+                    'session.logout', player=player, world=self.world,
+                    room_id=origin_room_id, reason=reason,
+                    details={'idle_seconds': idle_seconds} if idle_seconds is not None else {},
+                )
             if cancellation_events:
                 enqueue_game_events(cancellation_events)
                 transaction.on_commit(

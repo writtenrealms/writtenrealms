@@ -139,14 +139,14 @@ class WorldSmith:
             kwargs={'client_id': client_id, 'user_id': user_id},
             countdown=60)
 
-    def stop(self):
+    def stop(self, *, reason='world_stopped'):
         # if self.world.lifecycle != api_consts.WORLD_LIFECYCLE_STOPPING:
         #     raise serializers.ValidationError("Can only stop stopping worlds.")
 
         # Mark world as stopped before cleanup so cleanup guardrails allow run.
         self.world.set_lifecycle(api_consts.WORLD_LIFECYCLE_STOPPED)
         # Stop should tear down transient runtime state (mobs/items/players in game).
-        self.world.cleanup()
+        self.world.cleanup(reason=reason)
 
         # Actually delete instances on stop
         if self.world.context.instance_of:

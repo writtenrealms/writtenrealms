@@ -302,6 +302,8 @@ class PlayerSerializer(serializers.ModelSerializer):
             route_new_character_to_initial_instance(player)
         except ValueError as exc:
             raise serializers.ValidationError(str(exc)) from exc
+        from system.support_events import record_support_event
+        record_support_event('character.created', player=player)
         return player
 
     def get_root_world_id(self, player):

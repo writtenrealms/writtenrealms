@@ -130,7 +130,7 @@ class LeaveInstanceHandler(CommandHandler):
             return
 
         try:
-            World.leave_instance(player=player)
+            World.leave_instance(player=player, reason='leave_command')
         except ValueError as exc:
             ctx.publish_error("leave", str(exc))
             return

@@ -57,12 +57,15 @@ def can_view_world(user, world):
     return Player.objects.filter(world__context=world, user=user).exists()
 
 
+@transaction.atomic
 def delete_character(player):
     """Soft-delete a character, as the lobby has always done."""
     if player.in_game:
         raise ValidationError("Cannot delete a character who is in the game.")
     if player.instance_participations.filter(exited_at__isnull=True).exists():
         raise ValidationError("Cannot delete a character with live instances.")
+    from system.support_events import record_support_event
+    record_support_event('character.deleted', player=player, reason='owner_request')
     player.name = "%s%s" % (player.name, player.id)
     player.pending_deletion_ts = timezone.now()
     player.save(update_fields=['name', 'pending_deletion_ts', 'modified_ts'])

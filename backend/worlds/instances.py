@@ -307,6 +307,10 @@ def route_new_character_to_initial_instance(player):
     player.save(update_fields=update_fields)
     move_player_carried_items_to_world(player, run.spawned_world)
     move_player_character_effects_to_world(player, run.spawned_world)
+    from system.support_events import record_support_event
+    record_support_event('instance.reserved', player=player, reason='initial_onboarding', details={
+        'return_world_id': return_world_id, 'return_room_id': return_room.pk if return_room else None,
+    })
 
 
 def start_pending_initial_instance_entry(player):
@@ -912,6 +916,10 @@ def _cancel_pending_door_action(*, player, code, message):
 def _instance_entry_events(
         *, run, player, origin_room_id, destination_room_id,
         announce_instance=True):
+    from system.support_events import record_support_event
+    record_support_event('instance.entered', player=player, reason='entry', details={
+        'origin_room_id': origin_room_id,
+    })
     from spawns.events import GameEvent, player_room_enter_event
 
     events = []
@@ -962,7 +970,8 @@ def _transfer_instance_participant_locked(
         expected_origin_world_id=None,
         expected_origin_room_id=None,
         exited_at=None,
-        emit_room_enter_event=True):
+        emit_room_enter_event=True,
+        support_reason=None):
     """Move an already-locked participant and return its unpublished events."""
     if exit_reason not in InstanceParticipant.EXIT_REASON_CHOICES:
         raise ValueError("Invalid instance participant exit reason.")
@@ -1042,6 +1051,12 @@ def _transfer_instance_participant_locked(
         'exit_reason',
         'return_runtime_world',
     ])
+    from system.support_events import record_support_event
+    record_support_event(
+        'instance.left', player=player, world=run.spawned_world,
+        room_id=origin_room_id, reason=support_reason or exit_reason,
+        details={'destination_world_id': return_runtime.pk, 'destination_room_id': destination_room.pk},
+    )
     instance_events = list(cancellation_events)
     if emit_room_enter_event:
         from spawns.events import player_room_enter_event
@@ -1551,7 +1566,7 @@ def enter_instance(
     return run
 
 
-def leave_instance(*, player, force_active_duel=False):
+def leave_instance(*, player, force_active_duel=False, reason='left'):
     if not player.world.context or not player.world.context.instance_of_id:
         raise ValueError("Player is not in an instance.")
 
@@ -1632,6 +1647,7 @@ def leave_instance(*, player, force_active_duel=False):
                 exit_reason=InstanceParticipant.EXIT_REASON_LEFT,
                 expected_origin_world_id=spawned_instance.id,
                 exited_at=now,
+                support_reason=reason,
             )
             _enqueue_instance_events(transfer_result.events)
             updated_player = transfer_result.player
@@ -1689,10 +1705,10 @@ def destroy_instance(*, player) -> InstanceDestroyResult:
         # and use the normal exit path to finish combat and cancel pending work.
         for participant in players:
             participant.world = spawned_world
-            leave_instance(player=participant, force_active_duel=True)
+            leave_instance(player=participant, force_active_duel=True, reason='builder_destroyed')
         if Player.objects.filter(world=spawned_world).exists():
             raise ValueError("The instance still has players and cannot be destroyed.")
-        WorldSmith(spawned_world).stop()
+        WorldSmith(spawned_world).stop(reason='builder_destroyed')
 
     return result
 

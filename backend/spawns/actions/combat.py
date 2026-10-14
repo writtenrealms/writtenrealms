@@ -1500,6 +1500,20 @@ def apply_player_death(
             corpse_id=corpse_id,
             result=receipt_result,
         )
+        from system.support_events import record_support_event
+        record_support_event(
+            'player.died', player=updated_player, world=origin_runtime,
+            room_id=committed_origin_room.pk if committed_origin_room else None,
+            reason=decision_reason,
+            details={
+                'destination_world_id': destination_runtime.pk,
+                'destination_room_id': destination_room.pk,
+                'death_sequence': updated_player.death_sequence,
+                'routing_source': routing_source,
+                'fallback_reason': fallback_reason,
+                'corpse_id': corpse_id,
+            },
+        )
 
         domain_events = [
             *door_cancellation_events,

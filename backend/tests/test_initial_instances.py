@@ -60,6 +60,13 @@ class InitialInstanceTests(AuthenticatedBuilderWorldTestCase):
             participant = run.participants.get(player=player)
             self.assertEqual(participant.return_runtime_world_id, self.spawn_world.pk)
             self.assertEqual(participant.transfer_from_id, self.room.pk)
+            from system.models import SupportEvent
+            event = SupportEvent.objects.get(kind='character.created', player_id=player.pk)
+            self.assertEqual(event.base_world_id, self.world.pk)
+            self.assertEqual(event.run_id, run.pk)
+            self.assertEqual(SupportEvent.objects.get(
+                kind='instance.reserved', player_id=player.pk,
+            ).details['return_world_id'], self.spawn_world.pk)
         listed = self.client.get(self.chars_url)
         self.assertTrue({first.pk, second.pk}.issubset({p['id'] for p in listed.data['results']}))
         duplicate = self.client.post(self.chars_url, {'name': 'Newcomer'}, format='json')
@@ -176,6 +183,8 @@ class InitialInstanceTests(AuthenticatedBuilderWorldTestCase):
         self.assertIn('archived', str(response.data))
         self.assertFalse(Player.objects.filter(name='Newcomer').exists())
         self.assertFalse(InstanceRun.objects.exists())
+        from system.models import SupportEvent
+        self.assertFalse(SupportEvent.objects.exists())
 
     def test_disabling_initial_setting_only_changes_future_characters(self):
         first = self.create_character()

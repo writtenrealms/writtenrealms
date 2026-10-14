@@ -8,6 +8,12 @@ from system.models import SiteControl
 from system.services import update_staff_panel
 
 
+@shared_task(ignore_result=True)
+def prune_support_events():
+    from system.support_events import prune_support_events as prune
+    return prune()
+
+
 @shared_task
 def toggle_maintenance_mode(client_id=None, user_id=None):
     try:

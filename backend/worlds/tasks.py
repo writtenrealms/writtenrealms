@@ -54,7 +54,10 @@ def _should_idle_logout_player(player, spawn_world) -> bool:
 
 
 def _disconnect_idle_player(player, spawn_world):
-    WorldGate(player=player, world=spawn_world).exit()
+    idle_seconds = int((timezone.now() - player.last_action_ts).total_seconds()) if player.last_action_ts else None
+    WorldGate(player=player, world=spawn_world).exit(
+        reason='idle_timeout', idle_seconds=idle_seconds,
+    )
     notify_exit_world(
         player_id=player.id,
         world_id=spawn_world.id,
@@ -293,7 +296,7 @@ def monitor_worlds():
                 continue
             logger.info("World is idle for %s seconds, stopping..." % delta)
             # Start the stopping process
-            WorldSmith(spawn_world).stop()
+            WorldSmith(spawn_world).stop(reason='idle_expired')
             continue
 
     # Look for stuck worlds
@@ -324,10 +327,13 @@ def monitor_worlds():
     ).exclude(has_offline_owner_grace)
     for instance in stored_instances:
         logger.info("Deleting idle instance %s..." % instance.id)
+        from system.support_events import record_support_event
+        record_support_event('instance.cleanup', world=instance, reason='idle_expired')
         for player in instance.players.all():
             World.leave_instance(
                 player,
                 force_active_duel=True,
+                reason='idle_expired',
             )
         # Redundant but we want to be absolutely sure we don't delete
         # player data.

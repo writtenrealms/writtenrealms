@@ -26,6 +26,9 @@ class TestLobbyCharacterDeletion(WorldTestCase):
         self.player.refresh_from_db()
         self.assertIsNotNone(self.player.pending_deletion_ts)
         self.assertEqual(self.player.name, f"Joe{self.player.id}")
+        from system.models import SupportEvent
+        event = SupportEvent.objects.get(kind='character.deleted', player_id=self.player.pk)
+        self.assertEqual(event.player_name, 'Joe')
 
     def test_character_delete_rejects_players_currently_in_game(self):
         self.player.in_game = True
@@ -37,3 +40,5 @@ class TestLobbyCharacterDeletion(WorldTestCase):
         self.assertEqual(resp.status_code, 400)
         self.player.refresh_from_db()
         self.assertIsNone(self.player.pending_deletion_ts)
+        from system.models import SupportEvent
+        self.assertFalse(SupportEvent.objects.filter(kind='character.deleted').exists())
