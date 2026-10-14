@@ -3,6 +3,14 @@
 These guides cover the player-facing systems currently available in Written
 Realms Core.
 
+## Signing In
+
+Use an email login link, or **Sign in with Google** when the server offers it.
+On an invite-only server, both methods require an invited email address. Choose
+the Google account whose email received the invitation; using Google does not
+bypass site access restrictions. A closed server refuses player sign-in even
+with an invitation. Existing staff retain recovery access.
+
 ## Entering a World
 
 On a server featuring one main world, the homepage and **Lobby** open that
