@@ -667,10 +667,13 @@ def enter_step(
     reward_summaries = list(step_effect_result.reward_summaries)
     currency_rewards = list(step_effect_result.currency_rewards)
     effect_events = list(step_effect_result.events)
-    if step_kind == "resolution":
+    rewards = (refreshed.template.reward_policy or {}).get(refreshed.resolution or "complete") or []
+    from worlds.onboarding import claim_onboarding_rewards
+
+    if step_kind == "resolution" and rewards and claim_onboarding_rewards(player=player, quest=refreshed):
         reward_result = _apply_effects(
             refreshed,
-            (refreshed.template.reward_policy or {}).get(refreshed.resolution or "complete") or [],
+            rewards,
             player=player,
             event_data=event_data,
         )

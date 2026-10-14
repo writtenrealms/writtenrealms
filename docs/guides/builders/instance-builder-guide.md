@@ -98,20 +98,39 @@ The private run is reserved during character creation. Its population starts
 when the player first chooses **Play As**, and any clear-goal timer begins on
 that first login. Entry-room triggers wait until the game connection receives
 its first state sync, so opening RP text reaches the player. Reconnecting while
-the run is retained resumes it without repeating the initial entry triggers. The usual single-player instance cleanup rules still apply.
-Characters remain listed in the base world's lobby throughout the introduction.
+the run is retained resumes it without repeating the initial entry triggers.
+The usual single-player cleanup still applies, including the three-hour offline
+grace period. If cleanup removes the run before the character uses `leave`, their
+next **Play As** creates a fresh private introduction with fresh quest progress.
+Cleanup itself does not create another run. Characters remain listed in the base
+world's lobby throughout, including between runs; no special lobby action is needed.
 
-Provide an exit into the base world using the usual instance exit rooms or
-`/exitinstance`. The `leave` command returns the character to the base-world
-starting room recorded at character creation: their core faction's starting
-room if configured, otherwise the base world's default starting room. It does
+Use the `leave` command to finish onboarding. It returns the character to the
+base-world room recorded when the run was reserved. Initially, this is their core
+faction's starting room if configured, otherwise the base world's default starting room. It does
 not use the instance's `exits_to` setting. This setting controls where characters
-begin; it does not require them to complete a quest before leaving.
+begin; it does not require them to complete a quest before leaving. Deliberate
+`leave` permanently ends the automatic return to onboarding. Idle logout,
+disconnect, death, cleanup, and forced exits such as `/exitinstance` do not.
+
+Put permanent starter gear and other completion rewards in the quest's
+`rewards` policy. For a character's selected onboarding template, each quest slug
+and resolution grants that reward package only once across all runs and resets,
+even after the character leaves onboarding. Dropping or selling the gear does
+not make it available again. Story progress and step effects still run normally;
+use step effects for temporary quest props, not permanent starter rewards.
+Ordinary adventure quests retain their existing reward behavior.
 
 Changing or clearing `instance_routes` affects future characters only. Existing
-runs retain their owner and return destination. Remove routes before archiving
-their templates; matching a route to an archived template blocks character
-creation until the configuration is corrected.
+characters keep their selected onboarding template until they use `leave`.
+Keep that template available while characters still need it: an archived,
+deleted, or disabled introduction blocks re-entry instead of silently skipping
+onboarding. Remove routes before archiving their templates; matching a route to
+an archived template also blocks character creation.
+
+This durable enrollment begins with characters created under this behavior.
+Older characters are not automatically enrolled: past cleanup cannot establish
+whether they deliberately left. The migration does not infer that history.
 
 ## What Instances Inherit
 

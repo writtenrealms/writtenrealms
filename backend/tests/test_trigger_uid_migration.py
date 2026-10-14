@@ -36,13 +36,14 @@ class TriggerUidMigrationTests(TransactionTestCase):
 
     def test_existing_authored_triggers_get_distinct_persistent_uids(self):
         executor = MigrationExecutor(connection)
-        # Builders rollback does not roll back independent worlds migrations.
-        # Match the fixture model to that table's actual schema.
-        worlds_targets = executor.loader.graph.leaf_nodes('worlds')
-        before = [('builders', '0261_participant_combat_integrity'), *worlds_targets]
-        after = [('builders', '0262_trigger_uid'), *worlds_targets]
+        # Roll back dependents too; pinning another app's latest migration can
+        # demand both rollback and reapplication of the same builder migration.
+        # Build fixtures from the schema actually left applied by that rollback.
+        before = [('builders', '0261_participant_combat_integrity')]
+        after = [('builders', '0262_trigger_uid')]
         executor.migrate(before)
-        old_apps = executor.loader.project_state(before).apps
+        executor = MigrationExecutor(connection)
+        old_apps = executor.loader.project_state(list(executor.loader.applied_migrations)).apps
         OldWorld = old_apps.get_model('worlds', 'World')
         OldTrigger = old_apps.get_model('builders', 'Trigger')
         world = OldWorld.objects.create(name='Existing authored world')
@@ -54,7 +55,8 @@ class TriggerUidMigrationTests(TransactionTestCase):
 
         executor = MigrationExecutor(connection)
         executor.migrate(after)
-        new_apps = executor.loader.project_state(after).apps
+        executor = MigrationExecutor(connection)
+        new_apps = executor.loader.project_state(list(executor.loader.applied_migrations)).apps
         Trigger = new_apps.get_model('builders', 'Trigger')
         migrated = dict(Trigger.objects.values_list('pk', 'uid'))
         self.assertEqual(set(migrated), original_ids)

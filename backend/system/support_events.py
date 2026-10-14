@@ -24,6 +24,8 @@ DETAIL_FIELDS = {
     'instance.cleanup': set(),
     'quest.started': {'quest_id', 'quest_slug', 'quest_instance_id'},
     'quest.resolved': {'quest_id', 'quest_slug', 'quest_instance_id'},
+    'onboarding.rewards_granted': {'quest_id', 'quest_slug', 'quest_instance_id'},
+    'onboarding.rewards_skipped': {'quest_id', 'quest_slug', 'quest_instance_id'},
     'player.died': {'destination_world_id', 'destination_room_id', 'death_sequence',
                     'routing_source', 'fallback_reason', 'corpse_id'},
 }

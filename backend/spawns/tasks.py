@@ -1483,7 +1483,8 @@ def enter_world(player_id, world_id, client_id=None, ip=None, user_id=None):
 
     try:
         # Enter the world
-        WorldGate(player=player, world=spawn_world).enter(ip=ip)
+        player = WorldGate(player=player, world=spawn_world).enter(ip=ip)
+        spawn_world = player.world
         _notify_world_lifecycle(player, spawn_world, "enter")
 
         # - Instance Follow system -

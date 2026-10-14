@@ -253,6 +253,8 @@ class WR1SignInTests(Flow, WorldTestCase):
             User.objects.create_user('UNIQUE@example.test')
 
     def test_repeat_sign_in_query_count_does_not_grow_with_other_accounts(self):
+        from system.access import clear_access_cache
+
         linked = User.objects.create_user(IDENTITY['email'], is_confirmed=True)
         ExternalIdentity.objects.create(issuer=IDENTITY['iss'], subject=IDENTITY['sub'], user=linked)
         counts = []
@@ -263,6 +265,9 @@ class WR1SignInTests(Flow, WorldTestCase):
                     ExternalIdentity(issuer=IDENTITY['iss'], subject=str(n+1000000), user=user)
                     for n, user in enumerate(users)])
             state, _ = self.ready()
+            # Compare equal cache states; the five-second admission cache can
+            # otherwise expire between measurements under parallel test load.
+            clear_access_cache()
             with CaptureQueriesContext(connection) as queries:
                 response = self.post('finish', state)
             self.assertEqual(response.status_code, 200, response.data)

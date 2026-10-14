@@ -21,10 +21,11 @@ player-accessible history endpoint.
 | --- | --- |
 | `character.created`, `character.deleted` | Successful creation or requested soft deletion, with the original name |
 | `session.login`, `session.logout` | World admission and logout; reasons distinguish idle timeout, socket closure, requested logout, and generic service logout |
-| `instance.reserved` | Initial onboarding run assigned at character creation, before first play |
+| `instance.reserved` | Onboarding run assigned at character creation or recreated on Play after cleanup (`onboarding_return`) |
 | `instance.entered`, `instance.left` | Instance admission and return, including destination IDs and explicit `leave_command`, cleanup, forced, or death exit reasons |
 | `instance.cleanup` | Cleanup **started**, with its reason; this alone does not prove every cleanup step succeeded |
 | `quest.started`, `quest.resolved` | Acceptance/automatic start and completion, failure, or abandonment, with quest slug and attempt ID |
+| `onboarding.rewards_granted`, `onboarding.rewards_skipped` | First reward package or a repeat resolution whose rewards were already granted to this character |
 | `player.died` | Committed death routing, destination, sequence and corpse ID; replaying a death receipt adds no duplicate |
 
 Each row snapshots the character/user IDs, character name, runtime world ID/name,

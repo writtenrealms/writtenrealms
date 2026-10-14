@@ -14,6 +14,7 @@ from worlds.models import (
     InstanceAssignment,
     InstanceParticipant,
     InstanceRun,
+    PlayerOnboarding,
     Room,
     World,
 )
@@ -288,6 +289,12 @@ def route_new_character_to_initial_instance(player):
         instance_of=base_world, context__isnull=True, instance_slug=slug,
     ).select_related('config', 'config__starting_room').first()
     validate_initial_instance_destination(template, slug=slug)
+    PlayerOnboarding.objects.create(player=player, template=template)
+    _reserve_initial_instance(player, template)
+
+
+def _reserve_initial_instance(player, template, *, returning=False):
+    """Caller owns the character transaction; population waits for login."""
     entry_room = template.config.starting_room
     return_world_id = player.world_id
     return_room = player.room
@@ -300,6 +307,10 @@ def route_new_character_to_initial_instance(player):
         run=run, player=player, transfer_from=return_room,
         return_runtime_world_id=return_world_id,
     )
+    if returning:
+        from spawns.instance_clock import rebase_character_timers
+
+        rebase_character_timers(player, return_world_id, run.spawned_world_id)
     player.world = run.spawned_world
     player.room = entry_room
     update_fields = ['world', 'room']
@@ -308,7 +319,8 @@ def route_new_character_to_initial_instance(player):
     move_player_carried_items_to_world(player, run.spawned_world)
     move_player_character_effects_to_world(player, run.spawned_world)
     from system.support_events import record_support_event
-    record_support_event('instance.reserved', player=player, reason='initial_onboarding', details={
+    record_support_event('instance.reserved', player=player,
+                         reason='onboarding_return' if returning else 'initial_onboarding', details={
         'return_world_id': return_world_id, 'return_room_id': return_room.pk if return_room else None,
     })
 
@@ -1649,6 +1661,12 @@ def leave_instance(*, player, force_active_duel=False, reason='left'):
                 exited_at=now,
                 support_reason=reason,
             )
+            if reason == 'leave_command':
+                PlayerOnboarding.objects.filter(
+                    player_id=locked_player.pk,
+                    template_id=locked_run.template_world_id,
+                    left_at__isnull=True,
+                ).update(left_at=now)
             _enqueue_instance_events(transfer_result.events)
             updated_player = transfer_result.player
             DuelParticipant.objects.filter(

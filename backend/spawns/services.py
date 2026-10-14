@@ -58,6 +58,25 @@ class WorldGate:
 
         self.preflight()
 
+        from worlds.onboarding import prepare_onboarding_login
+
+        try:
+            player = prepare_onboarding_login(player)
+        except ValueError as exc:
+            raise ServiceError(str(exc)) from exc
+        self.player = player
+        if player.world_id != world.pk:
+            world = self.world = player.world
+            self._check_instance_owner()
+            from worlds.services import WorldSmith
+
+            if world.lifecycle in (
+                constants.WORLD_LIFECYCLE_NEW,
+                constants.WORLD_LIFECYCLE_STOPPED,
+            ):
+                WorldSmith(world=world).start()
+            self.preflight()
+
         with transaction.atomic():
             from worlds.instances import start_pending_initial_instance_entry
 

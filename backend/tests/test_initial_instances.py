@@ -16,7 +16,7 @@ from spawns.services import WorldGate
 from spawns.handlers import dispatch_command
 from tests.test_world_config_manifests import AuthenticatedBuilderWorldTestCase
 from worlds.instances import enter_instance, leave_instance, route_new_character_to_initial_instance
-from worlds.models import InstanceRun
+from worlds.models import InstanceRun, OnboardingRewardGrant, PlayerOnboarding, World
 
 
 class InitialInstanceTests(AuthenticatedBuilderWorldTestCase):
@@ -51,6 +51,8 @@ class InitialInstanceTests(AuthenticatedBuilderWorldTestCase):
         start.assert_not_called()
         self.assertNotEqual(first.world_id, second.world_id)
         for player in (first, second):
+            self.assertEqual(player.onboarding.template_id, self.template.pk)
+            self.assertIsNone(player.onboarding.left_at)
             run = InstanceRun.objects.get(spawned_world=player.world)
             self.assertTrue(run.single_player)
             self.assertEqual(run.owner_id, player.pk)
@@ -194,6 +196,203 @@ class InitialInstanceTests(AuthenticatedBuilderWorldTestCase):
         first.refresh_from_db()
         self.assertEqual(first.world.context_id, self.template.pk)
         self.assertEqual(second.world_id, self.spawn_world.pk)
+
+    def _login(self, player):
+        return WorldGate(player, player.world).enter()
+
+    def _expire(self, player):
+        from worlds.services import WorldSmith
+
+        WorldGate(player, player.world).exit(reason='idle_timeout')
+        old_runtime_id = player.world_id
+        WorldSmith(player.world).stop(reason='idle_expired')
+        player.refresh_from_db()
+        self.assertFalse(World.objects.filter(pk=old_runtime_id).exists())
+        self.assertEqual(player.world_id, self.spawn_world.pk)
+        self.assertIsNone(player.onboarding.left_at)
+        return old_runtime_id
+
+    def test_expired_onboarding_restarts_on_play_and_stays_in_base_world_lobby(self):
+        player = self._login(self.create_character())
+        old_runtime_id = self._expire(player)
+        self.assertFalse(InstanceRun.objects.exists())
+        response = self.client.get(self.chars_url)
+        row = next(row for row in response.data['results'] if row['id'] == player.pk)
+        self.assertEqual(row['root_world_id'], self.world.pk)
+        # A route edit cannot change an existing character's selected template.
+        self.world.config.player_creation = {'instance_routes': []}
+        self.world.config.save(update_fields=['player_creation'])
+        from spawns.tasks import enter_world
+
+        with mock.patch('spawns.tasks.complete_job') as complete:
+            enter_world(player.pk, self.world.pk, client_id='test', user_id=player.user_id)
+        player.refresh_from_db()
+        self.assertTrue(player.in_game)
+        self.assertNotEqual(player.world_id, old_runtime_id)
+        self.assertEqual(player.world.context_id, self.template.pk)
+        self.assertEqual(player.room_id, self.template.config.starting_room_id)
+        self.assertEqual(complete.call_args.kwargs['data']['world']['id'], player.world_id)
+        self.assertEqual(InstanceRun.objects.count(), 1)
+        from system.models import SupportEvent
+
+        self.assertTrue(SupportEvent.objects.filter(
+            kind='instance.reserved', player_id=player.pk, reason='onboarding_return',
+        ).exists())
+
+    def test_idle_monitor_cleans_run_but_keeps_unfinished_onboarding(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from worlds.tasks import monitor_worlds
+
+        player = self._login(self.create_character())
+        old_runtime_id = player.world_id
+        now = timezone.now()
+        player.last_action_ts = now - timedelta(minutes=11)
+        player.save(update_fields=['last_action_ts'])
+        with mock.patch('worlds.tasks.timezone.now', return_value=now), mock.patch('worlds.tasks.notify_exit_world'):
+            monitor_worlds()
+        player.refresh_from_db()
+        self.assertFalse(player.in_game)
+        self.assertEqual(player.world_id, old_runtime_id)
+        with mock.patch('worlds.tasks.timezone.now', return_value=now + timedelta(hours=3, seconds=1)):
+            monitor_worlds()
+        player.refresh_from_db()
+        self.assertEqual(player.world_id, self.spawn_world.pk)
+        self.assertFalse(World.objects.filter(pk=old_runtime_id).exists())
+        self.assertIsNone(player.onboarding.left_at)
+        self.assertEqual(self._login(player).world.context_id, self.template.pk)
+
+    def test_leave_command_ends_onboarding_even_without_accepting_a_quest(self):
+        player = self._login(self.create_character())
+        dispatch_command('leave', player_id=player.pk, payload={})
+        player.refresh_from_db()
+        self.assertEqual(player.world_id, self.spawn_world.pk)
+        self.assertIsNotNone(player.onboarding.left_at)
+        WorldGate(player, player.world).exit()
+        self.assertEqual(self._login(player).world_id, self.spawn_world.pk)
+
+    def test_forced_leave_does_not_complete_onboarding(self):
+        player = self._login(self.create_character())
+        leave_instance(player=player, reason='builder_destroyed')
+        player.refresh_from_db()
+        WorldGate(player, player.world).exit()
+        player = self._login(player)
+        self.assertEqual(player.world.context_id, self.template.pk)
+        self.assertIsNone(player.onboarding.left_at)
+
+    def test_unavailable_onboarding_blocks_login_without_bypassing_or_creating_run(self):
+        player = self._login(self.create_character())
+        self._expire(player)
+        self.template.lifecycle = constants.WORLD_STATE_ARCHIVED
+        self.template.save(update_fields=['lifecycle'])
+        with self.assertRaisesMessage(ServiceError, 'archived'):
+            self._login(player)
+        self.assertFalse(InstanceRun.objects.exists())
+        player.refresh_from_db()
+        self.assertFalse(player.in_game)
+        self.template.delete()
+        with self.assertRaisesMessage(ServiceError, 'unavailable'):
+            self._login(player)
+        self.assertTrue(PlayerOnboarding.objects.filter(player=player, template=None).exists())
+
+    def test_entry_restrictions_apply_before_recreating_onboarding(self):
+        player = self._login(self.create_character())
+        self._expire(player)
+        player.noplay = True
+        player.save(update_fields=['noplay'])
+        with self.assertRaisesMessage(ServiceError, 'banned'):
+            self._login(player)
+        self.assertFalse(InstanceRun.objects.exists())
+
+    def test_normal_character_login_has_one_indexed_onboarding_lookup(self):
+        from worlds.onboarding import prepare_onboarding_login
+
+        self.player.world.context
+        with self.assertNumQueries(1):
+            self.assertIs(prepare_onboarding_login(self.player), self.player)
+        self.assertFalse(PlayerOnboarding.objects.filter(player=self.player).exists())
+
+    def _onboarding_quest(self):
+        from quests.models import QuestTemplate
+
+        gear = ItemDefinition.objects.create(world=self.world, slug='starter-spear', name='a starter spear')
+        quest = QuestTemplate.objects.create(
+            world=self.template, slug='introduction', name='Introduction', status='active',
+            discovery_policy={'accept_if': {}},
+            graph={'steps': [
+                {'id': 'start', 'kind': 'storylet', 'choices': [
+                    {'id': 'finish', 'text': 'Finish', 'goto': 'done'}]},
+                {'id': 'done', 'kind': 'resolution', 'resolution': 'complete'},
+            ]},
+            reward_policy={'complete': [{'type': 'grant_item', 'item_definition': f'itemdefinition.{gear.slug}'}]},
+        )
+        return quest, gear
+
+    def _complete_quest(self, player, quest):
+        from quests.services.engine import accept_template, choose_for_instance
+
+        attempt = accept_template(player, quest).quest_instance
+        choose_for_instance(player, str(attempt.pk), 'finish')
+        return attempt
+
+    def test_starter_gear_survives_cleanup_and_is_not_granted_again(self):
+        quest, gear = self._onboarding_quest()
+        keepsake = ItemDefinition.objects.create(world=self.world, slug='keepsake', name='a keepsake')
+        self.world.config.starting_equipment = [{'item_definition': f'itemdefinition.{keepsake.slug}', 'count': 1}]
+        self.world.config.save(update_fields=['starting_equipment'])
+        player = self._login(self.create_character())
+        keepsake_id = player.inventory.get(definition=keepsake).pk
+        self._complete_quest(player, quest)
+        item_id = player.inventory.get(definition=gear).pk
+        self._expire(player)
+        player = self._login(player)
+        self._complete_quest(player, quest)
+        self.assertEqual(list(player.inventory.filter(definition=gear).values_list('pk', flat=True)), [item_id])
+        self.assertEqual(player.inventory.get(pk=item_id).world_id, player.world_id)
+        self.assertEqual(list(player.inventory.filter(definition=keepsake).values_list('pk', flat=True)), [keepsake_id])
+        self.assertEqual(OnboardingRewardGrant.objects.filter(onboarding__player=player).count(), 1)
+        self.assertIsNone(player.onboarding.left_at)
+        # Selling/dropping/deleting the original gear cannot create a second grant.
+        player.inventory.all().delete()
+        self._expire(player)
+        player = self._login(player)
+        self._complete_quest(player, quest)
+        self.assertFalse(player.inventory.filter(definition=gear).exists())
+        from system.models import SupportEvent
+
+        self.assertEqual(SupportEvent.objects.filter(kind='onboarding.rewards_skipped', player_id=player.pk).count(), 2)
+
+    def test_failed_reward_rolls_back_receipt_and_can_be_retried(self):
+        from quests.services.engine import accept_template, choose_for_instance
+
+        quest, gear = self._onboarding_quest()
+        player = self._login(self.create_character())
+        attempt = accept_template(player, quest).quest_instance
+        with mock.patch.object(ItemDefinition, 'spawn', side_effect=RuntimeError('reward failed')):
+            with self.assertRaisesMessage(RuntimeError, 'reward failed'):
+                choose_for_instance(player, str(attempt.pk), 'finish')
+        self.assertFalse(OnboardingRewardGrant.objects.exists())
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, 'active')
+        choose_for_instance(player, str(attempt.pk), 'finish')
+        self.assertEqual(player.inventory.filter(definition=gear).count(), 1)
+        self.assertEqual(OnboardingRewardGrant.objects.count(), 1)
+
+    def test_starter_rewards_are_per_character_and_normal_instances_still_reward(self):
+        quest, gear = self._onboarding_quest()
+        for name in ('First', 'Second'):
+            player = self._login(self.create_character(name))
+            self._complete_quest(player, quest)
+            self.assertEqual(player.inventory.filter(definition=gear).count(), 1)
+            WorldGate(player, player.world).exit()
+        self.assertEqual(OnboardingRewardGrant.objects.count(), 2)
+        # Entering this template as a regular adventure does not enroll a player.
+        enter_instance(player=self.player, transfer_to=self.template.config.starting_room,
+                       transfer_from=self.player.room)
+        self.player.refresh_from_db()
+        self._complete_quest(self.player, quest)
+        self.assertEqual(self.player.inventory.filter(definition=gear).count(), 1)
+        self.assertEqual(OnboardingRewardGrant.objects.count(), 2)
 
     def test_routes_roundtrip_on_base_world_yaml_and_api(self):
         for endpoint in (self.config_url, self.manifest_url):

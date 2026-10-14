@@ -95,6 +95,12 @@ reference, other chat channels, and private messages.
 
 ## World Introductions
 
+Some worlds begin with a private introduction. Until you use `leave`, choosing
+your character from that world's lobby brings you back to it. A short break
+resumes your progress; after a long break, the introduction may start fresh.
+Starter rewards you have already received are not granted again. You can use
+`leave` even without completing the introduction's quest.
+
 Some worlds and instances show a full-screen introduction when you enter.
 It may appear all at once, reveal another paragraph every three seconds, or
 replace each paragraph with the next every three seconds. Click or tap anywhere

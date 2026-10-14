@@ -1056,6 +1056,36 @@ class InstanceAssignment(BaseModel):
                                **optional)
 
 
+class PlayerOnboarding(models.Model):
+    """Character-lifetime onboarding state, independent of disposable runs."""
+
+    player = models.OneToOneField(
+        'spawns.Player', on_delete=models.CASCADE, related_name='onboarding',
+    )
+    # Preserve the obligation if a builder deletes the selected template. Login
+    # reports it unavailable instead of silently bypassing the introduction.
+    template = models.ForeignKey(
+        'worlds.World', on_delete=models.SET_NULL, null=True, related_name='+',
+    )
+    left_at = models.DateTimeField(null=True, blank=True)
+
+
+class OnboardingRewardGrant(models.Model):
+    onboarding = models.ForeignKey(
+        PlayerOnboarding, on_delete=models.CASCADE, related_name='reward_grants',
+    )
+    # Slugs survive authored quest replacement as well as runtime deletion.
+    quest_slug = models.SlugField(max_length=100)
+    resolution = models.CharField(max_length=32)
+    granted_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=['onboarding', 'quest_slug', 'resolution'],
+            name='onboarding_reward_once',
+        )]
+
+
 class InstanceRun(BaseModel):
     STATUS_CREATED = 'created'
     STATUS_ACTIVE = 'active'

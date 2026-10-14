@@ -38,6 +38,10 @@ to continue in the same instance and location. Each later logout starts a new
 three-hour grace period. After three hours offline, normal cleanup can return
 your character to the base world and remove the instance.
 
+If this is your world's introduction and you have not used `leave`, choose your
+character in the same world's lobby to start a fresh introduction. Previously
+received starter rewards are not granted again.
+
 This applies whether or not the instance offers Time Control. It does not
 pause gameplay by itself. Leaving the instance to return to the base world
 uses the ordinary five-minute idle cleanup instead.
