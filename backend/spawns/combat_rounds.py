@@ -365,13 +365,15 @@ def resolve_locked(context, encounter, *, auto_advance, expected_round=None,
         actor = context.actors[p.actor_key]
         if not p.is_active or p.pk in skip or p.first_eligible_round > encounter.round_number:
             continue
-        if isinstance(actor, Mob) and not actor.fights_back:
-            continue
         target_p = target_for(context, p)
         if target_p is None:
             continue
+        # Passive mobs still spend stun rounds at their place in initiative.
+        stunned = combat._consume_stun(encounter, target=actor)
+        if isinstance(actor, Mob) and not actor.fights_back:
+            continue
         target = context.actors[target_p.actor_key]
-        if combat._consume_stun(encounter, target_type='player' if p.player_id else 'mob', target_id=actor.pk):
+        if stunned:
             p.pending_ability = {}
             p.save(update_fields=['pending_ability'])
             from spawns.events import GameEvent

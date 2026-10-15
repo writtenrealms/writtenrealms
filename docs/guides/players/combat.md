@@ -247,7 +247,8 @@ pool, and the badge disappears immediately when that pool is spent even if the
 effect had rounds left.
 The Combat panel also marks your current target with its active round-based
 effects. Statuses use combat-facing labels such as **Stunned** and update or
-disappear as each round is resolved.
+disappear as each round is resolved. Stun counts down on the target's turn even
+when the target does not fight back, such as a practice dummy.
 
 ## Casts And Interrupts
 

@@ -2980,6 +2980,101 @@ class TestCombatAbilities(WorldTestCase):
         self.assertEqual(mob_state["effects"][0]["remaining_rounds"], 1)
         self.assertEqual(mob_state["effects"][0]["duration_rounds"], 2)
 
+    def _assert_passive_mob_stun_expires(self, *, player_first):
+        self._ability(
+            slug="stun-bash",
+            name="Stun Bash",
+            verbs=["bash"],
+            components=[{
+                "type": "effect",
+                "effect": "stun",
+                "duration": {"rounds": 2},
+                "apply": "on_resolve",
+                "text": {"label": "Stun Bash"},
+            }],
+        )
+        self.player.known_abilities = ["stun-bash"]
+        self.player.save(update_fields=["known_abilities"])
+        mob = self._mob(attack_power=9, fights_back=False)
+        initiative = [20, 10] if player_first else [10, 20]
+
+        with patch("spawns.combat_encounters.initiative_roll", side_effect=initiative):
+            with capture_game_messages() as messages:
+                dispatch_and_drain_combat(self.player.id, "bash rat")
+
+        encounter = CombatEncounter.objects.get(participants__mob=mob)
+        encounter.resolution_interval = 1
+        encounter.save(update_fields=["resolution_interval"])
+        expected_rounds = [1, 0, 0] if player_first else [2, 1, 0, 0]
+        previous_health = mob.health
+        for index, remaining in enumerate(expected_rounds):
+            with self.subTest(round=index + 1):
+                if index:
+                    messages = self._resolve_ability_round(encounter)
+                updates = self._messages_by_type(messages, "notification.combat.snapshot")
+                mob_state = next(
+                    row for row in updates[-1]["data"]["participants"]
+                    if row["key"] == mob.key
+                )
+                self.assertEqual(
+                    [effect["remaining_rounds"] for effect in mob_state["effects"]],
+                    [remaining] if remaining else [],
+                )
+                self.assertEqual(
+                    list(ActiveEffect.objects.filter(target_mob=mob).values_list(
+                        "remaining_rounds", flat=True,
+                    )),
+                    [remaining] if remaining else [],
+                )
+                self.player.refresh_from_db()
+                mob.refresh_from_db()
+                self.assertEqual(self.player.health, self.stats["health_max"])
+                if index:
+                    self.assertLess(mob.health, previous_health)
+                previous_health = mob.health
+                self.assertFalse(any(
+                    "cannot act" in event["text"]
+                    for event in self._messages_by_type(messages, "notification.combat.effect")
+                ))
+
+    def test_passive_mob_stun_expires_when_applied_before_its_turn(self):
+        self._assert_passive_mob_stun_expires(player_first=True)
+
+    def test_passive_mob_stun_expires_when_applied_after_its_turn(self):
+        self._assert_passive_mob_stun_expires(player_first=False)
+
+    def test_stun_consumption_reuses_locked_effects_and_updates_snapshot(self):
+        from spawns.actions.combat import _consume_stun
+        from spawns.actions.effects import active_combatant_effects
+        from spawns.combat_encounters import locked_combat
+
+        mob = self._mob()
+        encounter = create_combat_encounter(
+            world=self.spawn_world, room=self.room, player=self.player, mob=mob,
+        )
+        create_active_effect(
+            target=mob, source=self.player, encounter=encounter, scope="encounter",
+            payload={"effect": "stun", "label": "Bash", "remaining_rounds": 2},
+        )
+        with locked_combat(keys=[self.player.key, mob.key]) as context:
+            with self.assertNumQueries(0):
+                self.assertFalse(_consume_stun(encounter, target=context.actors[self.player.key]))
+            for remaining in (1, 0):
+                with self.subTest(remaining=remaining):
+                    with CaptureQueriesContext(connection) as queries:
+                        self.assertTrue(_consume_stun(encounter, target=context.actors[mob.key]))
+                        effects = active_combatant_effects(context.actors.values())[mob.key]
+                    self.assertFalse(any(
+                        query["sql"].lstrip().upper().startswith("SELECT") for query in queries
+                    ))
+                    self.assertEqual(
+                        [effect["remaining_rounds"] for effect in effects],
+                        [remaining] if remaining else [],
+                    )
+            with self.assertNumQueries(0):
+                self.assertFalse(_consume_stun(encounter, target=context.actors[mob.key]))
+        self.assertFalse(ActiveEffect.objects.filter(target_mob=mob).exists())
+
     def test_combatant_effect_snapshot_uses_one_query_for_both_sides(self):
         from spawns.actions.effects import active_combatant_effects
 

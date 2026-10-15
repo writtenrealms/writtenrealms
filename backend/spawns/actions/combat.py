@@ -3493,24 +3493,31 @@ def _apply_character_scoped_effect(
 def _consume_stun(
     encounter: CombatEncounter,
     *,
-    target_type: str,
-    target_id: int,
+    target: Player | Mob,
 ) -> bool:
-    target_filter = (
-        {"target_player_id": target_id}
-        if target_type == "player"
-        else {"target_mob_id": target_id}
-    )
-    effects = list(
-        ActiveEffect.objects.select_for_update().filter(
-            effect="stun",
-            remaining_rounds__gt=0,
-            **target_filter,
-        ).filter(
-            Q(scope=ActiveEffect.SCOPE_CHARACTER)
-            | Q(scope=ActiveEffect.SCOPE_ENCOUNTER, encounter=encounter)
+    from spawns.combat_effects import actor_effects
+
+    effects = actor_effects(target)
+    if effects is None:
+        target_filter = (
+            {"target_player_id": target.pk}
+            if isinstance(target, Player)
+            else {"target_mob_id": target.pk}
         )
-    )
+        effects = list(
+            ActiveEffect.objects.select_for_update().filter(
+                effect="stun",
+                remaining_rounds__gt=0,
+                **target_filter,
+            ).filter(
+                Q(scope=ActiveEffect.SCOPE_CHARACTER)
+                | Q(scope=ActiveEffect.SCOPE_ENCOUNTER, encounter=encounter)
+            )
+        )
+    else:
+        effects = [effect for effect in effects if effect.effect == "stun" and (
+            effect.scope == ActiveEffect.SCOPE_CHARACTER or effect.encounter_id == encounter.pk
+        )]
     for effect in effects:
         if effect.remaining_rounds <= 1:
             effect.delete()
