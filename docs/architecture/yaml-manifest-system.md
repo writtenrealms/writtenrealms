@@ -87,6 +87,11 @@ Current required mappings:
   code `medals`; do not rename an unrelated authored custom code by guesswork.
 - Apply the death-destination conversion boundary documented in
   [WR1 World Manifest Export](../dev/wr1-world-manifest-export.md).
+  Do not emit `spec.death_route`: this WR1 faction/distance selector has been
+  removed from Core's model, manifests, Config API, and runtime payloads.
+  Remove the key from older Core YAML before import. Preserve an unambiguous
+  `death_room` fallback; conditional destinations require an explicitly
+  authored `death_routing` policy, never an inferred legacy-mode translation.
 - Convert representable legacy currency conditions to the existing structured
   condition path `actor.balances.<code>`. Flag ambiguous predicates for builder
   review instead of inventing a second currency condition language.
@@ -2453,7 +2458,6 @@ spec:
   death_mode: lose_currency
   death_currency: crowns
   death_currency_penalty: 0.2
-  death_route: nearest_in_zone
   pvp_mode: zone
   announce_duel_results: false
   player_creation:

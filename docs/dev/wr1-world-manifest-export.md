@@ -114,6 +114,10 @@ warning. Do not infer `spec.death_routing` from legacy `death_route` values,
 spatial modes, procession destinations, player marks, historical deaths,
 runtime faction assignments, or any other live state.
 
+Do not emit `spec.death_route` itself. Core has removed that unused WR1 field
+from its model, manifests, Config API, and runtime payloads. Older Core exports
+containing it must have that key removed before reimport.
+
 Converted instance templates always emit `death_routing_source: local`.
 Builders who want conditional routing after import must author a new ordered
 WR2 policy using the shared condition framework and explicit character-state,

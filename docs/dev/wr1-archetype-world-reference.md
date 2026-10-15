@@ -92,7 +92,6 @@ spec:
   starting_room: room@0,0,0
   death_room: room@0,0,0
   death_mode: lose_none
-  death_route: top_faction
   pvp_mode: free_for_all
   can_select_faction: true
   auto_equip: true

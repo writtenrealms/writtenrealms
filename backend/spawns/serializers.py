@@ -391,7 +391,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
     allow_combat = serializers.BooleanField(
         source='config.allow_combat')
     announce_duel_results = serializers.SerializerMethodField()
-    death_route = serializers.CharField(source='config.death_route')
     death_currency = serializers.CharField(
         source='config.death_currency.code', allow_null=True)
     death_currency_penalty = serializers.FloatField(
@@ -429,7 +428,6 @@ class AnimateWorldSerializer(serializers.ModelSerializer):
             'factions',
             'death_mode',
             'flee_to_unknown_rooms',
-            'death_route',
             'pvp_mode',
             'allow_pvp',
             'allow_combat',

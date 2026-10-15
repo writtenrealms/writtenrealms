@@ -483,7 +483,6 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'starting_room',
             'death_room',
             'death_mode',
-            'death_route',
             'death_routing',
             'death_routing_source',
             'death_currency',
@@ -551,6 +550,12 @@ class WorldConfigSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        if "death_route" in self.initial_data:
+            raise serializers.ValidationError({
+                "death_route": (
+                    "This WR1 field has been removed. Use death_routing and death_room."
+                ),
+            })
         config = self.instance
         world = self.context.get("world") if isinstance(self.context, dict) else None
         if world is None and config is not None:

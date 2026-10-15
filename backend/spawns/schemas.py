@@ -532,7 +532,6 @@ class World(BaseModel):
     # Death settings
     combat_resolution_interval: float = 0.0
     death_mode: str = "flee"  # "flee", "respawn", etc.
-    death_route: str = ""
     death_currency: Optional[str] = None
     death_currency_penalty: float = 0.0
 
@@ -1214,7 +1213,6 @@ def build_mock_state_sync(
         death_room="room.1",
         combat_resolution_interval=0.0,
         death_mode="flee",
-        death_route="",
         death_currency="obol",
         death_currency_penalty=0.1,
         allow_combat=True,

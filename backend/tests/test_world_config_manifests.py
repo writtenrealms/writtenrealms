@@ -18,6 +18,9 @@ from core.death_routing import (
     resolve_death_destination,
 )
 from spawns.models import Player
+from spawns.schemas import World as WorldPayload
+from spawns.serializers import AnimateWorldSerializer
+from spawns.state_payloads import serialize_world
 from tests.base import WorldTestCase
 from worlds.models import (
     DeathRoutingCompiledSnapshot,
@@ -112,6 +115,56 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
 
     def test_full_yaml_room_edit_allows_unchanged_balances_with_active_instance(self):
         self._assert_full_yaml_starting_room_edit(balances={"obol": 25}, instance=True)
+
+    def test_removed_death_route_is_absent_from_config_and_runtime_payloads(self):
+        for world in (self.world, self._instance_world()):
+            with self.subTest(instance=bool(world.instance_of_id)):
+                response = self.client.get(
+                    reverse("builder-world-config", args=[world.pk])
+                )
+                self.assertEqual(response.status_code, 200, response.data)
+                for payload in (
+                    response.data["config"],
+                    response.data["manifest"]["spec"],
+                    yaml.safe_load(response.data["yaml"])["spec"],
+                ):
+                    self.assertNotIn("death_route", payload)
+                    self.assertIn("death_routing", payload)
+                    self.assertIn("death_room", payload)
+
+                runtime = world.create_spawn_world()
+                state = serialize_world(runtime)
+                for payload in (
+                    state,
+                    WorldPayload.model_validate(state).model_dump(),
+                    AnimateWorldSerializer(runtime).data,
+                ):
+                    self.assertNotIn("death_route", payload)
+                    self.assertIn("death_room", payload)
+
+    def test_removed_death_route_is_rejected_without_applying_other_changes(self):
+        for world in (self.world, self._instance_world()):
+            for use_manifest in (False, True):
+                with self.subTest(
+                    instance=bool(world.instance_of_id), manifest=use_manifest,
+                ):
+                    spec = {"death_route": "near_room", "death_mode": "destroy_eq"}
+                    if use_manifest:
+                        response = self.client.post(
+                            reverse("builder-world-manifest-apply", args=[world.pk]),
+                            {"manifest": yaml.safe_dump({"kind": "world", "spec": spec})},
+                            format="json",
+                        )
+                    else:
+                        response = self.client.patch(
+                            reverse("builder-world-config", args=[world.pk]),
+                            spec,
+                            format="json",
+                        )
+                    self.assertEqual(response.status_code, 400, response.data)
+                    self.assertIn("death_route", str(response.data))
+                    world.config.refresh_from_db()
+                    self.assertEqual(world.config.death_mode, "lose_none")
 
     def test_blocked_currency_changes_return_json_and_roll_back_config(self):
         other_currency = create_currency(world=self.world, code="drachma", name="Drachma")
@@ -512,7 +565,6 @@ spec:
   death_mode: lose_currency
   death_currency: obol
   death_currency_penalty: 0.35
-  death_route: nearest_in_zone
   pvp_mode: zone
   announce_duel_results: true
   player_creation:
@@ -641,7 +693,6 @@ spec:
         self.assertEqual(config.death_mode, "lose_currency")
         self.assertEqual(config.death_currency, self.currency)
         self.assertEqual(float(config.death_currency_penalty), 0.35)
-        self.assertEqual(config.death_route, "nearest_in_zone")
         self.assertEqual(config.pvp_mode, "zone")
         self.assertTrue(config.announce_duel_results)
         self.assertFalse(config.can_select_faction)
@@ -1818,7 +1869,6 @@ spec:
   death_room: room.{death_room.id}
   death_mode: destroy_eq
   death_currency_penalty: 0.1
-  death_route: near_room
   pvp_mode: match
 """
 
@@ -1829,7 +1879,6 @@ spec:
         self.assertEqual(instance.config.death_room_id, death_room.id)
         self.assertEqual(instance.config.death_mode, "destroy_eq")
         self.assertEqual(float(instance.config.death_currency_penalty), 0.1)
-        self.assertEqual(instance.config.death_route, "near_room")
         self.assertEqual(instance.config.pvp_mode, adv_consts.PVP_MODE_MATCH)
 
     def test_instance_death_routing_source_is_explicit_and_preserves_local_policy(self):

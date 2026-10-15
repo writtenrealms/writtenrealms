@@ -283,7 +283,6 @@ _WORLD_CONFIG_CONFIG_FLOAT_FIELDS = (
 _WORLD_CONFIG_CONFIG_CHOICE_FIELDS = {
     "entry_message_mode": WorldConfig.ENTRY_MESSAGE_MODES,
     "death_mode": adv_consts.DEATH_MODES,
-    "death_route": adv_consts.DEATH_ROUTES,
     "pvp_mode": adv_consts.PVP_MODES,
     "default_gender": adv_consts.GENDERS,
 }
@@ -1113,13 +1112,10 @@ def world_config_to_manifest(
         raise serializers.ValidationError("World has no config to serialize.")
 
     is_instance_world = bool(getattr(world, "instance_of_id", None))
+    # Insertion order is the editor/export order. Keep common controls first,
+    # related fields together, and large system maps last.
     spec = {
         "name": world.name or "",
-        "short_description": world.short_description or "",
-        "description": world.description or "",
-        "motd": world.motd or "",
-        "entry_message": config.entry_message or "",
-        "entry_message_mode": config.entry_message_mode,
         "is_public": bool(world.is_public),
         "starting_room": _serialize_world_room_reference(
             room=config.starting_room,
@@ -1127,6 +1123,29 @@ def world_config_to_manifest(
             world=world,
             field_name="World starting room",
         ),
+    }
+    if not is_instance_world:
+        spec["is_narrative"] = bool(config.is_narrative)
+    spec["pvp_mode"] = config.pvp_mode
+    if not is_instance_world:
+        spec.update({
+            "combat_resolution_interval": _serialize_number(
+                config.combat_resolution_interval
+            ),
+            "default_roam_chance": int(config.default_roam_chance),
+            "flee_to_unknown_rooms": bool(config.flee_to_unknown_rooms),
+        })
+
+    # Instance run controls are primary settings on an instance template.
+    if is_instance_world:
+        spec.update({
+            "instance_single_player": bool(config.instance_single_player),
+            "instance_time_control": bool(config.instance_time_control),
+            "instance_goal": copy.deepcopy(config.instance_goal),
+        })
+
+    # Death penalties and destinations, with the source next to its policy.
+    spec.update({
         "death_room": _serialize_world_room_reference(
             room=config.death_room,
             mode=room_reference_mode,
@@ -1134,38 +1153,50 @@ def world_config_to_manifest(
             field_name="World death room",
         ),
         "death_mode": config.death_mode,
-        "death_route": config.death_route,
         "death_currency": _serialize_currency_reference(config.death_currency),
         "death_currency_penalty": _serialize_number(config.death_currency_penalty),
-        _WORLD_CONFIG_DEATH_ROUTING_FIELD: canonical_death_routing_manifest_value(
-            config=config,
-            serialize_room=lambda room: _serialize_world_room_reference(
-                room=room,
-                mode=room_reference_mode,
-                world=world,
-                field_name="World death-routing destination",
-            ),
-        ),
-        "pvp_mode": config.pvp_mode,
-        "never_reload": bool(config.never_reload),
-        "upkeep": authored_upkeep(world),
-        "cross_race_cooldown": int(config.cross_race_cooldown),
-        "built_by": config.built_by or "",
-        "small_background": config.small_background or "",
-        "large_background": config.large_background or "",
-        "initial_state": dict(world.initial_state or {}),
-    }
+    })
     if is_instance_world:
-        spec["instance_single_player"] = bool(config.instance_single_player)
-        spec["instance_time_control"] = bool(config.instance_time_control)
-        spec["instance_goal"] = copy.deepcopy(config.instance_goal)
         spec[_WORLD_CONFIG_DEATH_ROUTING_SOURCE_FIELD] = (
             config.death_routing_source or DEATH_ROUTING_SOURCE_LOCAL
         )
+    spec[_WORLD_CONFIG_DEATH_ROUTING_FIELD] = canonical_death_routing_manifest_value(
+        config=config,
+        serialize_room=lambda room: _serialize_world_room_reference(
+            room=room,
+            mode=room_reference_mode,
+            world=world,
+            field_name="World death-routing destination",
+        ),
+    )
+
     if not is_instance_world:
+        # Character defaults before the longer creation/progression policies.
         spec.update(
             {
-                "leaderboards": copy.deepcopy(config.leaderboards),
+                "starting_level": int(config.starting_level),
+                "max_level": int(config.max_level),
+                "auto_equip": bool(config.auto_equip),
+                "can_select_gender": bool(config.can_select_gender),
+                "default_gender": config.default_gender,
+                "non_ascii_names": bool(config.non_ascii_names),
+                "name_exclusions": config.name_exclusions or "",
+                _WORLD_CONFIG_STARTING_EQUIPMENT_FIELD: _serialize_starting_equipment_entries(
+                    world=world,
+                    entries=config.starting_equipment,
+                ),
+                _WORLD_CONFIG_PLAYER_CREATION_FIELD: config.player_creation or {},
+                _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
+                    config.leveling_curve
+                ),
+                _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
+                    config.ability_progression
+                ),
+            }
+        )
+        # Currency defaults, starting wallets, and clan fees.
+        spec.update(
+            {
                 "default_currency": _serialize_currency_reference(world.default_currency),
                 "starting_balances": {
                     row.currency.code: int(row.amount)
@@ -1175,36 +1206,39 @@ def world_config_to_manifest(
                 "clan_registration_currency": _serialize_currency_reference(
                     config.clan_registration_currency),
                 "clan_registration_cost": int(config.clan_registration_cost),
-                _WORLD_CONFIG_STARTING_EQUIPMENT_FIELD: _serialize_starting_equipment_entries(
-                    world=world,
-                    entries=config.starting_equipment,
-                ),
-                "starting_level": int(config.starting_level),
-                _WORLD_CONFIG_LEVELING_FIELD: normalize_leveling_curve(
-                    config.leveling_curve
-                ),
-                _WORLD_CONFIG_ABILITY_PROGRESS_FIELD: normalize_ability_progression(
-                    config.ability_progression
-                ),
-                "max_level": int(config.max_level),
-                "combat_resolution_interval": _serialize_number(
-                    config.combat_resolution_interval
-                ),
-                "default_roam_chance": int(config.default_roam_chance),
-                "flee_to_unknown_rooms": bool(config.flee_to_unknown_rooms),
-                "is_narrative": bool(config.is_narrative),
-                _WORLD_CONFIG_PLAYER_CREATION_FIELD: config.player_creation or {},
-                "can_select_gender": bool(config.can_select_gender),
-                "default_gender": config.default_gender,
-                "auto_equip": bool(config.auto_equip),
-                "players_can_set_title": bool(config.players_can_set_title),
-                "non_ascii_names": bool(config.non_ascii_names),
-                "globals_enabled": bool(config.globals_enabled),
-                "announce_duel_results": bool(config.announce_duel_results),
-                "decay_glory": bool(config.decay_glory),
-                "name_exclusions": config.name_exclusions or "",
             }
         )
+        # Community controls and rankings.
+        spec.update(
+            {
+                "globals_enabled": bool(config.globals_enabled),
+                "players_can_set_title": bool(config.players_can_set_title),
+                "leaderboards": copy.deepcopy(config.leaderboards),
+                "announce_duel_results": bool(config.announce_duel_results),
+                "decay_glory": bool(config.decay_glory),
+            }
+        )
+
+    # Presentation can contain long text; keep it below gameplay settings.
+    spec.update({
+        "short_description": world.short_description or "",
+        "description": world.description or "",
+        "motd": world.motd or "",
+        "entry_message": config.entry_message or "",
+        "entry_message_mode": config.entry_message_mode,
+        "small_background": config.small_background or "",
+        "large_background": config.large_background or "",
+        "built_by": config.built_by or "",
+    })
+
+    # Less frequent runtime maintenance and authored state defaults.
+    spec.update({
+        "never_reload": bool(config.never_reload),
+        "upkeep": authored_upkeep(world),
+        "cross_race_cooldown": int(config.cross_race_cooldown),
+        "initial_state": dict(world.initial_state or {}),
+    })
+    if not is_instance_world:
         spec.update(_export_world_systems(world))
 
     manifest = {
@@ -1265,7 +1299,6 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         "starting_room": _serialize_room_reference(config.starting_room),
         "death_room": _serialize_room_reference(config.death_room),
         "death_mode": config.death_mode,
-        "death_route": config.death_route,
         "death_currency": _serialize_currency_reference(config.death_currency),
         "death_currency_penalty": _serialize_number(config.death_currency_penalty),
         _WORLD_CONFIG_DEATH_ROUTING_FIELD: canonical_death_routing_manifest_value(

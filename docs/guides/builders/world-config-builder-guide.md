@@ -6,6 +6,12 @@ Use **Copy YAML** to copy the editor contents and **Save YAML** to apply changes
 to the selected world. **World > Edit** remains available for general and
 multi-document manifest workflows.
 
+Loading or saving reloads the YAML in the [standard field order](#yaml-field-order),
+with common controls first and related settings together. Reordering top-level
+keys in the editor does not change their meaning; the next reload restores the
+standard order. Ordered lists, such as `death_routing.routes`, keep their authored
+order and retain their existing priority rules.
+
 You can edit one field in the full YAML and save the whole document. Unchanged
 currency defaults and starting balances do not count as currency edits, so they
 do not block an unrelated change such as `starting_room` while the world is
@@ -32,30 +38,13 @@ spawn-plan traits for representable spawn variations. There is no
 kind: world
 spec:
   name: Edeus
-  short_description: A frontier realm.
-  description: A long world description.
-  motd: Questions? Join Discord.
   is_public: true
-  initial_state:
-    weather: clear
-    invasion_active: false
   starting_room: room@1
-  death_room: room@1
-  default_currency: crowns
-  starting_balances:
-    crowns: 0
-  starting_equipment:
-    - item_definition: itemdefinition.training_spear
-      count: 1
-      equip: false
-    - item_definition: itemdefinition.lockpick
-      count: 2
-      archetype: assassin
-  starting_level: 1
-  max_level: 20
-  leveling_curve: [0, 30, 100]
+  is_narrative: false
+  pvp_mode: free_for_all
   combat_resolution_interval: 0
   default_roam_chance: 10
+  death_room: room@1
   death_mode: lose_none
   death_currency: crowns
   death_currency_penalty: 0.2
@@ -73,15 +62,53 @@ spec:
       - when:
           eq: [state.character.divine_patron, poseidon]
         destination: room@12
-  pvp_mode: free_for_all
-  announce_duel_results: false
+  starting_level: 1
+  max_level: 20
   auto_equip: true
-  is_narrative: false
-  players_can_set_title: true
   non_ascii_names: false
+  starting_equipment:
+    - item_definition: itemdefinition.training_spear
+      count: 1
+      equip: false
+    - item_definition: itemdefinition.lockpick
+      count: 2
+      archetype: assassin
+  leveling_curve: [0, 30, 100]
+  default_currency: crowns
+  starting_balances:
+    crowns: 0
   globals_enabled: true
+  players_can_set_title: true
+  announce_duel_results: false
   decay_glory: false
+  short_description: A frontier realm.
+  description: A long world description.
+  motd: Questions? Join Discord.
+  initial_state:
+    weather: clear
+    invasion_active: false
 ```
+
+## YAML Field Order
+
+The Config editor and world/family exports use the same top-level order. Each
+group contains only fields supported by the selected base world or instance
+template; inherited base-world settings stay out of instance YAML.
+
+| Order | Group | Settings |
+| --- | --- | --- |
+| 1 | Core controls | Name, public visibility, starting room, narrative/PvP mode, combat timing, roaming, and fleeing. |
+| 2 | Instance run | Single-player access, time control, and completion goal. |
+| 3 | Death | Fallback room, loss mode and currency penalty, routing source, then routing rules. `death_routing_source` sits immediately before `death_routing`. |
+| 4 | Characters | Starting/max level, equipment behavior, gender/naming defaults, starting equipment, creation policy, XP curve, and abilities. Compact defaults precede the longer policy maps. |
+| 5 | Economy | Default currency, starting balances, and clan registration currency/cost. |
+| 6 | Community | Global commands, player titles, leaderboards, duel announcements, and glory decay. |
+| 7 | Presentation | Listing descriptions, message of the day, entry message/mode, backgrounds, and builder credit. |
+| 8 | Runtime maintenance | Reload policy, upkeep, cross-faction login cooldown, and initial world state. |
+| 9 | Detailed systems | The large `stats`, `combat`, and `equipment` maps. |
+
+Long descriptions and detailed system maps appear below everyday controls so
+they do not push entry, combat, instance, and death settings out of view.
 
 ## Lobby Leaderboards
 
@@ -534,7 +561,7 @@ manifests.
 | `can_select_faction` | Derived storage field. | Configure `player_creation.core_faction`. |
 | `allow_combat` | Stored field not accepted in world manifests. | Use `is_narrative`. |
 | `is_classless` | Legacy compatibility field accepted by import. | Configure `stats.class_profiles`; absence of class profiles means classless. |
-| `death_route` | Legacy authored field retained for compatibility; deterministic routing does not interpret it. | Configure `death_routing`. |
+| `death_route` | Removed WR1 faction/distance selector; not accepted in Core manifests or Config API updates. | Remove it from older YAML. Configure `death_routing` with `death_room` as the fallback. |
 | `starting_eq` | Removed legacy starter-equipment relation. | Configure `starting_equipment` with item-definition references. |
 | `exits_to` | Cross-world instance transfer field; not accepted inside `kind: world`. | Configure it through the family bundle's `world_config.exits_to` link. |
 | `can_create_chars` | Destination character-creation closure switch; import leaves it unchanged. | Manage access on the destination; author starting choices through `player_creation`. |

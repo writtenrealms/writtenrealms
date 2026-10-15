@@ -1,7 +1,7 @@
 # World Settings Portability Audit
 
-Reviewed September 16, 2026. This inventory covers all 50 fields declared on
-`WorldConfig`, plus the surrounding world metadata that matters when moving
+Originally reviewed September 16, 2026 and maintained as the schema changes.
+This inventory covers `WorldConfig` and the surrounding metadata that matters when moving
 authored content between instances. It distinguishes gameplay configuration
 from destination operation and live state. It does not define a WR1 database
 migration or a live-world synchronization protocol.
@@ -39,7 +39,6 @@ typed references are resolved within the imported family.
 | --- | --- |
 | `starting_room`, `death_room` | Local portable room references. |
 | `death_currency`, `death_currency_penalty`, `death_mode` | Local death policy; currency references use the shared currency code. |
-| `death_route` | Local legacy value is retained; current deterministic routing uses the related `death_routing` policy instead. |
 | `death_routing_source` | Instance-only selection of local or base routing. |
 | `exits_to` | Family header `world_config.exits_to` link, not a `kind: world` field. |
 | `instance_single_player`, `instance_time_control`, `instance_goal` | Instance-only admission, clock, and completion policy. |
@@ -69,6 +68,12 @@ Model identity and timestamps (`id`, `created_ts`, `modified_ts`) are local
 metadata. The related death-routing policy and ordered routes travel through
 `death_routing`; compiled snapshots and reference-retention records are
 destination implementation details.
+
+The obsolete WR1 `death_route` selector has been removed from the Core model,
+manifests, Config API, and runtime payloads. Older authored YAML must omit this
+key before import. Its faction/distance modes never controlled Core death
+handling; the active `death_routing` policy, `death_routing_source`, and
+`death_room` fallback are preserved.
 
 `can_create_chars` is checked by character creation and exposed in the lobby.
 It is an operational closure switch, like world maintenance, rather than a

@@ -1457,9 +1457,6 @@ class WorldConfig(BaseModel):
     death_mode = models.TextField(
         choices=list_to_choice(adv_consts.DEATH_MODES),
         default=adv_consts.DEATH_MODE_LOSE_NONE)
-    death_route = models.TextField(
-        choices=list_to_choice(adv_consts.DEATH_ROUTES),
-        default=adv_consts.DEATH_ROUTE_TOP_FACTION)
     death_routing_source = models.TextField(
         choices=list_to_choice(DEATH_ROUTING_SOURCES),
         default=DEATH_ROUTING_SOURCE_LOCAL,
