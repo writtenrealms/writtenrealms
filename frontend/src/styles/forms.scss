@@ -264,6 +264,13 @@ a[role="button"].btn-large {
   }
 }
 
+button.btn-medium:disabled,
+button.btn-large:disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
 button.btn-add,
 a[role="button"].btn-add {
   @include font-title-regular;

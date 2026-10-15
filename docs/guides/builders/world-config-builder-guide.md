@@ -290,7 +290,7 @@ merged with the base world's runtime state.
 | `starting_level` | integer >= 1 | `1` | Initial player level. |
 | `max_level` | integer >= 1 | `20` | Maximum automatic level. |
 | `leveling_curve` | list | WR2 default curve | Cumulative XP thresholds; first entry must be `0`. |
-| `player_creation` | mapping | `{}` | Player creation policy, including core faction choices and initial instance routes. |
+| `player_creation` | mapping | `{}` | Per-account character limit, core faction choices, and initial instance routes. |
 | `ability_progression` | mapping | `max_known: 8` | Known ability cap and starting abilities. |
 | `can_select_gender` | boolean | `true` | If false, new characters use `default_gender`. |
 | `default_gender` | choice | `male` | `male`, `female`, or `non_binary`. Also used by mobs without an explicit `gender` override, including in instances. |
@@ -302,6 +302,26 @@ and `default_gender`, even when they use the defaults. Importing into a new
 world or reimporting a later revision preserves both settings. Partial edits
 leave either setting unchanged when omitted. In family exports, these
 character-creation settings appear only on the base world's document.
+
+To cap ordinary characters per account, set this on the base world's World YAML:
+
+```yaml
+spec:
+  player_creation:
+    max_characters_per_account: 1
+```
+
+The limit must be a positive integer. Change it to `2` to allow two characters,
+or explicitly set it to `null` to restore unlimited creation (the default).
+Omitting it from a partial update preserves the current limit. Other creation
+policy fields, including introduction routes, are preserved by this partial edit.
+
+Only non-deleted, non-Builder characters count. Characters inside introduction
+or other instance runs still consume a slot in their base world. Ordinary
+characters owned by staff or builders count normally. Lowering the limit never
+removes existing characters; it blocks new creation until the account is below
+the cap. Deleting a character frees its slot. The lobby explains when the cap
+has been reached, and the server also enforces it for simultaneous requests.
 
 For progression details, see
 [leveling-builder-guide.md](leveling-builder-guide.md).

@@ -1,4 +1,5 @@
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import F, Q, Count, Max, Subquery, OuterRef, IntegerField
 from django.db.models.functions import Coalesce
 from django.utils import timezone
@@ -458,11 +459,14 @@ class WorldCharacters(WorldLobbyBase,
             )
         )
 
+    @transaction.atomic
     def perform_create(self, serializer):
         if self.world.instance_of_id:
             raise ValidationError(
                 'Create your character in the base world, then enter the instance.'
             )
+        from core.player_creation import enforce_character_limit
+        enforce_character_limit(self.world, self.request.user)
         # Create a new spawn world, or get one if it's a multiplayer world
         # that's already been spawned.
         if self.world.is_multiplayer:

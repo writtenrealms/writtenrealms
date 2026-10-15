@@ -2461,6 +2461,7 @@ spec:
   pvp_mode: zone
   announce_duel_results: false
   player_creation:
+    max_characters_per_account: null
     core_faction:
       mode: choose_required
       default: human
@@ -2480,6 +2481,15 @@ spec:
     admin
     moderator
 ```
+
+`player_creation.max_characters_per_account` is a positive integer or `null`
+(unlimited, the default). It is authored only on the base world and counts
+non-deleted, non-Builder characters across that world and its instance runs.
+Partial policy edits preserve omitted keys; explicitly setting this key to
+`null` removes the cap. A cap never deletes existing characters. Lobby creation
+locks the requesting account inside the creation transaction and uses an
+account-filtered, bounded existence query before allocating a spawn world.
+There is no shared world lock or per-tick work; unlimited worlds skip the check.
 
 `combat_resolution_interval` is the world-level encounter pacing knob, in
 seconds:

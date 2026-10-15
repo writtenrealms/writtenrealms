@@ -1,4 +1,4 @@
-"""Bounded, ordered initial-instance routing in the shared condition DSL."""
+"""Character slots and bounded initial-instance routing in the shared condition DSL."""
 from copy import deepcopy
 import re
 
@@ -7,6 +7,41 @@ from core.condition_dsl import ConditionContext, evaluate_condition, validate_co
 
 MAX_INSTANCE_ROUTES = 32
 CREATION_PATHS = {'player.core_faction', 'player.archetype', 'player.gender', 'player.level'}
+
+
+def character_limit(world):
+    return (getattr(world.config, 'player_creation', None) or {}).get('max_characters_per_account')
+
+
+def counted_characters(world, user):
+    """Account slots span the base world and all its instance runs."""
+    from django.db.models import Q
+    from spawns.models import Player
+
+    return Player.objects.filter(
+        Q(world__context_id=world.pk) | Q(world__context__instance_of_id=world.pk),
+        user_id=user.pk, is_builder=False, pending_deletion_ts__isnull=True,
+    ).order_by()
+
+
+def enforce_character_limit(world, user):
+    """Call inside the creation transaction, before allocating a spawn world."""
+    from rest_framework.exceptions import ValidationError
+    from users.models import User
+
+    maximum = character_limit(world)
+    if maximum is None:
+        return
+    # Serialize only this account's creations. An indexed account lookup avoids
+    # a shared world lock; keep it until the new character has been committed.
+    User.objects.select_for_update(no_key=True).only('pk').get(pk=user.pk)
+    # Stop at the cap instead of counting/materializing the entire collection.
+    if counted_characters(world, user)[maximum - 1:maximum].exists():
+        noun = 'character' if maximum == 1 else 'characters'
+        raise ValidationError({
+            'detail': f'This world allows {maximum} {noun} per account. You have reached the limit. Builder characters do not count.',
+            'code': 'character_limit_reached',
+        })
 
 
 def normalize_instance_routes(value, *, world=None):

@@ -43,6 +43,8 @@ export default function interceptorSetup() {
         }
       } else if (error.response.status == 400) {
         const errorData = error.response.data;
+        // The creation form shows this policy notice beside its controls.
+        if (errorData.code === 'character_limit_reached') return Promise.reject(error);
         let errorMsg = "Error";
         if (errorData.non_field_errors && errorData.non_field_errors.length) {
           errorMsg += ": " + errorData.non_field_errors[0];

@@ -45,6 +45,7 @@ import { useRoute, useRouter } from "vue-router";
 import { capfirst, formatRelativeModifiedDate } from "@/core/utils";
 import { ChevronRight } from "@lucide/vue";
 import { useCharEntry } from "@/composables/useCharEntry";
+import { characterCreationNotice } from "@/core/characterCreation";
 import CreateChar from "./CreateChar.vue";
 
 const VISIBLE_CHARS = 5;
@@ -62,7 +63,7 @@ const expanded = ref(false);
 const filter = ref('');
 
 onMounted(async () => {
-  if (route.query.create && store.getters.isAuthenticated) {
+  if (route.query.create && store.getters.isAuthenticated && !characterCreationNotice(world.value)) {
     store.commit("lobby/create_character_set", true);
   }
 });

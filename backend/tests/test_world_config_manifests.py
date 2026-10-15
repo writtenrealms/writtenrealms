@@ -67,6 +67,25 @@ class TestWorldConfigManifests(AuthenticatedBuilderWorldTestCase):
             args=[self.world.pk],
         )
 
+    def test_character_limit_yaml_round_trip_and_partial_policy_update(self):
+        self.world.config.player_creation = {'core_faction': {'mode': 'none'}, 'instance_routes': []}
+        self.world.config.save(update_fields=['player_creation'])
+        manifest = {
+            'kind': 'world', 'apiVersion': 'writtenrealms.com/v1alpha3',
+            'metadata': {'id': self.world.pk},
+            'spec': {'player_creation': {'max_characters_per_account': 1}},
+        }
+        response = self.client.post(self.apply_ep, {'manifest': yaml.safe_dump(manifest)}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        response = self.client.get(self.config_ep)
+        policy = yaml.safe_load(response.data['yaml'])['spec']['player_creation']
+        self.assertEqual(policy, {'core_faction': {'mode': 'none'}, 'instance_routes': [], 'max_characters_per_account': 1})
+        manifest['spec']['player_creation']['max_characters_per_account'] = None
+        response = self.client.post(self.apply_ep, {'manifest': yaml.safe_dump(manifest)}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.world.config.refresh_from_db()
+        self.assertIsNone(self.world.config.player_creation['max_characters_per_account'])
+
     def _instance_world(self):
         self.world.is_multiplayer = True
         self.world.save(update_fields=["is_multiplayer"])

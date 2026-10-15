@@ -171,6 +171,8 @@ def player_economy_payload(player):
 
 class PlayerSerializer(serializers.ModelSerializer):
 
+    # Builder avatars are created by the builder workflow, never by lobby input.
+    is_builder = serializers.BooleanField(read_only=True)
     archetype = serializers.CharField(required=False, allow_blank=True)
     can_transfer = serializers.SerializerMethodField()
     core_faction = serializers.SerializerMethodField()

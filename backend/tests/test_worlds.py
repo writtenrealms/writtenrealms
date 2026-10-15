@@ -21,6 +21,7 @@ class WorldBasicTestCase(WorldTestCase):
             reverse('lobby-world-detail', args=[world.key]))
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data['key'], world.key)
+        self.assertIsNone(resp.data['character_creation_limit'])
 
     def test_rename_world(self):
         "Tests that renaming a world also renames all of its spawned worlds"

@@ -30,10 +30,11 @@
             <button class="btn-medium" @click="playChar(resumeChar)">
               {{ needsTransfer(resumeChar) ? 'TRANSFER' : 'CONTINUE AS' }} {{ resumeChar.name.toUpperCase() }}
             </button>
-            <button class="btn-medium button-gray" @click="onClickCreateChar">NEW CHARACTER</button>
+            <button class="btn-medium button-gray" :disabled="!!creationNotice" @click="onClickCreateChar">NEW CHARACTER</button>
           </template>
-          <button v-else class="btn-medium" @click="onClickCreateChar">CREATE A CHARACTER</button>
+          <button v-else class="btn-medium" :disabled="!!creationNotice" @click="onClickCreateChar">CREATE A CHARACTER</button>
         </div>
+        <p v-if="isAuthenticated && creationNotice && !create_character" class="inline-notice mt-3" role="status">{{ creationNotice }}</p>
       </div>
     </div>
 
@@ -72,6 +73,7 @@ import UserChars from "@/components/lobby/UserChars.vue";
 import LeaderboardPanels from "@/components/lobby/LeaderboardPanels.vue";
 import { Pencil, Share } from "@lucide/vue";
 import { useCharEntry } from "@/composables/useCharEntry";
+import { characterCreationNotice } from "@/core/characterCreation";
 import defaultBackground from "@/assets/ui/world-home-bg.jpg";
 
 const store = useStore();
@@ -82,6 +84,7 @@ const loaded = ref(false);
 const loadError = ref('');
 
 const world = computed(() => store.state.lobby.world);
+const creationNotice = computed(() => characterCreationNotice(world.value));
 const leaderboards = computed(() => store.state.lobby.leaderboards);
 const leaderboardError = computed(() => store.state.lobby.leaderboardError);
 const leaderboardsLoading = computed(() => store.state.lobby.leaderboardsLoading);
@@ -105,6 +108,7 @@ const signupRoute = computed(() => ({
 }));
 
 const onClickCreateChar = () => {
+  if (creationNotice.value) return;
   if (!isAuthenticated.value) {
     router.push(signupRoute.value);
     return;

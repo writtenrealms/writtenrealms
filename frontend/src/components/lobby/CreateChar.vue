@@ -89,7 +89,8 @@
           </template>
         </div>
 
-        <button class="btn-large">CREATE CHARACTER</button>
+        <p v-if="creationNotice || creationError" class="inline-notice" role="status">{{ creationNotice || creationError }}</p>
+        <button class="btn-large" :disabled="submitting || !!creationNotice">CREATE CHARACTER</button>
       </form>
     </div>
     <div class="cancel-action" @click="onCancelCreate()">cancel</div>
@@ -105,12 +106,16 @@ import _ from "lodash";
 import Help from "@/components/Help.vue";
 import { INTRO_WORLD_ID } from "@/config";
 import { capfirst } from "@/core/utils";
+import { characterCreationNotice } from "@/core/characterCreation";
 
 const emit = defineEmits(['charcreated']);
 
 const store = useStore();
 const router = useRouter();
 const world = computed(() => store.state.lobby.world);
+const creationNotice = computed(() => characterCreationNotice(world.value));
+const creationError = ref('');
+const submitting = ref(false);
 const charname = ref("");
 const defaultGender = () => {
   if (world.value?.can_select_gender === false && world.value?.default_gender) {
@@ -200,6 +205,9 @@ watchEffect(() => {
 });
 
 async function createCharacter() {
+  if (submitting.value || creationNotice.value) return;
+  submitting.value = true;
+  creationError.value = '';
   const payload = {
     name: charname.value,
     gender: gender.value,
@@ -207,12 +215,20 @@ async function createCharacter() {
     faction: faction.value
   };
 
-  const response = await axios.post(`lobby/worlds/${router.currentRoute.value.params.world_id}/chars/`, payload);
-  if (response.status === 201) {
-    store.commit('lobby/char_create', response.data);
-    charname.value = "";
-    gender.value = defaultGender();
-    emit('charcreated', response.data);
+  try {
+    const response = await axios.post(`lobby/worlds/${router.currentRoute.value.params.world_id}/chars/`, payload);
+    if (response.status === 201) {
+      store.commit('lobby/char_create', response.data);
+      charname.value = "";
+      gender.value = defaultGender();
+      emit('charcreated', response.data);
+    }
+  } catch (error: any) {
+    const data = error.response?.data;
+    const message = data?.detail || data?.name?.[0] || data?.non_field_errors?.[0] || data?.[0];
+    creationError.value = typeof message === 'string' ? message : 'Could not create your character. Please try again.';
+  } finally {
+    submitting.value = false;
   }
 }
 

@@ -66,6 +66,9 @@ const mutations = {
   },
   char_create: (state, char) => {
     state.chars.splice(0, 0, char);
+    if (!char.is_builder && state.world?.character_creation_limit) {
+      state.world.character_creation_limit.used += 1;
+    }
   },
   set_world: (state, world) => {
     state.world = world;

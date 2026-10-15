@@ -21,6 +21,12 @@ to make another, or **Play** next to any character in your list. Private worlds
 require an account with access. Servers configured for multiple worlds show a
 **Worlds** directory instead; direct links to a world work in either setup.
 
+A world may limit how many characters each account can have. When you reach
+the limit, the lobby disables **New character** and shows an explanation.
+Builder characters do not count; characters inside introductions or other
+instances do. Deleting a character frees its slot. If a world's limit is
+lowered, your existing characters remain playable.
+
 While connecting, a compact notice at the top of the screen says **Entering
 world...** with a gold loading indicator. Success notices use a green check;
 errors use a red alert icon and explain what went wrong. Use the notice's **×**

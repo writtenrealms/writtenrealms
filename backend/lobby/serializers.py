@@ -42,6 +42,7 @@ class LobbyWorldSerializer(WorldSerializer):
 
     core_factions = serializers.SerializerMethodField()
     player_creation = serializers.SerializerMethodField()
+    character_creation_limit = serializers.SerializerMethodField()
 
     default_gender = serializers.CharField(source='config.default_gender',
                                            read_only=True)
@@ -77,6 +78,7 @@ class LobbyWorldSerializer(WorldSerializer):
             'can_create_chars',
             'can_select_faction',
             'player_creation',
+            'character_creation_limit',
             'small_background', 'large_background',
             'core_factions',
             'allow_combat', 'is_narrative',
@@ -159,6 +161,17 @@ class LobbyWorldSerializer(WorldSerializer):
                 "options": policy.options,
             },
         }
+
+    def get_character_creation_limit(self, world):
+        from core.player_creation import character_limit, counted_characters
+
+        maximum = character_limit(world)
+        if maximum is None:
+            return None
+        request = self.context.get('request')
+        user = request.user if request else self.context.get('user')
+        used = counted_characters(world, user).count() if user and user.is_authenticated else 0
+        return {'maximum': maximum, 'used': used}
 
     def get_is_private(self, world):
         return not world.is_public

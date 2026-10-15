@@ -130,7 +130,7 @@ def normalize_player_creation_config(
     if not isinstance(value, dict):
         raise serializers.ValidationError("spec.player_creation must be a mapping.")
 
-    unknown_top = sorted(set(value.keys()) - {"core_faction", "instance_routes"})
+    unknown_top = sorted(set(value.keys()) - {"core_faction", "instance_routes", "max_characters_per_account"})
     if unknown_top:
         raise serializers.ValidationError(
             f"Unsupported spec.player_creation field(s): {', '.join(unknown_top)}."
@@ -138,6 +138,13 @@ def normalize_player_creation_config(
 
     existing = existing or {}
     normalized = dict(existing)
+    if "max_characters_per_account" in value:
+        maximum = value["max_characters_per_account"]
+        if maximum is not None and (type(maximum) is not int or maximum < 1):
+            raise serializers.ValidationError(
+                "spec.player_creation.max_characters_per_account must be a positive integer or null."
+            )
+        normalized["max_characters_per_account"] = maximum
     if "instance_routes" in value:
         from core.player_creation import normalize_instance_routes
 
