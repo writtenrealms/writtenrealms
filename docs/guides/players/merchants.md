@@ -48,6 +48,11 @@ Entries marked **Unlimited** never sell out. Each purchase gives you a new copy,
 and you can reuse the same number while the view remains valid. Other entries
 have limited stock and may need time to restock.
 
+Hover over a current stock item on desktop, or tap it on mobile, to see its
+description, equipment slot, stats, and comparison with your equipped gear.
+This also works for **Unlimited** stock. The lookup includes a **BUY FOR**
+action showing the purchase price.
+
 ## Prices, Eligibility, and Funds
 
 Item lookups show the item's value and merchant action price with the currency

@@ -28,7 +28,11 @@ const store = useStore();
 
 const lookup = computed(() => store.state.game.lookup);
 
-const getKeyType = (key: string) => (key ? key.split(".")[0] : "");
+const getKeyType = (key: string) => {
+  const type = key ? key.split(".")[0] : "";
+  // Unlimited stock previews have a catalog key until a purchase creates an item.
+  return type === "merchant_stock_entry" ? "item" : type;
+};
 
 const findEntityByKey = (key: string): any => {
   const keyType = getKeyType(key);
