@@ -36,6 +36,7 @@ class TestCharacterLimits(WorldTestCase):
         response = self.create_character()
         self.assertEqual(response.status_code, 400, response.data)
         self.assertEqual(response.data['code'], 'character_limit_reached')
+        self.assertEqual(response.data['detail'], 'This world allows 1 character per account. You have reached the limit.')
         self.assertEqual(World.objects.count(), worlds_before)
         self.assertEqual(counted_characters(self.world, self.user).count(), 1)
 

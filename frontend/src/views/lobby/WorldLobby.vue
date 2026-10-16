@@ -30,11 +30,11 @@
             <button class="btn-medium" @click="playChar(resumeChar)">
               {{ needsTransfer(resumeChar) ? 'TRANSFER' : 'CONTINUE AS' }} {{ resumeChar.name.toUpperCase() }}
             </button>
-            <button class="btn-medium button-gray" :disabled="!!creationNotice" @click="onClickCreateChar">NEW CHARACTER</button>
+            <button class="btn-medium button-gray" @click="onClickCreateChar">NEW CHARACTER</button>
           </template>
-          <button v-else class="btn-medium" :disabled="!!creationNotice" @click="onClickCreateChar">CREATE A CHARACTER</button>
+          <button v-else class="btn-medium" @click="onClickCreateChar">CREATE A CHARACTER</button>
         </div>
-        <p v-if="isAuthenticated && creationNotice && !create_character" class="inline-notice mt-3" role="status">{{ creationNotice }}</p>
+        <p v-if="showCreationNotice && isAuthenticated && creationNotice && !create_character" class="inline-notice mt-3" role="status">{{ creationNotice }}</p>
       </div>
     </div>
 
@@ -82,6 +82,7 @@ const router = useRouter();
 
 const loaded = ref(false);
 const loadError = ref('');
+const showCreationNotice = ref(false);
 
 const world = computed(() => store.state.lobby.world);
 const creationNotice = computed(() => characterCreationNotice(world.value));
@@ -108,11 +109,15 @@ const signupRoute = computed(() => ({
 }));
 
 const onClickCreateChar = () => {
-  if (creationNotice.value) return;
   if (!isAuthenticated.value) {
     router.push(signupRoute.value);
     return;
   }
+  if (creationNotice.value) {
+    showCreationNotice.value = true;
+    return;
+  }
+  showCreationNotice.value = false;
   store.commit("lobby/create_character_set", true);
 };
 
@@ -142,6 +147,7 @@ async function loadWorld() {
   const worldId = route.params.world_id;
   loaded.value = false;
   loadError.value = '';
+  showCreationNotice.value = false;
   try {
     if (store.state.auth.user.is_temporary) {
       await store.dispatch('auth/logout');

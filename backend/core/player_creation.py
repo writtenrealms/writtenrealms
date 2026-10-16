@@ -39,7 +39,7 @@ def enforce_character_limit(world, user):
     if counted_characters(world, user)[maximum - 1:maximum].exists():
         noun = 'character' if maximum == 1 else 'characters'
         raise ValidationError({
-            'detail': f'This world allows {maximum} {noun} per account. You have reached the limit. Builder characters do not count.',
+            'detail': f'This world allows {maximum} {noun} per account. You have reached the limit.',
             'code': 'character_limit_reached',
         })
 

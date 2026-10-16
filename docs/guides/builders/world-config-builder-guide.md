@@ -320,8 +320,9 @@ Only non-deleted, non-Builder characters count. Characters inside introduction
 or other instance runs still consume a slot in their base world. Ordinary
 characters owned by staff or builders count normally. Lowering the limit never
 removes existing characters; it blocks new creation until the account is below
-the cap. Deleting a character frees its slot. The lobby explains when the cap
-has been reached, and the server also enforces it for simultaneous requests.
+the cap. Deleting a character frees its slot. If the cap has been reached, the
+lobby shows an explanation after the user selects **New character**. The server
+also enforces the limit for simultaneous requests.
 
 For progression details, see
 [leveling-builder-guide.md](leveling-builder-guide.md).

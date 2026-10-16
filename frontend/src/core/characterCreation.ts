@@ -3,5 +3,5 @@ export function characterCreationNotice(world: any): string {
   const limit = world?.character_creation_limit;
   if (!limit || limit.used < limit.maximum) return '';
   const noun = limit.maximum === 1 ? 'character' : 'characters';
-  return `This world allows ${limit.maximum} ${noun} per account. You have reached the limit. Builder characters do not count.`;
+  return `This world allows ${limit.maximum} ${noun} per account. You have reached the limit.`;
 }

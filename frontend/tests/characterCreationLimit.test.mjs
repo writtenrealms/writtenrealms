@@ -25,7 +25,7 @@ function makeWorld(limit = { maximum: 1, used: 1 }) {
 }
 
 test('limit messages handle one, several, unlimited, and closed creation', () => {
-  assert.match(characterCreationNotice(makeWorld()), /1 character per account/);
+  assert.equal(characterCreationNotice(makeWorld()), 'This world allows 1 character per account. You have reached the limit.');
   assert.match(characterCreationNotice(makeWorld({ maximum: 2, used: 3 })), /2 characters per account/);
   assert.equal(characterCreationNotice(makeWorld({ maximum: 2, used: 1 })), '');
   assert.equal(characterCreationNotice(makeWorld(null)), '');
@@ -47,7 +47,8 @@ test('an already-open creation form becomes disabled at the cap and remains avai
     const store = createStore({ state: { lobby: { world: makeWorld({ maximum: 1, used }) } } });
     const html = await renderToString(createSSRApp(CreateChar).use(store).use(router));
     if (used) {
-      assert.match(html, /Builder characters do not count/);
+      assert.match(html, /You have reached the limit/);
+      assert.doesNotMatch(html, /Builder characters do not count/);
       assert.match(html, /<button class="btn-large" disabled/);
     } else {
       assert.doesNotMatch(html, /<button class="btn-large" disabled/);

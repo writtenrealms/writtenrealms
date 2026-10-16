@@ -50,7 +50,7 @@
           <div class="sg-inline">
             <button class="btn-medium">CONTINUE AS ONYX</button>
             <button class="btn-medium button-gray">NEW CHARACTER</button>
-            <button class="btn-medium button-gray" disabled>LIMIT REACHED</button>
+            <button class="btn-medium button-gray" disabled>DISABLED</button>
           </div>
         </div>
         <div class="sg-row">
@@ -232,7 +232,8 @@
       <h2>Status and feedback</h2>
       <p class="sg-note">Use .inline-notice for persistent, informational feedback beside a form. Reserve red error styling for failures that need correction.</p>
       <p class="inline-notice" role="status">This site is currently invite-only. Please sign in with an invited email address, or contact the administrator to request an invitation.</p>
-      <p class="inline-notice" role="status">This world allows 1 character per account. You have reached the limit. Builder characters do not count.</p>
+      <p class="sg-note">Show character-limit feedback after the user selects New Character.</p>
+      <p class="inline-notice" role="status">This world allows 1 character per account. You have reached the limit.</p>
       <div class="sg-row sg-flush-row">
         <span class="sg-code">.tag</span>
         <div class="sg-inline">
