@@ -47,6 +47,7 @@ const routes = [
   { path: '/create', name: 'world-create', component: () => import('@/views/lobby/WorldCreate.vue'), beforeEnter: ifAuthenticated },
 
   // World Lobby
+  { path: '/worlds/:world_id/about', name: 'lobby_world_information', component: () => import('@/views/lobby/WorldInformation.vue') },
   { path: '/worlds/:world_id/:slug?', 'name': 'lobby_world_details', component: () => import('@/views/lobby/WorldLobby.vue') },
   { path: '/worlds/1/uniques', name: 'edeus_unique_bearers', component: () => import('@/views/lobby/EdeusUniques.vue') },
   { path: '/world/transfer/:player_id', name: 'lobby_world_transfer', component: () => import('@/views/auth/Transfer.vue') },

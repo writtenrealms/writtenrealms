@@ -21,6 +21,11 @@ to make another, or **Play** next to any character in your list. Private worlds
 require an account with access. Servers configured for multiple worlds show a
 **Worlds** directory instead; direct links to a world work in either setup.
 
+Choose **More information** below a world's description to read the builders'
+notes about its setting, rules, and getting started at `/worlds/<world_id>/about`.
+Use **Back to** at the top of that page to return to the world lobby. Private
+worlds keep the same access requirements on their information page.
+
 A world may limit how many characters each account can have. If you select
 **New character** after reaching the limit, the lobby shows an explanation.
 Builder characters do not count; characters inside introductions or other

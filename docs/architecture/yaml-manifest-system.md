@@ -2414,6 +2414,10 @@ kind: world
 spec:
   name: Edeus
   short_description: Core setting text
+  information: |
+    ## Welcome
+
+    Player-facing Markdown linked from the world lobby.
   description: Long world description
   motd: Questions? Join Discord.
   is_public: true

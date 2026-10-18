@@ -17,7 +17,7 @@ const chars = [char(1, 'Builder', true), ...(used ? [char(2, 'Alexios', false)] 
 const world = {
   id: 12, name: 'Phalanx', description: 'A world of ancient Greece. Closed alpha.',
   instance_of: {}, is_multiplayer: true, allow_combat: true, can_create_chars: !params.has('closed'),
-  can_edit: false, character_creation_limit: { maximum: 1, used },
+  can_edit: params.has('builder'), character_creation_limit: { maximum: 1, used },
   is_classless: true, can_select_gender: true, core_factions: [], player_creation: {},
 };
 axios.defaults.adapter = async config => {
@@ -40,6 +40,8 @@ const store = createStore({
 });
 const router = createRouter({ history: createMemoryHistory(), routes: [
   { path: '/worlds/:world_id', name: 'lobby_world_details', component: WorldLobby },
+  { path: '/worlds/:world_id/about', name: 'lobby_world_information', component: {} },
+  { path: '/build/worlds/:world_id', name: 'builder_world_index', component: {} },
   { path: '/characters/:player_id', name: 'character_details', component: {} },
 ] });
 await router.push('/worlds/12' + (params.has('deep') ? '?create=1' : ''));
@@ -50,6 +52,11 @@ const notice = document.querySelector('[role="status"]')?.textContent || '';
 const buttons = Array.from(document.querySelectorAll('button'));
 const create = buttons.find(button => button.textContent === 'NEW CHARACTER');
 const opensFromLink = !used && !params.has('closed') && params.has('deep');
+const information = document.querySelector('.world-information-link')!.getBoundingClientRect();
+const description = document.querySelector('.world-description .desc-line:last-of-type')!.getBoundingClientRect();
+if (information.top < description.bottom || information.top - description.bottom > 16 || Math.abs(information.left - description.left) > 1) {
+  throw new Error('More information must sit directly below and align with the world description');
+}
 if ((!opensFromLink && !create) || create?.disabled || notice) {
   throw new Error('New Character must remain interactive without showing a notice initially');
 }

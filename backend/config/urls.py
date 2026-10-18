@@ -85,6 +85,7 @@ api_v1_urls = [
     path('lobby/worlds/search/', lobby_views.SearchWorlds.as_view(), name='lobby-worlds-search'),
     path('lobby/worlds/1/uniques/', lobby_views.EdeusUniques.as_view(), name='lobby-worlds-edeus-uniques'),
     path('lobby/worlds/<pk>/', lobby_views.WorldDetail.as_view(), name='lobby-world-detail'),
+    path('lobby/worlds/<pk>/information/', lobby_views.WorldInformation.as_view(), name='lobby-world-information'),
     path('lobby/worlds/<pk>/chars/', lobby_views.world_chars, name='lobby-world-chars'),
     path('lobby/worlds/<world_pk>/chars/<pk>/', lobby_views.world_char, name='lobby-world-char'),
     path('lobby/worlds/<pk>/leaders/', lobby_views.world_leaders, name='lobby-world-leaders'),

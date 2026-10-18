@@ -1308,6 +1308,15 @@ class InstanceParticipant(BaseModel):
         return "%s in %s" % (self.player, self.run)
 
 
+class WorldInformation(models.Model):
+    """Authored lobby Markdown, loaded only when reading or editing its page."""
+
+    MAX_LENGTH = 50000
+
+    world = models.OneToOneField(World, on_delete=models.CASCADE, primary_key=True)
+    information = models.TextField(blank=True, default='', max_length=MAX_LENGTH)
+
+
 class WorldLocks(BaseModel):
 
     world = models.OneToOneField(World, on_delete=models.CASCADE)

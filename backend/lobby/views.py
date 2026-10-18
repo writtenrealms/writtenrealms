@@ -40,6 +40,7 @@ from system import (
 from users import serializers as user_serializers
 from users.models import User
 from worlds.models import Room, World
+from worlds.information import WorldInformationInputSerializer, save_world_information, world_information
 
 
 class LobbyConfig(APIView):
@@ -429,6 +430,25 @@ class WorldDetail(WorldLobbyBase,
 
     def get_object(self):
         return self.world
+
+
+class WorldInformation(WorldLobbyBase, APIView):
+    def get(self, request, pk):
+        return Response({
+            'id': self.world.pk,
+            'name': self.world.name,
+            'information': world_information(self.world),
+            'can_edit': self.world.can_edit(request.user),
+        })
+
+    def patch(self, request, pk):
+        if not self.world.can_edit(request.user):
+            raise PermissionDenied('You do not have permission to edit this world.')
+        serializer = WorldInformationInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        information = serializer.validated_data['information']
+        save_world_information(self.world, information)
+        return Response({'information': information})
 
 
 class WorldCharacters(WorldLobbyBase,

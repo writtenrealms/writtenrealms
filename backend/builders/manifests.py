@@ -142,6 +142,7 @@ from core.world_config import (
 )
 from spawns import trigger_matcher
 from worlds.models import Room, World, WorldConfig, Zone
+from worlds.information import WorldInformationInputSerializer, save_world_information, world_information
 from worlds.room_refs import (
     format_room_manifest_ref,
     parse_room_reference,
@@ -459,6 +460,7 @@ class ParsedWorldConfigManifest:
     death_routing_source: str | None = None
     player_creation_patch: Any = None
     upkeep_patch: Any = None
+    information: str | None = None
 
 
 @dataclass
@@ -1223,6 +1225,7 @@ def world_config_to_manifest(
     spec.update({
         "short_description": world.short_description or "",
         "description": world.description or "",
+        "information": world_information(world),
         "motd": world.motd or "",
         "entry_message": config.entry_message or "",
         "entry_message_mode": config.entry_message_mode,
@@ -7670,6 +7673,7 @@ def parse_world_config_manifest(
     allowed_fields.add("initial_state")
     allowed_fields.add("instance_goal")
     allowed_fields.add("leaderboards")
+    allowed_fields.add("information")
     allowed_fields.update({
         "default_currency",
         "starting_balances",
@@ -7725,6 +7729,11 @@ def parse_world_config_manifest(
             )
 
     world_updates: dict[str, Any] = {}
+    information = None
+    if "information" in spec:
+        information_input = WorldInformationInputSerializer(data={"information": spec["information"]})
+        information_input.is_valid(raise_exception=True)
+        information = information_input.validated_data["information"]
     for field_name in _WORLD_CONFIG_WORLD_TEXT_FIELDS:
         if field_name in spec:
             world_updates[field_name] = _coerce_text(spec.get(field_name))
@@ -8083,6 +8092,7 @@ def parse_world_config_manifest(
         death_routing_source=death_routing_source,
         player_creation_patch=copy.deepcopy(spec.get(_WORLD_CONFIG_PLAYER_CREATION_FIELD)),
         upkeep_patch=copy.deepcopy(spec.get('upkeep')),
+        information=information,
     )
 
 
@@ -8172,6 +8182,8 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
         except ValidationError as exc:
             detail = exc.message_dict if hasattr(exc, "message_dict") else exc.messages
             raise serializers.ValidationError(detail) from exc
+        if parsed.information is not None:
+            save_world_information(world, parsed.information)
         world_updates = parsed.world_updates
         if world_updates:
             for field_name, value in world_updates.items():

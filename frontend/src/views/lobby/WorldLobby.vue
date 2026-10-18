@@ -42,6 +42,9 @@
       <div class="world-main" :class="{ creating: create_character }">
         <div class="world-description">
           <div class="desc-line" v-for="(line, index) of descLines" :key="index">{{ line }}</div>
+          <router-link class="world-information-link" :to="{ name: 'lobby_world_information', params: { world_id: route.params.world_id } }">
+            More information <ArrowRight :size="16" aria-hidden="true" />
+          </router-link>
         </div>
 
         <UserChars />
@@ -71,7 +74,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
 import UserChars from "@/components/lobby/UserChars.vue";
 import LeaderboardPanels from "@/components/lobby/LeaderboardPanels.vue";
-import { Pencil, Share } from "@lucide/vue";
+import { ArrowRight, Pencil, Share } from "@lucide/vue";
 import { useCharEntry } from "@/composables/useCharEntry";
 import { characterCreationNotice } from "@/core/characterCreation";
 import defaultBackground from "@/assets/ui/world-home-bg.jpg";
@@ -354,9 +357,25 @@ watch(() => route.params.world_id, (worldId) => {
     line-height: 28px;
     max-width: 64ch;
 
-    div.desc-line:not(:last-child) {
-      margin-bottom: 0.8em;
+    div.desc-line + div.desc-line {
+      margin-top: 0.8em;
     }
+  }
+
+  .world-information-link {
+    @include font-title-light;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    margin-top: 8px;
+    font-size: 16px;
+    color: $color-text;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+
+    &:hover,
+    &:focus-visible { color: $color-secondary; }
   }
 }
 </style>

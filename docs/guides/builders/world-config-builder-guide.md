@@ -6,6 +6,42 @@ Use **Copy YAML** to copy the editor contents and **Save YAML** to apply changes
 to the selected world. **World > Edit** remains available for general and
 multi-document manifest workflows.
 
+## World information
+
+Open **More information** below the description in your world's lobby to visit
+`/worlds/<world_id>/about`. Players see a formatted page; the author, staff, and
+builders with editing access can choose **Edit**. An empty page opens the editor
+automatically for these builders.
+Write plain Markdown, use **Preview** to check it, then **Save** to publish it on
+the world's information page. **Cancel** discards the draft. Failed saves keep
+your draft available for retry, and leaving with unsaved changes asks first.
+
+Headings, paragraphs, emphasis, lists, links, images, quotes, tables, and code
+blocks are supported. Code blocks preserve indentation and line breaks, and
+wrap long lines to fit the page. Raw HTML is shown as text. Content is limited to
+50,000 characters. Keep the lobby description brief; use this page for longer
+setting notes, world rules, and guidance for new players.
+
+The same Markdown is available as `spec.information` in World Config YAML and
+travels with world exports/imports. Omitting it preserves existing content;
+setting it to an empty string clears the page. Instance templates can have their
+own information. Public pages are readable by visitors; private pages follow
+the world's lobby access rules.
+
+```yaml
+kind: world
+spec:
+  information: |
+    ## Welcome
+
+    Explore ancient Greece and choose your path.
+
+    - Meet the locals.
+    - Find your first quest.
+```
+
+## Editing world configuration
+
 Loading or saving reloads the YAML in the [standard field order](#yaml-field-order),
 with common controls first and related settings together. Reordering top-level
 keys in the editor does not change their meaning; the next reload restores the

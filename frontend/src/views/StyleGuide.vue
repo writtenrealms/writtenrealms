@@ -162,6 +162,15 @@
       </div>
     </section>
 
+    <section id="markdown" class="sg-section">
+      <h2>Markdown content</h2>
+      <p class="sg-note">Use <span class="sg-code">MarkdownContent</span> for builder-authored Markdown.
+        It provides document spacing, headings, lists, quotes, code, tables, links, and responsive images with site tokens.
+        Code blocks use a single padded surface and wrap long lines while preserving indentation and line breaks.
+        Raw HTML is displayed as text.</p>
+      <MarkdownContent :source="markdownExample" />
+    </section>
+
     <!-- Lists -->
     <section id="lists" class="sg-section">
       <h2>Lists</h2>
@@ -374,6 +383,9 @@
 </template>
 
 <script lang="ts" setup>
+import MarkdownContent from '@/components/MarkdownContent.vue';
+
+const markdownExample = '## Welcome to Phalanx\n\nExplore **ancient Greece** and choose your path. Read the [player guides](/docs/players/).\n\n- Meet the locals.\n- Find your first quest.\n\n> A world shaped by its players.\n\nType `look` to begin.\n\n```text\nA long passage can wrap naturally inside a code block, keeping the whole message readable even on a narrow screen.\n    Indentation and explicit line breaks are preserved.\n```\n\n| Place | Activity |\n| --- | --- |\n| Agora | Trade and conversation |';
 import { useStore } from "vuex";
 import {
   Backpack, Check, ChevronDown, Coins, Copy, Ellipsis, ExternalLink, Heart, Info,
@@ -422,6 +434,7 @@ const sections = [
   { id: "notifications", title: "Notifications" },
   { id: "forms", title: "Forms" },
   { id: "typography", title: "Typography" },
+  { id: "markdown", title: "Markdown content" },
   { id: "lists", title: "Lists" },
   { id: "panels", title: "Panels" },
   { id: "metrics", title: "Metrics and notices" },

@@ -90,6 +90,7 @@ INSTANCE_LOCAL_MANIFEST_FIELDS = {
     "death_routing",
     "death_routing_source",
     "description",
+    "information",
     "is_public",
     "initial_state",
     "large_background",
