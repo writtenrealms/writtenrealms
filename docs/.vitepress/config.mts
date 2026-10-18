@@ -88,13 +88,32 @@ const playerSidebar: DefaultTheme.SidebarItem[] = [
   { text: "Socials", link: "/players/socials" },
 ];
 
+const adminSidebar: DefaultTheme.SidebarItem[] = [
+  { text: "Admin home", link: "/administrators/" },
+  {
+    text: "Set up an instance",
+    items: [
+      { text: "Quick start", link: "/administrators/quick-start" },
+      { text: "Sign-in and access", link: "/administrators/sign-in-and-access" },
+      { text: "Production hosting", link: "/administrators/production-hosting" },
+    ],
+  },
+  {
+    text: "Run your instance",
+    items: [
+      { text: "Control Panel", link: "/administrators/control-panel" },
+      { text: "Operations and backups", link: "/administrators/operations" },
+    ],
+  },
+];
+
 export default defineConfig({
   base: "/docs/",
   srcDir: "guides",
   lang: "en-US",
-  title: "Written Realms Guides",
-  titleTemplate: ":title | Written Realms Guides",
-  description: "Builder and player guides for Written Realms.",
+  title: "Written Realms Core",
+  titleTemplate: ":title | Written Realms Core",
+  description: "Player, builder, and administrator guides for Written Realms Core.",
   cleanUrls: true,
   // Production releases use git archive, which does not include Git metadata.
   lastUpdated: existsSync(new URL("../../.git", import.meta.url)),
@@ -123,15 +142,15 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: "Home", link: "/" },
-      { text: "Builder Guides", link: "/builders/" },
-      { text: "Player Guides", link: "/players/" },
-      { text: "Administration", link: "/administrators/control-panel" },
-      { text: "Written Realms Core", link: "https://core.writtenrealms.com" },
+      { text: "Builders", link: "/builders/" },
+      { text: "Players", link: "/players/" },
+      { text: "Admins", link: "/administrators/" },
     ],
+    coreLink: { text: "Written Realms Core", link: "https://core.writtenrealms.com" },
     sidebar: {
       "/builders/": builderSidebar,
       "/players/": playerSidebar,
-      "/administrators/": [{ text: "Control Panel", link: "/administrators/control-panel" }],
+      "/administrators/": adminSidebar,
     },
     search: {
       provider: "local",
@@ -159,7 +178,7 @@ export default defineConfig({
     },
     externalLinkIcon: true,
     footer: {
-      message: "Guides for Written Realms builders and players.",
+      message: "Guides for Written Realms players, builders, and administrators.",
       copyright: "Written Realms",
     },
   },

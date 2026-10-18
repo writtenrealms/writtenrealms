@@ -1,5 +1,9 @@
 # Control Panel
 
+For a fresh installation, follow [Quick start](quick-start.md) first. Use
+[Sign-in and access](sign-in-and-access.md) for email and identity-provider
+configuration, and [Operations and backups](operations.md) for service recovery.
+
 Sign in with an active staff account and select **Control Panel** in the header (**Control** on small screens), or open `/staff/panel` on your installation. Staff status is required for both the page and every administrative API. A world builder is not automatically a platform administrator.
 
 If staff status changes while you are signed in, open `/staff` directly. The page checks your current account permissions with the server before allowing access. Reloading any page also refreshes the account information used by the header.
@@ -28,7 +32,7 @@ Access changes apply to sign-in, authenticated API calls, WebSocket authenticati
 
 Existing accounts are separate from invitations: creating an account does not automatically add it to the whitelist. Staff can always sign in, even without a whitelist entry. A database export includes both the saved mode and the invitations; importing it into another installation carries that access policy with it.
 
-**Open building** controls who can create worlds. Turning it off preserves existing builder assignments and staff access. The **main world** setting controls where the homepage and lobby lead; leaving it blank restores the multi-world entry page. Selecting a main world does not publish it or grant permission to enter a private world.
+**Allow everyone to create worlds** controls open building. Turning it off preserves existing builder assignments and staff access. **Promoted world ID** selects the main world where the homepage and lobby lead; leaving it blank restores the multi-world entry page. Selecting a main world does not publish it or grant permission to enter a private world.
 
 **Maintenance mode** blocks new non-staff world entry and world starts while allowing existing players to continue. Use **Closed** when you also need to block non-staff API requests and game commands.
 

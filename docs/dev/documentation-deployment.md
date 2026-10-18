@@ -25,6 +25,14 @@ instead runs the development server at `http://localhost:5174/docs/`.
 The `/docs/` base is configured in `docs/.vitepress/config.mts`; the production
 output is `docs/.vitepress/dist/`.
 
+The site title, header links, and `coreLink` destination are configured in
+`docs/.vitepress/config.mts`. The homepage hero and cards live in
+`docs/guides/index.md`. The default VitePress theme is extended in
+`docs/.vitepress/theme/Layout.vue` and `NavExtra.vue` to put the Core link,
+appearance switch, and GitHub link in one desktop overflow menu. The Core
+link also appears in the mobile menu. Visual overrides live in
+`docs/.vitepress/theme/custom.css`.
+
 Check the home page, a builder guide, a player guide, search, and a section
 bookmark. Styles, scripts, links, and search results must all stay under
 `/docs/`. The host must resolve clean guide URLs to their generated `.html`

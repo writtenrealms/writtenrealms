@@ -2,6 +2,11 @@
 
 This repository uses environment variables to manage sensitive configuration data. This guide explains how to set up your local development environment.
 
+For a first installation, use the public [admin quick start](../guides/administrators/quick-start.md),
+which includes administrator sign-in and the first world. See
+[production hosting](../guides/administrators/production-hosting.md) for the
+deployment requirements; the default Compose stack is development-only.
+
 ## Quick Start
 
 1. **Copy the example environment file:**
@@ -9,7 +14,8 @@ This repository uses environment variables to manage sensitive configuration dat
    cp .env.example .env
    ```
 
-2. **Use Python 3.10 locally** to match the Docker runtime.
+2. **Use Docker's Python runtime.** The backend image uses Python 3.13; a host
+   Python installation is not required for the Compose quick start.
 
 3. **Edit `.env`** with your actual credentials (this file is gitignored and won't be committed)
 
@@ -77,8 +83,8 @@ docker compose up -d --build
 ## Main world and lobby
 
 Core opens a single world's lobby by default: `/`, `/home`, and `/lobby`
-redirect to `/worlds/1`. After creating or importing your world, set **Main
-world id** in the staff Control Panel at `/staff` or on the `prod` record in Django admin → System → Site controls
+redirect to `/worlds/1`. After creating or importing your world, set **Promoted
+world ID** in the staff Control Panel at `/staff` or **Main world id** on the `prod` record in Django admin → System → Site controls
 (`/admin/system/sitecontrol/`). Use the root world's database ID, not a runtime
 spawn or instance ID. For example, to promote local world 12:
 
@@ -188,7 +194,7 @@ to leave the stack stopped.
 
 ### Django Configuration
 - `DJANGO_SECRET_KEY` - Django secret key for sessions/CSRF (**required**)
-- `DJANGO_SETTINGS_MODULE` - Settings module to use (default: backend.config.settings.container)
+- `DJANGO_SETTINGS_MODULE` - Set to `backend.config.settings.container` for the local stack
 
 ### JWT Configuration
 - `JWT_SECRET` - Secret key for JWT token signing (**required**)

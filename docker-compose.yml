@@ -16,6 +16,8 @@ services:
     working_dir: /code/backend
     environment:
       - PYTHONPATH=/code
+      # Local sign-in emails must appear immediately in docker compose logs.
+      - PYTHONUNBUFFERED=1
       - INSTANCE_ID=container
       - DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE}
       - POSTGRES_DB=${POSTGRES_DB}

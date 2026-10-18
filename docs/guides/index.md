@@ -1,10 +1,11 @@
 ---
 layout: home
+title: Guides and Documentation
 
 hero:
-  name: Written Realms Guides
-  text: Build a world. Find your way through one.
-  tagline: Practical references for builders and players using Written Realms Core.
+  name: Written Realms Core
+  text: Guides and Documentation
+  tagline: Practical guides for players, builders, and server administrators.
   actions:
     - theme: brand
       text: Start building
@@ -32,4 +33,9 @@ features:
     details: Start by asking other players for help, then learn movement, combat, crafting, and more.
     link: /players/
     linkText: Browse player guides
+  - icon: ⚙️
+    title: Admin guides
+    details: Set up your own Core instance, configure sign-in and access, and keep it running.
+    link: /administrators/
+    linkText: Set up an instance
 ---

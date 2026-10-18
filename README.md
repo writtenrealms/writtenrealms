@@ -13,7 +13,7 @@ A text-based multiplayer game engine with real-time websocket communication, bui
 
 1. **Clone the repository**
    ```bash
-   git clone git@github.com:writtenrealms/writtenrealms.git
+   git clone https://github.com/writtenrealms/writtenrealms.git
    cd writtenrealms
    ```
 
@@ -39,6 +39,12 @@ A text-based multiplayer game engine with real-time websocket communication, bui
    - Frontend: http://localhost:5200
    - API: http://localhost:8000/api/v1/
    - Database: localhost:5432
+
+Continue with the [admin quick start](docs/guides/administrators/quick-start.md)
+to create the first administrator, sign in through local email output, initialize
+site access, and create a world. The default stack is for local development;
+read [production hosting](docs/guides/administrators/production-hosting.md) before
+exposing an installation to the internet.
 
 ### Generating Secure Keys
 
@@ -121,7 +127,7 @@ docker compose up -d --build
 
 ## Documentation
 
-Builder and player guides are published at
+Player, builder, and administrator guides are published at
 [core.writtenrealms.com/docs/](https://core.writtenrealms.com/docs/). The public guide
 sources live in `docs/guides/` and are built with VitePress:
 
@@ -142,6 +148,8 @@ through [the documentation workflow](.github/workflows/docs.yml).
 
 See [Documentation Deployment](docs/dev/documentation-deployment.md) for the
 build, redirect, and verification workflow.
+
+For self-hosting, start with the [Admin Guides](docs/guides/administrators/index.md).
 
 For engineering setup, architecture, and troubleshooting, see:
 
