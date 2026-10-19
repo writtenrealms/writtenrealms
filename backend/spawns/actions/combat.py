@@ -1596,22 +1596,18 @@ def apply_player_death(
     ]
     if runtime_changed:
         from spawns.state_payloads import build_state_sync
-        from spawns.text_output import render_event_text
 
         # Restore the destination world's explored map and world metadata.
         # Send this before arrival triggers can relocate the player again.
+        # The death event already displays the room; this refresh is silent.
         # Local deaths keep the existing compact room update.
         state_payload = build_state_sync(updated_player).model_dump()
+        state_payload["reason"] = "death"
         events.append(
             GameEvent(
                 type="cmd.state.sync.success",
                 recipients=[updated_player.key],
                 data=state_payload,
-                text=render_event_text(
-                    "cmd.state.sync.success",
-                    state_payload,
-                    viewer=updated_player,
-                ),
             ),
         )
     events.extend([

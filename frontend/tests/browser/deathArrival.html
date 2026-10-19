@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Death arrival regression</title>
+    <style>
+      #app { width: 100%; max-width: 1100px; margin: 0 auto; }
+      #app.mobile { max-width: 390px; }
+      #console-wrapper { height: calc(100dvh - 50px); }
+      #results { position: fixed; bottom: 0; left: 0; font: 12px monospace; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <output id="results">Running death arrival checks…</output>
+    <script type="module" src="./deathArrival.ts"></script>
+  </body>
+</html>

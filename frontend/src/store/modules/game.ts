@@ -500,9 +500,14 @@ const receiveMessage = async ({
     TRIGGER_MOBS_CHANGED_MESSAGE,
   ];
 
+  // Death already presents the destination room. Its full world refresh must
+  // still update live state without replacing the visible room's controls.
+  const isDeathStateSync = message_data.type === "cmd.state.sync.success"
+    && message_data.data?.reason === "death";
+
   // Add visible messages to the console history. message_add establishes the
   // immutable snapshot boundary before live state processing begins.
-  if (skip_messages.indexOf(message_data.type) == -1) {
+  if (!isDeathStateSync && skip_messages.indexOf(message_data.type) == -1) {
     commit("message_add", message_data);
     const historyMessage = state.messages[state.messages.length - 1];
     console.log(`RECV ${historyMessage.type}`);
@@ -581,7 +586,9 @@ const receiveMessage = async ({
     if (message_data.data.room && message_data.data.room.key) {
       commit("set_room_key", message_data.data.room.key);
     }
-    commit("last_viewed_room_message_set", message_data);
+    if (!isDeathStateSync) {
+      commit("last_viewed_room_message_set", message_data);
+    }
     const world_data = {
       ...state.world,
       ...message_data.data.world,

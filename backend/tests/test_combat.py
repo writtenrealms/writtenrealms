@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from core.combat_formulas import normalize_combat_system
 from core.computations import compute_stats
+from core.scoped_state import STATE_SCOPE_CHARACTER, get_state_snapshot, replace_state_snapshot
 from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 from builders.currencies import create_currency
@@ -26,7 +27,7 @@ from spawns.models import (
     PreparedGameAction,
 )
 from spawns.wallet import balance_map, mutate_balances
-from spawns.tasks import resolve_combat_encounter
+from spawns.tasks import execute_trigger_script_segments, resolve_combat_encounter
 from tests.base import WorldTestCase
 from worlds.models import Door, Doorway, Room
 from tests.utils import (
@@ -184,6 +185,46 @@ class TestKillCommand(WorldTestCase):
             and "old death hook" in entry["message"].get("text", "")
         ]
         self.assertEqual(len(compatibility_echoes), 1)
+
+    def test_death_arrival_script_resets_character_state_without_usage_error(self):
+        death_room = self.room.create_at("east")
+        self.world.config.death_room = death_room
+        self.world.config.save(update_fields=["death_room"])
+        replace_state_snapshot(
+            STATE_SCOPE_CHARACTER, self.player, {"starter_gear_issued": True},
+        )
+        Trigger.objects.create(
+            world=self.world,
+            scope=adv_consts.TRIGGER_SCOPE_ROOM,
+            kind=adv_consts.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(Room),
+            target_id=death_room.id,
+            event=adv_consts.TRIGGER_EVENT_AFTER_DEATH_ROOM_ENTER,
+            script=(
+                "/cmd room -- /state set character {{ actor_key }} starter_gear_issued false\n"
+                "/cmd room -- /echo You slowly come back to your senses.\n"
+            ),
+            display_action_in_room=False,
+            gate_delay=0,
+        )
+
+        _, events = apply_player_death(player=self.player)
+        with capture_game_messages() as messages, patch(
+            "spawns.tasks.execute_trigger_script_segments.apply_async",
+        ) as scheduled_line:
+            with self.captureOnCommitCallbacks(execute=True):
+                publish_events(events, actor_key=self.player.key)
+            scheduled_line.assert_called_once()
+            execute_trigger_script_segments(**scheduled_line.call_args.kwargs["kwargs"])
+
+        self.assertIs(
+            get_state_snapshot(STATE_SCOPE_CHARACTER, self.player)["starter_gear_issued"],
+            False,
+        )
+        self.assertFalse(self._messages_by_type(messages, "cmd./state.error"))
+        echoes = self._messages_by_type(messages, "notification./echo", self.player.key)
+        self.assertEqual(len(echoes), 1)
+        self.assertEqual(echoes[0]["text"], "You slowly come back to your senses.")
 
     def test_all_death_modes_reset_current_vitals_to_one(self):
         for death_mode in adv_consts.DEATH_MODES:

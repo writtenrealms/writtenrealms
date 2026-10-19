@@ -156,6 +156,14 @@ Common trigger patterns:
   `/cmd room -- /state set character {{ actor_key }} ...`
 - broadcast dynamic text with `{{ state.* }}` substitutions
 
+Character targets go directly after `character`; `/state` does not accept
+`--target`. For example, an `after_death_room_enter` trigger can reset a player's
+starter-gear flag with:
+
+```text
+/cmd room -- /state set character {{ actor_key }} starter_gear_issued false
+```
+
 For post-entry room events such as traps, use room state to keep the event from
 repeating:
 

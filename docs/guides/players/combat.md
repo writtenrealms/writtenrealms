@@ -332,6 +332,8 @@ instead be configured to use the base world's death routing. In that case its
 own death penalty is applied in the instance first, then you and any surviving
 carried equipment return atomically to the exact base-world runtime from which
 you entered. Items or a corpse left by the penalty remain in the instance.
+The arrival displays your death message and destination room once, and restores
+the base world's explored map before any arrival scripts run.
 
 After every death, your current health, energy (mana in worlds that use that
 label), and stamina are each set to 1. They then recover through normal

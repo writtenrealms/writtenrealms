@@ -1239,6 +1239,12 @@ class TestDeterministicDeathRoutingRuntime(WorldTestCase):
         ]
         self.assertEqual(len(sync_events), 1)
         sync = sync_events[0]
+        self.assertEqual(sync.data["reason"], "death")
+        self.assertIsNone(sync.text)
+        death_events = [event for event in events if event.type == "affect.death"]
+        self.assertEqual(len(death_events), 1)
+        self.assertEqual(death_events[0].text, "You have been slain.")
+        self.assertEqual(death_events[0].data["room"]["id"], base_destination.id)
         self.assertEqual(sync.recipients, [self.player.key])
         self.assertEqual(sync.data["world"]["id"], self.spawn_world.id)
         self.assertEqual(sync.data["world"]["name"], self.spawn_world.name)
