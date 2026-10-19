@@ -7,6 +7,9 @@ import WorldInformation from '../../src/views/lobby/WorldInformation.vue';
 import '../../src/styles/app.scss';
 
 const params = new URLSearchParams(location.search);
+const builtBy = params.has('no-credit') ? '' : params.has('blank-credit') ? '   '
+  : params.has('long-credit') ? 'The Phalanx builders and their extraordinarily dedicated collaborators'
+  : '<Builders> & friends';
 const codeSample = 'Dawn of the fifth century BC. The Achaemenid Empire has swallowed the East. Thrace and Macedonia have already fallen. Now the armies turn west, threatening the freedom of the Greek cities and the existence of Olympus.\n    Keep this indentation.\n' + 'long-command-'.repeat(20) + '\n';
 const sample = '```text\n' + codeSample + '```\n\n## A world on the edge of war\n\nThe Persian Empire is moving west. Explore **ancient Greece**, meet its people, and choose your place in the story.\n\n## Getting started\n\n- Explore Athens and speak with the people in the agora.\n- Type `look` to examine your surroundings.\n- Read the [player guides](/docs/players/) for the basics.\n\n> Take your time. There is more to this world than the next battle.\n\n## At a glance\n\n| Setting | Play style |\n| --- | --- |\n| Ancient Greece | Exploration and adventure |';
 let content = params.has('empty') ? '' : sample;
@@ -22,7 +25,7 @@ axios.defaults.adapter = async config => {
     return { config, status: 200, statusText: 'OK', headers: {}, data: { information: content } };
   }
   return { config, status: 200, statusText: 'OK', headers: {}, data: {
-    id: Number(config.url.split('/')[3]), name: 'Phalanx', information: content, can_edit: editable,
+    id: Number(config.url.split('/')[3]), name: 'Phalanx', built_by: builtBy, information: content, can_edit: editable,
   } };
 };
 const router = createRouter({ history: createMemoryHistory(), routes: [
@@ -38,6 +41,18 @@ const frame = async () => { await nextTick(); await new Promise(requestAnimation
 const button = (text: string) => Array.from(document.querySelectorAll('button')).find(node => node.textContent?.trim() === text)!;
 let checks = 0;
 function check(condition: boolean, message: string) { if (!condition) throw new Error(message); checks++; }
+function checkCredit() {
+  const credit = document.querySelector('.information-credit');
+  if (builtBy.trim()) {
+    check(credit?.textContent === `Built by ${builtBy}`, 'Configured builder credit missing or altered');
+    check(credit!.children.length === 0, 'Builder credit was interpreted as HTML');
+    const heading = document.querySelector('.information-heading h1')!.getBoundingClientRect();
+    const bounds = credit!.getBoundingClientRect();
+    check(bounds.top >= heading.bottom && Math.abs(bounds.left - heading.left) <= 1, 'Builder credit must be below and aligned with the heading');
+  } else {
+    check(!credit, 'Blank builder credit should not be displayed');
+  }
+}
 function checkCodeBlock() {
   const pre = document.querySelector<HTMLPreElement>('.markdown-content pre')!;
   const code = pre?.querySelector('code');
@@ -51,6 +66,7 @@ async function run() {
   await frame(); await frame();
   check(document.documentElement.scrollWidth <= innerWidth, 'Page overflows horizontally');
   check(document.querySelectorAll('.information-heading h1').length === 1 && !document.querySelector('.information-label'), 'Redundant page heading');
+  checkCredit();
   if (!params.has('empty')) checkCodeBlock();
   if (params.has('reader')) {
     check(!button('EDIT') && !document.querySelector('textarea'), 'Reader has editing controls');
@@ -61,6 +77,7 @@ async function run() {
     const editor = document.querySelector<HTMLTextAreaElement>('textarea')!;
     check(!!editor, 'Builder has no editor');
     check(document.activeElement === editor, 'Editor did not receive keyboard focus');
+    checkCredit();
     const draft = '## Draft\n\nKeep **my changes**.  \nNext line.\n';
     editor.value = draft;
     editor.dispatchEvent(new Event('input', { bubbles: true }));
@@ -95,6 +112,7 @@ async function run() {
     button('SAVE').click(); await frame(); await frame();
     check(content === draft && !!document.querySelector('[role="status"]'), 'Save did not preserve Markdown');
     check(!document.querySelector('textarea'), 'Saved page did not return to reading');
+    checkCredit();
     button('EDIT').click(); await frame();
     const again = document.querySelector<HTMLTextAreaElement>('textarea')!;
     again.value = 'Discard this'; again.dispatchEvent(new Event('input', { bubbles: true }));

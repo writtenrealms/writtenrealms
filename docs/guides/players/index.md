@@ -23,6 +23,7 @@ require an account with access. Servers configured for multiple worlds show a
 
 Choose **More information** below a world's description to read the builders'
 notes about its setting, rules, and getting started at `/worlds/<world_id>/about`.
+When the builders have provided a credit, **Built by** appears below the heading.
 Use **Back to** at the top of that page to return to the world lobby. Private
 worlds keep the same access requirements on their information page.
 

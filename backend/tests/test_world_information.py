@@ -25,7 +25,7 @@ class WorldInformationTests(WorldTestCase):
         response = self.client.get(self.endpoint)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, {
-            'id': self.world.pk, 'name': self.world.name, 'information': '', 'can_edit': False,
+            'id': self.world.pk, 'name': self.world.name, 'built_by': '', 'information': '', 'can_edit': False,
         })
         self.assertFalse(WorldInformation.objects.exists())
         self.client.force_authenticate(self.user)
@@ -33,6 +33,15 @@ class WorldInformationTests(WorldTestCase):
         self.assertTrue(self.client.get(self.endpoint).data['can_edit'])
         self.client.force_authenticate(None)
         self.assertEqual(self.client.get(self.endpoint).data['information'], self.markdown)
+
+    def test_builder_credit_uses_only_the_configured_value(self):
+        for credit in (None, '', 'Phalanx team', '<Builders> & friends'):
+            with self.subTest(credit=credit):
+                self.world_config.built_by = credit
+                self.world_config.save(update_fields=['built_by'])
+                response = self.client.get(self.endpoint)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data['built_by'], credit or '')
 
     def test_only_world_editors_can_save(self):
         member = self.create_user('member@example.com')

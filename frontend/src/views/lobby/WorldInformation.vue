@@ -12,7 +12,10 @@
     <div v-else-if="!world" class="loading-container"><div class="spinner"></div></div>
     <template v-else>
       <header class="information-heading">
-        <h1>About {{ world.name }}</h1>
+        <div class="information-title">
+          <h1>About {{ world.name }}</h1>
+          <p v-if="world.built_by?.trim()" class="information-credit color-text-60">Built by {{ world.built_by }}</p>
+        </div>
         <button v-if="world.can_edit && !editing" class="btn-small button-gray" @click="startEditing">EDIT</button>
       </header>
 
@@ -52,7 +55,7 @@ import axios from 'axios';
 import { ArrowLeft } from '@lucide/vue';
 import MarkdownContent from '@/components/MarkdownContent.vue';
 
-interface Information { id: number; name: string; information: string; can_edit: boolean }
+interface Information { id: number; name: string; built_by: string; information: string; can_edit: boolean }
 const route = useRoute();
 const store = useStore();
 const world = ref<Information | null>(null);
@@ -164,10 +167,12 @@ watch(() => route.params.world_id, loadWorld, { immediate: true });
   margin: 26px 0 32px;
   padding-bottom: 24px;
   border-bottom: 1px solid $color-background-light-border;
+  .information-title { min-width: 0; }
   h1 { @include font-title-regular; min-width: 0; font-size: 40px; line-height: 1.2; margin: 0; overflow-wrap: anywhere; }
   button { flex-shrink: 0; }
   @media ($mobile-site) { h1 { font-size: 32px; } }
 }
+.information-credit { margin: 8px 0 0; font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
 #information-help { font-size: 14px; line-height: 1.7; margin: 8px 0 16px; }
 .information-editor-tools { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 13px; }
 #world-information-text { @include font-mono; line-height: 1.6; min-height: 360px; resize: vertical; }

@@ -16,6 +16,9 @@ Write plain Markdown, use **Preview** to check it, then **Save** to publish it o
 the world's information page. **Cancel** discards the draft. Failed saves keep
 your draft available for retry, and leaving with unsaved changes asks first.
 
+Set `built_by` in World Config to display a muted **Built by** credit below the
+About heading. Leave it blank to omit the credit.
+
 Headings, paragraphs, emphasis, lists, links, images, quotes, tables, and code
 blocks are supported. Code blocks preserve indentation and line breaks, and
 wrap long lines to fit the page. Raw HTML is shown as text. Content is limited to
