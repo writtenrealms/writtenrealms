@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -1676,7 +1676,23 @@ def reconcile_spawn_plan(
     if not initial and is_time_controlled(spawn_world) and not in_simulation(spawn_world):
         return {"plan": plan.slug, "placements": 0, "spawned": 0, "skipped": True}
     with transaction.atomic():
-        plan = SpawnPlan.objects.select_for_update().select_related("zone", "world").get(pk=plan.pk)
+        plan_query = SpawnPlan.objects.select_related('zone', 'world').filter(pk=plan.pk)
+        if connection.vendor == 'postgresql':
+            # Authored policy is read-only here. Hold shared policy locks so
+            # different runtime instances can spawn concurrently, while edits
+            # still wait. Reserve this runtime/plan even before its run exists.
+            lock_key = int.from_bytes(hashlib.blake2b(
+                f'spawns.plan_run:{spawn_world.pk}:{plan.pk}'.encode(),
+                digest_size=8,
+            ).digest(), byteorder='big', signed=True)
+            sql, params = plan_query.query.sql_with_params()
+            with connection.cursor() as cursor:
+                cursor.execute(sql + ' FOR SHARE', params)
+                cursor.fetchall()
+                cursor.execute('SELECT pg_advisory_xact_lock(%s)', [lock_key])
+            plan = plan_query.get()
+        else:
+            plan = plan_query.select_for_update().get()
         if not plan.is_active:
             return {"plan": plan.slug, "placements": 0, "spawned": 0, "skipped": True}
         if not _plan_conditions_pass(spawn_world=spawn_world, plan=plan):

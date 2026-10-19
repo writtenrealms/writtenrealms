@@ -30,6 +30,17 @@ you return or reconnect. Previous group participants can return with
 `enter <instance_ref>`. Combat remains disabled in a completed run; builder
 `/reset` starts a new attempt.
 
+To start a fresh adventure, leave and use `enter new` at its entrance. This
+replaces your previous run with a new Instance ID once everyone has left it.
+Characters who are offline but still inside must leave too. Group members who
+are already outside do not block it, and a run you joined under someone else's
+leadership is never replaced. If you have no previous run, it creates one.
+
+Items left inside and that run's quest progress are lost. The new run starts
+its mobs, loot, and quests fresh, including instance quest cooldowns. Your carried
+items, character progression, and saved clear records remain. If replacement
+fails, your previous run is kept. Match arenas still require a new accepted duel.
+
 ## Disconnecting In Single-Player Instances
 
 Logging out or disconnecting while your character is inside a single-player

@@ -1,10 +1,11 @@
+import hashlib
 import uuid
 from copy import deepcopy
 from collections.abc import Iterable
 from dataclasses import dataclass
 
 from django.contrib.contenttypes.models import ContentType
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
@@ -102,6 +103,33 @@ def _enterable_run_qs():
     return InstanceRun.objects.filter(status__in=(
         *InstanceRun.ACTIVE_STATUSES, InstanceRun.STATUS_COMPLETED,
     ))
+
+
+def _player_instance_runs(template_world, player):
+    return InstanceRun.objects.filter(template_world=template_world).filter(
+        Q(single_player=True, owner=player)
+        | Q(single_player=False, leader=player),
+    ).order_by('-created_ts', '-pk')
+
+
+def _lock_player_instance(template_world_id, player_id):
+    """Reserve this player's run selection, including when no run exists yet.
+
+    Acquire before run/player row locks. Unlike a template row lock, this
+    permits other players to create or join runs during a replacement.
+    """
+    if connection.vendor != 'postgresql':
+        return
+    if not connection.in_atomic_block:
+        raise RuntimeError('Instance reservations require a transaction.')
+    digest = hashlib.blake2b(
+        f'worlds.player_instance:{template_world_id}:{player_id}'.encode(),
+        digest_size=8,
+    ).digest()
+    with connection.cursor() as cursor:
+        cursor.execute('SELECT pg_advisory_xact_lock(%s)', [
+            int.from_bytes(digest, byteorder='big', signed=True),
+        ])
 
 
 def _assert_run_entry_allowed(*, run, player):
@@ -545,8 +573,20 @@ def _ensure_spawned_instance_started(run):
 
     from worlds.services import WorldSmith
 
-    WorldSmith(spawned_world).start()
-    run.spawned_world.refresh_from_db()
+    # Selection and startup are separate phases for ordinary entry. A reset
+    # may have retired this run in between, so lock and reload before writing.
+    with transaction.atomic():
+        current = InstanceRun.objects.select_for_update(of=('self',)).select_related(
+            'spawned_world',
+        ).filter(pk=run.pk).first()
+        if current is None:
+            raise RuntimeError('This instance is no longer available.')
+        spawned_world = current.spawned_world
+        if spawned_world.lifecycle in (
+            adv_consts.WORLD_LIFECYCLE_NEW, adv_consts.WORLD_LIFECYCLE_STOPPED,
+        ):
+            WorldSmith(spawned_world).start()
+        run.spawned_world = spawned_world
 
 
 def enter_players_into_run(
@@ -710,9 +750,10 @@ def get_or_create_instance_run(
     _assert_instance_template(template_world)
 
     with transaction.atomic():
+        if not ref:
+            _lock_player_instance(template_world.pk, player.pk)
         template_world = (
-            World.objects.select_for_update(of=('self',))
-            .select_related('config', 'instance_of__config')
+            World.objects.select_related('config', 'instance_of__config')
             .get(pk=template_world.pk)
         )
         _assert_match_template_requires_ref(template_world, ref=ref)
@@ -740,14 +781,11 @@ def get_or_create_instance_run(
                     leader=spawned_world.leader or player,
                     member_ids=member_ids)
         else:
-            run = _enterable_run_qs().select_for_update().filter(
-                template_world=template_world,
-            ).filter(
-                Q(single_player=True, owner=player)
-                | Q(single_player=False, leader=player),
+            run = _player_instance_runs(template_world, player).select_for_update().filter(
+                status__in=(*InstanceRun.ACTIVE_STATUSES, InstanceRun.STATUS_COMPLETED),
             ).select_related(
                 'spawned_world',
-            ).order_by('-created_ts', '-pk').first()
+            ).first()
             if not run:
                 spawned_world = template_world.spawned_worlds.select_for_update().filter(
                     leader=player,
@@ -1419,7 +1457,8 @@ def enter_instance(
         transfer_to,
         transfer_from,
         ref=None,
-        member_ids=None):
+        member_ids=None,
+        fresh=False):
     entry_origin = (
         player.__class__.objects.filter(pk=player.pk)
         .values(
@@ -1452,6 +1491,22 @@ def enter_instance(
             "A player is no longer at a valid instance entrance."
         )
 
+    if fresh:
+        if ref:
+            raise RuntimeError('Use enter new without an instance reference.')
+        if not origin_is_base_entrance:
+            raise RuntimeError('You are already in an instance. Use leave first.')
+        if transfer_from.transfer_to_id != transfer_to.id:
+            raise RuntimeError('There is no entrance to this instance here.')
+        run = _enter_new_instance(
+            player=player, template_world=template_world,
+            transfer_to=transfer_to, transfer_from=transfer_from,
+            entry_origin=entry_origin, member_ids=member_ids,
+        )
+        player.world = run.spawned_world
+        player.room = transfer_to
+        return run
+
     run = get_or_create_instance_run(
         template_world,
         player=player,
@@ -1463,11 +1518,74 @@ def enter_instance(
         raise ValueError(
             "Transfer room does not belong to the instance's base world."
         )
+    run = _enter_selected_instance_run(
+        run=run, player=player, transfer_to=transfer_to,
+        transfer_from=transfer_from, entry_origin=entry_origin,
+        member_ids=member_ids,
+    )
+    player.world = run.spawned_world
+    player.room = transfer_to
+    return run
+
+
+def _enter_new_instance(
+        *, player, template_world, transfer_to, transfer_from,
+        entry_origin, member_ids):
+    """Replace an empty owned run atomically, fencing reference entry.
+
+    Failure restores the previous runtime and player location, and discards
+    the new run's outbox. Keep the previous run lock until commit.
+    """
+    from spawns.models import Player
+    from worlds.services import WorldSmith
+
+    _assert_instance_template(template_world)
+    with transaction.atomic():
+        _lock_player_instance(template_world.pk, player.pk)
+        template_world = World.objects.select_related(
+            'config', 'instance_of__config',
+        ).get(pk=template_world.pk)
+        _assert_match_template_requires_ref(template_world, ref=None)
+        previous = (
+            _player_instance_runs(template_world, player)
+            .select_for_update(of=('self',))
+            .select_related('spawned_world', 'spawned_world__context')
+            .first()
+        )
+        if previous:
+            _assert_match_run_entry_allowed(
+                run=previous, player=player, template_world=template_world,
+            )
+            # Location is authoritative, regardless of connection state or
+            # whether an old participation record says the character exited.
+            if Player.objects.filter(world_id=previous.spawned_world_id).exists():
+                raise RuntimeError(
+                    'Your previous instance still has players inside. '
+                    'Everyone must leave before you can start a new one.'
+                )
+
+        run = _create_run(template_world, leader=player, member_ids=member_ids)
+        _ensure_spawned_instance_started(run)
+        # Finish potentially large cleanup before movement acquires the base
+        # entrance's combat-room state lock. Rollback still restores the old
+        # run if final admission fails.
+        if previous:
+            WorldSmith(previous.spawned_world).stop(reason='player_restarted')
+        run = _enter_selected_instance_run(
+            run=run, player=player, transfer_to=transfer_to,
+            transfer_from=transfer_from, entry_origin=entry_origin,
+            member_ids=member_ids,
+        )
+    return run
+
+
+def _enter_selected_instance_run(
+        *, run, player, transfer_to, transfer_from, entry_origin, member_ids):
     _ensure_spawned_instance_started(run)
 
     with transaction.atomic():
         run = (
-            InstanceRun.objects.select_for_update()
+            InstanceRun.objects.select_for_update(of=('self',))
             .select_related(
                 'spawned_world',
                 'template_world',
@@ -1560,11 +1678,6 @@ def enter_instance(
             )
             from worlds.instance_goals import start_instance_goal
             start_instance_goal(run)
-            # Preserve the existing service contract for callers that reuse the
-            # passed model instance immediately after entry.
-            player.world = run.spawned_world
-            player.room = transfer_to
-
             _enqueue_instance_events([
                 *cancellation_events,
                 *_instance_entry_events(

@@ -3,7 +3,7 @@ import logging
 from time import monotonic
 from spawns.instance_clock import serialized_world
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Q
 from django.utils import timezone
 from spawns.instance_clock import gameplay_now, in_simulation, is_time_controlled, time_control_run
@@ -25,6 +25,21 @@ def _batched(values, *, size):
         yield values[offset:offset + size]
 
 
+def _lock_door_policy_zones(*, zone_ids, authored_world_id):
+    # Runtime initialization/upkeep only reads authored policy. Shared locks
+    # exclude builder edits without serializing different runs of a template.
+    # Runtime schedule rows below still take exclusive locks.
+    if connection.vendor == 'postgresql':
+        return list(Zone.objects.raw(
+            'SELECT * FROM "worlds_zone" WHERE id = ANY(%s) AND world_id = %s '
+            'ORDER BY id FOR SHARE',
+            [zone_ids, authored_world_id],
+        ))
+    return list(Zone.objects.select_for_update().filter(
+        id__in=zone_ids, world_id=authored_world_id,
+    ).order_by('id'))
+
+
 def _initialize_door_reset_schedules(*, world, zones):
     """Batch-initialize one runtime world's fixed zone schedules."""
 
@@ -38,13 +53,8 @@ def _initialize_door_reset_schedules(*, world, zones):
         size=DOOR_RESET_SCHEDULE_BATCH_SIZE,
     ):
         with transaction.atomic():
-            locked_zones = list(
-                Zone.objects.select_for_update()
-                .filter(
-                    id__in=zone_id_batch,
-                    world_id=world.context_id,
-                )
-                .order_by("id")
+            locked_zones = _lock_door_policy_zones(
+                zone_ids=zone_id_batch, authored_world_id=world.context_id,
             )
             locked_by_id.update({zone.id: zone for zone in locked_zones})
             fixed_zones = [
@@ -119,13 +129,8 @@ def _process_door_reset_schedule_batch(
         # Keep the global lock order consistent with canonical policy edits
         # and initial schedule creation: authored Zone, runtime schedule, then
         # runtime DoorState inside reset_runtime_doorways().
-        locked_zones = list(
-            Zone.objects.select_for_update()
-            .filter(
-                id__in=candidate_zone_ids,
-                world_id=world.context_id,
-            )
-            .order_by("id")
+        locked_zones = _lock_door_policy_zones(
+            zone_ids=candidate_zone_ids, authored_world_id=world.context_id,
         )
         fixed_zones = [
             zone

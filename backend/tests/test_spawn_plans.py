@@ -2048,7 +2048,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             query["sql"]
             for query in captured.captured_queries
             if 'FROM "worlds_zone"' in query["sql"]
-            and "FOR UPDATE" in query["sql"].upper()
+            and "FOR SHARE" in query["sql"].upper()
         ]
         self.assertEqual(
             len(zone_lock_queries),
@@ -2078,7 +2078,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             query["sql"]
             for query in captured.captured_queries
             if 'FROM "worlds_zone"' in query["sql"]
-            and "FOR UPDATE" in query["sql"].upper()
+            and "FOR SHARE" in query["sql"].upper()
         ]
         schedule_lock_queries = [
             query["sql"]
@@ -2172,7 +2172,7 @@ class TestSpawnPlanRuntime(WorldTestCase):
             query["sql"]
             for query in captured.captured_queries
             if 'FROM "worlds_zone"' in query["sql"]
-            and "FOR UPDATE" in query["sql"].upper()
+            and "FOR SHARE" in query["sql"].upper()
         ]
         schedule_lock_queries = [
             query["sql"]

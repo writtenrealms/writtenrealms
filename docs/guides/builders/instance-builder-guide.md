@@ -37,7 +37,7 @@ The foundation exists now:
 - leaving marks the participant exited instead of deleting the run
 - carried and equipped item ownership moves into and out of the spawned
   instance world with bounded, depth-batched traversal
-- players can use `enter`, `enter <instance_ref>`, `leave`, and `instance`
+- players can use `enter`, `enter new`, `enter <instance_ref>`, `leave`, and `instance`
   from the game command input
 - builders and trusted room/mob scripts can use `/exitinstance` to return a
   player to one explicitly chosen authored room in the recorded base runtime
@@ -836,6 +836,20 @@ its own door state and deadline.
 ## Group Play
 
 Instances support collaborative runs.
+
+At an instance entrance, `enter` resumes the player's latest owned/led run,
+including a completed run. `enter new` replaces that run with a fresh Instance
+ID, but only when the player is outside and no characters remain inside the old
+run. Offline characters count as occupants; group members who have already left
+do not block replacement. Players cannot replace a run they joined as a member.
+With no previous run, `enter new` simply creates one. Match arenas still require
+an accepted duel.
+
+A replacement removes items left inside and the old run's quest progress,
+offers, and cooldowns. Carried equipment and character progression are preserved;
+saved clear records remain on the leaderboard. The new run uses the current
+template and starts its mobs, loot, and quests fresh. Failed startup, entry, or
+cleanup leaves the previous run available.
 
 When a leader enters an instance, WR2 creates an `InstanceRun` and records the
 leader as an `InstanceParticipant`. When another player joins by the same

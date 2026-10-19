@@ -855,7 +855,7 @@ class World(AdventBaseModel):
         return False
 
     @classmethod
-    def enter_instance(cls, player, transfer_to_id, transfer_from_id, ref=None, member_ids=None):
+    def enter_instance(cls, player, transfer_to_id, transfer_from_id, ref=None, member_ids=None, *, fresh=False):
         from worlds.instances import enter_instance
         transfer_to = Room.objects.get(pk=transfer_to_id)
         transfer_from = Room.objects.get(pk=transfer_from_id)
@@ -864,7 +864,8 @@ class World(AdventBaseModel):
             transfer_to=transfer_to,
             transfer_from=transfer_from,
             ref=ref,
-            member_ids=member_ids)
+            member_ids=member_ids,
+            fresh=fresh)
         return run.spawned_world
 
     @classmethod

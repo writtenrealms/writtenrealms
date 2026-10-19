@@ -50,6 +50,28 @@ policy. Entry/reconnect snapshots include the run status through one indexed
 lookup, and the client shows **Status: Completed** below the Instance ID.
 Completion, Time Control, and MOTD messages share the same console notice.
 
+`enter new` at a linked base-world entrance replaces the caller's latest
+owned/led run only if no player rows remain in its runtime, including offline
+characters. Selection uses the same ownership policy as `enter`; another
+leader's run is never replaced. Match admission remains controlled by duels.
+Startup, entry, and old-runtime teardown are one database transaction, so any
+failure preserves the previous run and discards the new run and its event outbox.
+Run-local quest state and ground items are removed; character state, carried
+items, and independent clear records survive.
+
+Normal run selection and replacement share a PostgreSQL transaction advisory
+lock keyed by template and player, including first entry when no run row exists.
+Replacement also holds the previous run row lock through occupancy checking and
+deletion, serializing concurrent reference entry. It does not hold a template
+row lock: another player's run can be created while replacement is in progress.
+Spawn plans and door schedules take shared locks on read-only authored policy;
+exclusive runtime rows and a per-runtime/plan reservation protect their writes.
+Cleanup finishes before entry takes the base entrance's combat-room state lock.
+The ownership lookup is limited to one latest run and occupancy uses an indexed
+`EXISTS` query without a participant scan. Cleanup/spawn cost remains proportional
+to the affected runtime's contents and authored spawn plans; no per-tick work or
+global scans are added.
+
 Instances are a core game structure: private or semi-private copies of authored
 content that can have their own layout, local spawn behavior, lifecycle,
 optional goal, timer, and cleanup policy while still belonging to a base world.
@@ -525,6 +547,7 @@ Instance lifecycle should move into WR2's command/action/event flow.
 Implemented player commands:
 
 - `enter`
+- `enter new`
 - `enter <instance_ref>`
 - `leave`
 - `instance`

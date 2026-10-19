@@ -5,6 +5,7 @@ These commands bridge the player-facing text command path to the WR2 instance
 runtime service in worlds.instances.
 """
 from config import constants as adv_consts
+from config.exceptions import ServiceError
 from spawns.events import GameEvent, publish_events
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
@@ -47,14 +48,16 @@ class EnterInstanceHandler(CommandHandler):
     text_commands = ("enter",)
     help = {
         "name": "Enter Instance",
-        "format": "enter [instance_ref]",
+        "format": "enter [new | instance_ref]",
         "description": "Enter the instance linked from your current room.",
         "details": [
             "Use `enter` to start or re-enter your latest run, including a completed run.",
+            "Use `enter new` from outside to replace your previous run once everyone has left, including offline characters. Items left inside and that run's quest progress are lost.",
             "Use `enter <instance_ref>` to join an active run or revisit a completed run you participated in for the same instance template.",
         ],
         "examples": [
             "enter",
+            "enter new",
             "enter 17d5144f5d4b4f34926aa4e32d9e40ea",
         ],
     }
@@ -93,16 +96,27 @@ class EnterInstanceHandler(CommandHandler):
             return
 
         instance_ref = _instance_ref_from_args(ctx)
+        fresh = bool(instance_ref and instance_ref.lower() == 'new')
+        if fresh:
+            instance_ref = None
         try:
             World.enter_instance(
                 player=player,
                 transfer_to_id=transfer_to.id,
                 transfer_from_id=transfer_from.id,
                 ref=instance_ref,
+                fresh=fresh,
             )
+        except (ServiceError, ValueError):
+            if not fresh:
+                raise
+            ctx.publish_error(
+                "enter", "Could not start a new instance. Your previous instance has been kept."
+            )
+            return
         except RuntimeError as exc:
             message = str(exc)
-            if instance_ref or "Match instances" not in message:
+            if not fresh and (instance_ref or "Match instances" not in message):
                 message = "Invalid instance reference."
             ctx.publish_error("enter", message)
             return
@@ -209,6 +223,7 @@ class InstanceInfoHandler(CommandHandler):
             text = (
                 "This room is linked to %s.\n"
                 "Use `enter` to start or re-enter your latest run, including a completed run. "
+                "Use `enter new` to start fresh once everyone has left your previous run; items left inside and that run's quest progress are lost. "
                 "Use `enter <instance_ref>` to join an active run or revisit a completed run you participated in."
             ) % transfer_to.world.name
             ctx.publish(
