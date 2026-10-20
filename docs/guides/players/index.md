@@ -46,6 +46,9 @@ builder may display names such as **Onyx the Hoplite**; becoming a different
 class later does not change that entry. A faster clear replaces the personal
 best and displays the identity from that new clear. Opening the character's
 page shows their current profile, which may differ from the recorded result.
+Rankings use the same styling for every character, including your own.
+Ranking times display seconds rounded to one decimal place, such as
+**15m 19.6s**. Rankings still use the exact recorded time.
 
 Click a character in your list, or a name in a world's rankings, to open its
 character page. Other players see a character's name, title, class, level,

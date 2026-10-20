@@ -19,21 +19,19 @@
       <h2 v-if="!tabbed" :id="`ranking-${panel.id}`">{{ panel.title }}</h2>
       <p class="ranking-description color-text-60">{{ panel.description }}</p>
       <ol v-if="panel.entries.length" class="ranking-entries">
-        <li v-for="(entry, index) in panel.entries" :key="entry.id" class="ranking-entry"
-          :class="{ 'ranking-entry-own': isOwn(entry) }">
+        <li v-for="(entry, index) in panel.entries" :key="entry.id" class="ranking-entry">
           <span class="ranking-position color-secondary">{{ index + 1 }}</span>
           <div class="ranking-character">
             <div>
               <span v-if="entry.is_party">{{ entry.name }}</span>
               <router-link v-else class="ranking-name" :to="{ name: 'character_details', params: { player_id: entry.id } }">{{ entry.name }}</router-link>
-              <span v-if="isOwn(entry)" class="tag tag-secondary ranking-own-tag">YOURS</span>
             </div>
             <div v-if="entry.core_faction || (entry.archetype && !entry.name_includes_class)" class="ranking-detail color-text-60">
               {{ [entry.core_faction, entry.name_includes_class ? '' : entry.archetype].filter(Boolean).join(' · ') }}
             </div>
           </div>
           <div class="ranking-score">
-            <template v-if="panel.type === 'instance_clear_time'">{{ formatClearTime(entry.clear_time_ms ?? 0) }}</template>
+            <template v-if="panel.type === 'instance_clear_time'">{{ formatClearTime(entry.clear_time_ms ?? 0, 1) }}</template>
             <template v-else-if="panel.type === 'dueling'">
               {{ (entry.win_percentage ?? 0).toFixed(1) }}%
               <div class="ranking-detail color-text-60">{{ entry.wins }}W · {{ entry.losses }}L</div>
@@ -76,7 +74,7 @@ interface RankingPanel {
   empty_message: string;
   entries: RankingEntry[];
 }
-const props = defineProps<{ panels: RankingPanel[]; error?: boolean; loading?: boolean; ownPlayerIds?: number[] }>();
+const props = defineProps<{ panels: RankingPanel[]; error?: boolean; loading?: boolean }>();
 defineEmits<{ retry: [] }>();
 
 // Several rankings share one column as tabs; a single ranking keeps its heading.
@@ -84,9 +82,6 @@ const tabbed = computed(() => props.panels.length > 1);
 const selectedId = ref<string | null>(null);
 const activeId = computed(() =>
   props.panels.some(panel => panel.id === selectedId.value) ? selectedId.value : props.panels[0]?.id);
-
-// Party clear entries are records rather than characters.
-const isOwn = (entry: RankingEntry) => !entry.is_party && !!props.ownPlayerIds?.includes(entry.id);
 </script>
 
 <style scoped lang="scss">
@@ -139,8 +134,6 @@ h2 {
 .ranking-entries { list-style: none; padding: 0; margin: 0; }
 .ranking-entry { display: flex; gap: 0.6rem; padding: 0.6rem 0; align-items: baseline; border-bottom: 1px solid $color-background-border; }
 .ranking-position { min-width: 1rem; }
-.ranking-entry-own { background: linear-gradient(90deg, rgba(245, 201, 131, 0.06), transparent 70%); }
-.ranking-own-tag { margin-left: 6px; vertical-align: 2px; }
 .ranking-name { color: $color-text; }
 .ranking-name:hover { color: $color-secondary; }
 .ranking-character { flex: 1; min-width: 0; overflow-wrap: anywhere; }

@@ -247,7 +247,7 @@
         <span class="sg-code">.tag</span>
         <div class="sg-inline">
           <span class="tag">Builder</span>
-          <span class="tag tag-secondary">Yours</span>
+          <span class="tag tag-secondary">Maintenance</span>
           <span class="tag tag-green">In game</span>
         </div>
       </div>

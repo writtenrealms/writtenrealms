@@ -52,6 +52,15 @@ test("clear times preserve milliseconds across minute and hour boundaries", () =
   }
 });
 
+test("ranking times round to tenths and carry into minutes and hours", () => {
+  for (const [time, expected] of [
+    [0, '0.0s'], [19602, '19.6s'], [19650, '19.7s'], [919602, '15m 19.6s'],
+    [59949, '59.9s'], [59950, '1m 0.0s'], [3599950, '1h 0m 0.0s'],
+  ]) {
+    assert.equal(formatClearTime(time, 1), expected);
+  }
+});
+
 test("pagination sends only the cursor to the current player's endpoint", async () => {
   const original = axios.get;
   const calls = [];

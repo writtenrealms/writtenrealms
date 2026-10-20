@@ -52,7 +52,6 @@
 
       <div class="world-leaderboard" v-if="!create_character && (leaderboards.length || leaderboardError)">
         <LeaderboardPanels :panels="leaderboards" :error="leaderboardError" :loading="leaderboardsLoading"
-          :own-player-ids="ownPlayerIds"
           @retry="store.dispatch('lobby/fetch_leaderboards', route.params.world_id)" />
       </div>
     </div>
@@ -99,7 +98,6 @@ const { needsTransfer, playChar } = useCharEntry();
 
 // Characters arrive most recently played first.
 const resumeChar = computed(() => chars.value[0]);
-const ownPlayerIds = computed(() => chars.value.map(char => char.id));
 
 const backgroundImage = computed(() => ({
   backgroundImage: `url(${world.value.large_background || defaultBackground})`,

@@ -37,7 +37,7 @@ test('panels preserve configured order and display each ranking metric safely', 
   const html = await render({ panels });
   assert.ok(html.indexOf('A Persian Outpost') < html.indexOf('Dueling'));
   assert.ok(html.indexOf('Dueling') < html.indexOf('Glory &amp; Experience'));
-  for (const text of ['18m 45.309s', '66.7%', '2W · 1L', '12 glory', '400 XP', 'Minimum 3 completed matches']) {
+  for (const text of ['18m 45.3s', '66.7%', '2W · 1L', '12 glory', '400 XP', 'Minimum 3 completed matches']) {
     assert.ok(html.includes(text), text);
   }
   assert.doesNotMatch(html, /<script>/);
@@ -56,12 +56,13 @@ test('empty configured panels remain visible while disabled panels render no hea
 
 test('completion names keep character links and show the saved class only once', async () => {
   const entry = { id: 5, name: 'Onyx the Hoplite', archetype: 'Hoplite', core_faction: 'Greek',
-    name_includes_class: true, clear_time_ms: 1380000 };
-  const html = await render({ panels: [{ ...panels[0], entries: [entry] }], ownPlayerIds: [5] });
+    name_includes_class: true, clear_time_ms: 919602 };
+  const html = await render({ panels: [{ ...panels[0], entries: [entry] }] });
   assert.match(html, /href="\/characters\/5"[^>]*>Onyx the Hoplite<\/a>/);
   assert.equal(html.match(/Hoplite/g).length, 1);
   assert.match(html, /Greek/);
-  assert.match(html, /YOURS/);
+  assert.doesNotMatch(html, /YOURS/);
+  assert.match(html, /15m 19\.6s/);
   const defaultName = await render({ panels: [{ ...panels[0], entries: [{ ...entry, name: 'Onyx', name_includes_class: false }] }] });
   assert.match(defaultName, /Greek · Hoplite/);
   const plainText = await render({ panels: [{ ...panels[0], entries: [{ ...entry, name: '<b>Onyx the Hoplite</b>' }] }] });
@@ -69,15 +70,16 @@ test('completion names keep character links and show the saved class only once',
   assert.doesNotMatch(plainText, /<b>/);
 });
 
-test('multiple rankings become tabs showing one panel; own characters are tagged', async () => {
-  const html = await render({ panels, ownPlayerIds: [5, 7] });
+test('multiple rankings become tabs with uniform row styling and no ownership indicators', async () => {
+  const html = await render({ panels });
   assert.equal(html.match(/role="tab"/g).length, 3);
   assert.match(html, /aria-selected="true"[^>]*>A Persian Outpost/);
   assert.equal(html.match(/style="display:none;"/g).length, 2);
-  assert.equal(html.match(/YOURS/g).length, 2);
+  assert.doesNotMatch(html, /YOURS|ranking-entry-own/);
+  assert.equal(html.match(/<li class="ranking-entry"/g).length, 3);
   assert.match(html, /href="\/characters\/5"/);
   const party = [{ ...panels[0], entries: [{ id: 5, is_party: true, name: 'Joe, Ally', clear_time_ms: 1 }] }];
-  const single = await render({ panels: party, ownPlayerIds: [5] });
+  const single = await render({ panels: party });
   assert.doesNotMatch(single, /YOURS|role="tab"/);
   // Party clear records aren't characters, so they don't link anywhere.
   assert.doesNotMatch(single, /href="\/characters/);
