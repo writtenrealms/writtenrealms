@@ -103,7 +103,7 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
                 "player_id": 42,
                 "user_id": 1,
                 "player_key": "player.42",
-                "payload": {},
+                "payload": {'connection_entry': True, 'reconnect': False},
                 "connection_id": ANY,
             },
         )
@@ -131,6 +131,19 @@ class TestGameWebSocketDisconnect(unittest.TestCase):
             "spawns.tasks.exit_current_world",
             kwargs={"player_id": 42, "user_id": 1},
         )
+
+    def test_brief_reconnect_marks_only_its_connection_snapshot(self):
+        celery_app = MagicMock()
+        websocket = FakeGameWebSocket([
+            {'type': 'system.connect', 'token': 'token',
+             'data': {'player_key': 'player.42', 'reconnect': True}},
+            {'type': 'cmd.state.sync'},
+        ])
+        self._run_socket(websocket, celery_app)
+        payloads = [call.kwargs['kwargs']['payload']
+                    for call in celery_app.send_task.call_args_list
+                    if call.args[0] == 'spawns.tasks.handle_game_command']
+        self.assertEqual(payloads, [{'connection_entry': True, 'reconnect': True}, {}])
 
     def test_text_command_forwards_client_request_id(self):
         celery_app = MagicMock()

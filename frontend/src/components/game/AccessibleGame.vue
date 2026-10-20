@@ -5,7 +5,9 @@
         <div v-if="message" class="mt-4">
           <Chat v-if="message.type === 'notification.cmd.ask.success'" :message="message" />
           <template v-else>
-            <div v-for="(line, index) in getLines(message)" :key="index">{{ line }}</div>
+            <div v-for="(line, index) in getLines(message)" :key="index">
+              {{ line }}<br v-if="!line.trim()" />
+            </div>
           </template>
         </div>
       </div>
@@ -37,7 +39,8 @@ interface Message {
 }
 
 const getLines = (message: Message) => {
-  return message.text.split("\n");
+  const text = message.text.trimEnd();
+  return text ? text.split("\n") : [];
 };
 
 const scrollToBottom = async () => {

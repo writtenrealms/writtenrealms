@@ -1579,6 +1579,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
                 announcement = self._message_by_type(messages, "cmd.enter.success")
                 self.assertEqual(announcement["text"], f"Instance ID: {run.ref}")
                 self.assertEqual(announcement["data"]["world_id"], run.spawned_world_id)
+                self.assertEqual(announcement["data"]["first_entry"], entry == 0)
                 self.assertEqual(types.count("cmd.enter.success"), 1)
                 greeting_index = next(
                     index for index, message in enumerate(visible)

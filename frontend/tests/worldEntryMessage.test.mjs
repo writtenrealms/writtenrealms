@@ -51,6 +51,20 @@ test('blank and incomplete destinations clear an earlier message without inherit
   assert.ok(applyWorldEntry(pending, world(3)).message);
 });
 
+test('instances show the modal only on first entry, including after page or lobby resets', () => {
+  const instance = world(20, { instance_ref: 'orientation-run' });
+  assert.ok(applyWorldEntry(initialWorldEntryState(), instance, 'initial').message);
+  for (const kind of ['return', 'sync', undefined]) {
+    const resumed = applyWorldEntry(initialWorldEntryState(), instance, kind);
+    assert.equal(resumed.message, null);
+    assert.equal(resumed.worldId, 20);
+    assert.equal(applyWorldEntry(resumed, instance, 'initial'), resumed);
+  }
+  const dismissed = { ...applyWorldEntry(initialWorldEntryState(), instance, 'initial'), message: null };
+  assert.equal(applyWorldEntry(dismissed, instance, 'sync'), dismissed);
+  assert.ok(applyWorldEntry(dismissed, { ...instance, id: 21, instance_ref: 'new-run' }, 'initial').message);
+});
+
 test('all-at-once and single-paragraph modes never advance', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   for (const mode of ['all', 'reveal', 'replace']) {

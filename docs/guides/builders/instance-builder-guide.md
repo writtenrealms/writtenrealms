@@ -96,9 +96,16 @@ unaffected.
 
 The private run is reserved during character creation. Its population starts
 when the player first chooses **Play As**, and any clear-goal timer begins on
-that first login. Entry-room triggers wait until the game connection receives
-its first state sync, so opening RP text reaches the player. Reconnecting while
-the run is retained resumes it without repeating the initial entry triggers.
+that first login. Once the game connection is ready, the console shows the
+instance ID, immediate entry-room RP, and then the room description. The room
+snapshot includes any changes made by those entry triggers. Delayed trigger
+steps still appear at their scheduled times. Reconnecting while the run is
+retained resumes it without repeating the initial entry triggers. Returning from
+the lobby or reloading skips the modal and prints the introduction before the
+room only while the player remains in the starting room and
+`entry_message_conditions` passes. Brief socket reconnects repeat neither
+introduction. See [entry messages](world-config-builder-guide.md#full-screen-entry-messages)
+for configuring return narration.
 The usual single-player cleanup still applies, including the three-hour offline
 grace period. If cleanup removes the run before the character uses `leave`, their
 next **Play As** creates a fresh private introduction with fresh quest progress.

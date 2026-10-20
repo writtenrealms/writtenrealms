@@ -18,11 +18,17 @@ export const entryMessageParagraphs = (text: unknown): string[] => (
     : []
 );
 
-export const applyWorldEntry = (current: WorldEntryState, world: any): WorldEntryState => {
+export const applyWorldEntry = (
+  current: WorldEntryState, world: any, instanceEntry?: string,
+): WorldEntryState => {
   if (world?.id == null || String(current.worldId) === String(world.id)) return current;
   // Pregame and partial payloads need not contain the entry configuration.
   // Wait for the destination's full state instead of borrowing the old message.
   if (!Object.prototype.hasOwnProperty.call(world, "entry_message")) return initialWorldEntryState();
+  // Runtime identity alone cannot distinguish a first visit from a resumed run.
+  if (world.instance_ref && instanceEntry !== "initial") {
+    return { worldId: world.id, message: null };
+  }
   const paragraphs = entryMessageParagraphs(world.entry_message);
   const mode = world.entry_message_mode === "reveal" || world.entry_message_mode === "replace"
     ? world.entry_message_mode : "all";

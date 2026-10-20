@@ -5,7 +5,7 @@
       :key="index"
       :class="{ echo: message.echo, 'echo-line': message.echo }"
     >
-      <span class="message-text">{{ line }}</span>
+      <span class="message-text">{{ line }}<br v-if="!line.trim() && index < lines.length - 1" /></span>
       <span
         v-if="index === lines.length - 1 && receiptPresentation"
         class="command-receipt-status"
@@ -79,7 +79,7 @@ const props = defineProps<{
   message: any;
 }>();
 
-const lines = computed(() => props.message.text.split("\n"));
+const lines = computed(() => props.message.text.trimEnd().split("\n"));
 const receiptPresentation = computed(() => (
   commandReceiptPresentation(props.message.command_receipt)
 ));

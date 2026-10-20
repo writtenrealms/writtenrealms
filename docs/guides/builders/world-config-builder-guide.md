@@ -279,6 +279,7 @@ rejected rather than interpreted as database room ids. This applies to
 | `large_background` | URL/text | empty | Large frontend background image. |
 | `entry_message` | text | empty | Optional full-screen introduction shown when entering this world. Empty or whitespace-only text disables it. |
 | `entry_message_mode` | `all`, `reveal`, `replace` | `all` | Show all paragraphs immediately, reveal one more every three seconds, or replace the current paragraph every three seconds. |
+| `entry_message_conditions` | condition | `{}` | Existing condition DSL controlling whether an instance's introduction is still relevant when returning from the lobby or reloading. |
 
 ### Full-Screen Entry Messages
 
@@ -311,11 +312,32 @@ centered text, and a click/tap-anywhere prompt. Players can dismiss it at any
 time, including during a timed sequence. Enter, Space, and Escape also dismiss
 it. Long messages can be scrolled.
 
-The message appears on a fresh game entry and when moving into a different
-runtime world, including entering an instance and returning to the base world.
-Ordinary state refreshes and automatic socket reconnects in the same game
-session do not replay it. Entering again from the lobby or reloading the page
-starts a new session. This is a presentation overlay; it does not pause the world.
+For instances, the modal appears on a character's first entry into that run.
+Returning to an existing run skips the modal. A lobby return or page reload
+prints the instance ID, applicable introduction text, then the room description,
+with input immediately available. Blank lines between introduction paragraphs
+are preserved in the console. This console replay only appears in the
+instance's starting room and when `entry_message_conditions` passes. It displays
+text without rerunning entry triggers or their gameplay effects. A real move
+back into an instance still runs its normal arrival triggers.
+
+Use the existing condition DSL to stop replaying an outdated introduction:
+
+```yaml
+entry_message_conditions:
+  all:
+    - not:
+        quest_active: athens-intro
+    - not:
+        quest_completed: athens-intro
+```
+
+An empty mapping permits the console replay whenever the player is still in the
+starting room; `false` disables it. Omitting this field preserves its value.
+These conditions affect the return narration, not the first-entry modal.
+Ordinary state refreshes and brief socket reconnects replay neither introduction.
+Base-world modals retain their existing behavior on game entry and returning
+from an instance. The presentation overlay does not pause the world.
 
 To disable a message, save `entry_message: ''`. Omitting the field in a partial
 manifest preserves the existing message.

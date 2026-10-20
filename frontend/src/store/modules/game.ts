@@ -232,6 +232,7 @@ const set_initial_state = () => {
     width: 0,
 
     is_connected: false,
+    has_received_state: false,
     websocket: null,
     messages: [],
     pending_instance_entry: null,
@@ -507,9 +508,10 @@ const receiveMessage = async ({
 
   // Add visible messages to the console history. message_add establishes the
   // immutable snapshot boundary before live state processing begins.
+  let historyMessage;
   if (!isDeathStateSync && skip_messages.indexOf(message_data.type) == -1) {
     commit("message_add", message_data);
-    const historyMessage = state.messages[state.messages.length - 1];
+    historyMessage = state.messages[state.messages.length - 1];
     console.log(`RECV ${historyMessage.type}`);
     console.log(historyMessage);
   }
@@ -575,6 +577,7 @@ const receiveMessage = async ({
 
   // Initial/full state payload
   if (isStateSnapshot) {
+    commit("state_received");
     commit("connected_set");
     const map = {};
     const map_list = message_data.data.map || [];
@@ -620,7 +623,10 @@ const receiveMessage = async ({
   }
 
   if (message_data.data?.world) {
-    commit("world_entry_set", message_data.data.world);
+    commit("world_entry_set", {
+      world: message_data.data.world,
+      instanceEntry: historyMessage?.instance_entry ?? message_data.data.instance_entry,
+    });
   }
 
   if (
@@ -782,7 +788,10 @@ const receiveMessage = async ({
   }
 
   // Instance Transition
-  if (message_data.type === "cmd.enter.success" || message_data.type === "cmd.leave.success") {
+  if (
+    (message_data.type === "cmd.enter.success" || message_data.type === "cmd.leave.success")
+    && message_data.data?.world_name
+  ) {
     if (!message_data.data.banner_url) {
       message_data.data.banner_url = "https://assets.writtenrealms.com/ui/lobby/world-home-bg.jpg";
     }
@@ -1303,12 +1312,12 @@ const actions = {
     const onopen = () => {
       dispatch("sendWSMessage", {
         type: "system.connect",
-        data: { player_key: "player." + state.player_id },
+        data: { player_key: "player." + state.player_id, reconnect: state.has_received_state },
       });
     };
 
     const onmessage = (event) => {
-      receiveMessage({ event, rootState, state, dispatch, commit });
+      return receiveMessage({ event, rootState, state, dispatch, commit });
     };
 
     const onerror = (error) => {
@@ -1636,6 +1645,7 @@ const mutations = {
       state.pending_instance_entry = {
         world_id: message.data.world_id,
         instance_ref: message.data.instance_ref,
+        first_entry: message.data.first_entry === true,
       };
     } else if (
       message.type === "cmd.state.sync.success"
@@ -1647,6 +1657,9 @@ const mutations = {
         && String(pending.world_id) === String(message.data?.world?.id)
         && pending.instance_ref === message.data?.world?.instance_ref
       );
+      historyMessage.instance_entry = historyMessage.instance_ref_announced
+        ? (pending.first_entry ? "initial" : "return")
+        : message.data?.instance_entry;
       state.pending_instance_entry = null;
     }
     historyMessage.receive_ts = new Date().getTime();
@@ -2178,8 +2191,9 @@ const mutations = {
     state.factions = world.factions;
   },
 
-  world_entry_set: (state, world) => {
-    state.world_entry = applyWorldEntry(state.world_entry, world);
+  state_received: (state) => { state.has_received_state = true; },
+  world_entry_set: (state, { world, instanceEntry }) => {
+    state.world_entry = applyWorldEntry(state.world_entry, world, instanceEntry);
   },
   world_entry_dismiss: (state) => {
     state.world_entry.message = null;

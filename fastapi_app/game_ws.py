@@ -491,7 +491,10 @@ async def handle_game_websocket(websocket: WebSocket):
                     continue
 
                 # Queue initial state sync as the first command
-                queue_game_command('state.sync')
+                queue_game_command('state.sync', {
+                    'connection_entry': True,
+                    'reconnect': data.get('data', {}).get('reconnect') is True,
+                })
                 continue
 
             # Handle system.disconnect

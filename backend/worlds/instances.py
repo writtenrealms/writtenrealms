@@ -375,24 +375,24 @@ def start_pending_initial_instance_entry(player):
 
 
 @transaction.atomic
-def emit_pending_initial_instance_entry(player):
-    """Emit opening RP only after state.sync has reached the game connection."""
+def emit_pending_initial_instance_entry(player) -> bool:
+    """Announce the run and opening RP once the game connection is ready."""
     if not player.world.context.instance_of_id:
-        return
+        return False
     run = InstanceRun.objects.select_for_update().filter(
         spawned_world_id=player.world_id,
         owner_id=player.pk,
         progress__initial_room_enter_pending=True,
     ).first()
     if run is None:
-        return
+        return False
     del run.progress['initial_room_enter_pending']
     run.save(update_fields=['progress'])
     _enqueue_instance_events(_instance_entry_events(
         run=run, player=player, origin_room_id=None,
         destination_room_id=player.room_id,
-        announce_instance=False,
     ))
+    return True
 
 
 def create_fresh_instance_run(
@@ -680,11 +680,15 @@ def enter_players_into_run(
             for player in players:
                 finish_locked_player_pve_encounters(player=player)
 
-            list(
+            existing_participants = list(
                 InstanceParticipant.objects.select_for_update(of=('self',))
                 .filter(player_id__in=player_ids)
                 .order_by('player_id', 'id')
             )
+            returning_player_ids = {
+                participant.player_id for participant in existing_participants
+                if participant.run_id == run.pk
+            }
 
             _clear_movement_follows_for_players(player_ids)
             now = timezone.now()
@@ -726,6 +730,7 @@ def enter_players_into_run(
                         player=player,
                         origin_room_id=origin_room_id,
                         destination_room_id=entry_room.id,
+                        first_entry=player.id not in returning_player_ids,
                     )
                 )
 
@@ -965,7 +970,7 @@ def _cancel_pending_door_action(*, player, code, message):
 
 def _instance_entry_events(
         *, run, player, origin_room_id, destination_room_id,
-        announce_instance=True):
+        announce_instance=True, first_entry=True):
     from system.support_events import record_support_event
     record_support_event('instance.entered', player=player, reason='entry', details={
         'origin_room_id': origin_room_id,
@@ -979,7 +984,8 @@ def _instance_entry_events(
         events.append(GameEvent(
             type="cmd.enter.success",
             recipients=[player.key],
-            data={"world_id": run.spawned_world_id, "instance_ref": run.ref},
+            data={"world_id": run.spawned_world_id, "instance_ref": run.ref,
+                  "first_entry": first_entry},
             text=f"Instance ID: {run.ref}",
         ))
     events.append(player_room_enter_event(
@@ -1629,10 +1635,13 @@ def _enter_selected_instance_run(
                 code="actor_world_changed",
                 message="You stop working with the door as you enter the instance.",
             )
-            list(
+            existing_participants = list(
                 InstanceParticipant.objects.select_for_update(of=('self',))
                 .filter(player_id=locked_player.pk)
                 .order_by('id')
+            )
+            first_entry = not any(
+                participant.run_id == run.pk for participant in existing_participants
             )
             return_runtime_world_id = _entry_return_runtime_world_id(
                 run=run,
@@ -1685,6 +1694,7 @@ def _enter_selected_instance_run(
                     player=locked_player,
                     origin_room_id=origin_room_id,
                     destination_room_id=transfer_to.id,
+                    first_entry=first_entry,
                 ),
             ])
 

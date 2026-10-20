@@ -1386,6 +1386,7 @@ class WorldConfig(BaseModel):
     ENTRY_MESSAGE_MODES = ('all', 'reveal', 'replace')
 
     entry_message = models.TextField(blank=True, default='')
+    entry_message_conditions = models.JSONField(default=dict, blank=True)
     entry_message_mode = models.CharField(
         max_length=10, default='all',
         choices=[(mode, mode) for mode in ENTRY_MESSAGE_MODES],

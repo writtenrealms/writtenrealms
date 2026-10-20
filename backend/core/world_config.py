@@ -33,6 +33,7 @@ INSTANCE_INHERITED_CONFIG_FIELDS = {
 INSTANCE_LOCAL_CONFIG_FIELDS = {
     "upkeep",
     "entry_message",
+    "entry_message_conditions",
     "entry_message_mode",
     "instance_single_player",
     "instance_time_control",
@@ -76,6 +77,7 @@ INSTANCE_INHERITED_MANIFEST_FIELDS = {
 INSTANCE_LOCAL_MANIFEST_FIELDS = {
     "upkeep",
     "entry_message",
+    "entry_message_conditions",
     "entry_message_mode",
     "instance_single_player",
     "instance_time_control",

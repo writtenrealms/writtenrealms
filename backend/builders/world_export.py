@@ -1774,7 +1774,7 @@ def _canonicalize_nested_conditions(
         )
     canonical: dict[str, Any] = {}
     for key, child in value.items():
-        if key in {"conditions", "when"}:
+        if key in {"conditions", "when", "entry_message_conditions"}:
             if isinstance(child, (dict, list)):
                 canonical[key] = _canonicalize_condition_refs(
                     child,

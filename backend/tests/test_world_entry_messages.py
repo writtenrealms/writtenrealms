@@ -129,3 +129,39 @@ class WorldEntryMessageTests(WorldTestCase):
             counts.append(len(queries))
             self.assertEqual(payload['entry_message'], text)
         self.assertEqual(counts[0], counts[1])
+
+    def test_return_conditions_round_trip_preserve_partial_edits_and_reset_with_empty_mapping(self):
+        conditions = {'not': {'quest_accepted': 'introduction'}}
+        for world in (self.world, self.template):
+            response = self.apply(world, {'entry_message_conditions': conditions})
+            self.assertEqual(response.status_code, 200, response.data)
+            response = self.apply(world, {'entry_message': 'Welcome back.'})
+            self.assertEqual(response.status_code, 200, response.data)
+            response = self.client.get(reverse('builder-world-config', args=[world.pk]))
+            for payload in (response.data['config'], response.data['manifest']['spec']):
+                self.assertEqual(payload['entry_message_conditions'], conditions)
+        documents = serialize_world_export_payload(self.world)['documents']
+        target = World.objects.new_world(name='Imported', author=self.user, is_multiplayer=True)
+        response = self.client.post(
+            reverse('builder-world-manifest-apply', args=[target.pk]),
+            {'manifest': manifest_stream_to_yaml(documents)}, format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        target.refresh_from_db()
+        self.assertEqual(serialize_world_export_payload(target)['documents'], documents)
+        response = self.apply(self.template, {'entry_message_conditions': {}})
+        self.assertEqual(response.status_code, 200, response.data)
+        self.template.config.refresh_from_db()
+        self.assertEqual(self.template.config.entry_message_conditions, {})
+
+    def test_invalid_return_conditions_fail_for_manifest_and_config_api(self):
+        for value in ('quest incomplete', None, {'unknown': True}, {'all': 'invalid'}):
+            for endpoint in ('manifest', 'config'):
+                with self.subTest(value=value, endpoint=endpoint):
+                    spec = {'entry_message_conditions': value}
+                    response = (self.apply(self.template, spec) if endpoint == 'manifest' else
+                                self.client.patch(reverse('builder-world-config', args=[self.template.pk]),
+                                                  spec, format='json'))
+                    self.assertEqual(response.status_code, 400, response.data)
+                    self.template.config.refresh_from_db()
+                    self.assertEqual(self.template.config.entry_message_conditions, {})

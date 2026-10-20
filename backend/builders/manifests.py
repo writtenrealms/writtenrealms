@@ -1228,6 +1228,7 @@ def world_config_to_manifest(
         "information": world_information(world),
         "motd": world.motd or "",
         "entry_message": config.entry_message or "",
+        "entry_message_conditions": copy.deepcopy(config.entry_message_conditions),
         "entry_message_mode": config.entry_message_mode,
         "small_background": config.small_background or "",
         "large_background": config.large_background or "",
@@ -1298,6 +1299,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
     )
     config_payload = {
         "entry_message": config.entry_message or "",
+        "entry_message_conditions": copy.deepcopy(config.entry_message_conditions),
         "entry_message_mode": config.entry_message_mode,
         "starting_room": _serialize_room_reference(config.starting_room),
         "death_room": _serialize_room_reference(config.death_room),
@@ -7674,6 +7676,7 @@ def parse_world_config_manifest(
     allowed_fields.add("instance_goal")
     allowed_fields.add("leaderboards")
     allowed_fields.add("information")
+    allowed_fields.add("entry_message_conditions")
     allowed_fields.update({
         "default_currency",
         "starting_balances",
@@ -7832,6 +7835,16 @@ def parse_world_config_manifest(
     for field_name in _WORLD_CONFIG_CONFIG_TEXT_FIELDS:
         if field_name in spec:
             config_updates[field_name] = _coerce_text(spec.get(field_name))
+
+    if 'entry_message_conditions' in spec:
+        from worlds.entry_messages import normalize_entry_message_conditions
+
+        try:
+            config_updates['entry_message_conditions'] = normalize_entry_message_conditions(
+                spec['entry_message_conditions'],
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
     for field_name in _WORLD_CONFIG_CONFIG_BOOL_FIELDS:
         if field_name in spec:

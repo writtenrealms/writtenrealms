@@ -470,6 +470,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
         model = WorldConfig
         fields = [
             'entry_message',
+            'entry_message_conditions',
             'entry_message_mode',
             'player_creation',
             'instance_single_player',
@@ -509,6 +510,14 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'equipment_system',
             'stat_system',
         ]
+
+    def validate_entry_message_conditions(self, value):
+        from worlds.entry_messages import normalize_entry_message_conditions
+
+        try:
+            return normalize_entry_message_conditions(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
     def validate_combat_resolution_interval(self, value):
         if value < 0 and value != -1:

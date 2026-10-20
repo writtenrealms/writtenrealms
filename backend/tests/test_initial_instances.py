@@ -3,20 +3,23 @@ from unittest import mock
 import yaml
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
-from django.db import connection
+from django.db import connection, transaction
 from rest_framework.reverse import reverse
 
 from backend.config.exceptions import ServiceError
 from builders.instance_templates import create_instance_template
-from builders.models import Faction, ItemDefinition
+from builders.models import Faction, ItemDefinition, Trigger
 from config import constants as constants
 from spawns.models import Mob, Player
 from spawns.services import WorldGate
 from spawns.handlers import dispatch_command
 from tests.test_world_config_manifests import AuthenticatedBuilderWorldTestCase
+from tests.utils import capture_game_messages
 from worlds.instances import enter_instance, leave_instance, route_new_character_to_initial_instance
-from worlds.models import InstanceRun, OnboardingRewardGrant, PlayerOnboarding, World
+from worlds.models import InstanceRun, OnboardingRewardGrant, PlayerOnboarding, World, WorldConfig
 
 
 class InitialInstanceTests(AuthenticatedBuilderWorldTestCase):
@@ -116,13 +119,15 @@ class InitialInstanceTests(AuthenticatedBuilderWorldTestCase):
             self.assertTrue(InstanceRun.objects.get(
                 spawned_world_id=runtime_id,
             ).progress['initial_room_enter_pending'])
-            with mock.patch('spawns.handlers.state_sync.publish_events') as publish:
-                events.side_effect = lambda _events: self.assertGreaterEqual(publish.call_count, 1)
+            with mock.patch('spawns.handlers.state_sync.publish_events') as publish, self.captureOnCommitCallbacks(execute=True):
+                events.side_effect = lambda _events: self.assertEqual(publish.call_count, 0)
                 dispatch_command('state.sync', player_id=player.pk, payload={})
                 dispatch_command('state.sync', player_id=player.pk, payload={})
             self.assertEqual(publish.call_count, 2)
         events.assert_called_once()
-        self.assertEqual(events.call_args.args[0][0].type, 'lifecycle.player.room.enter')
+        self.assertEqual([event.type for event in events.call_args.args[0]], [
+            'cmd.enter.success', 'lifecycle.player.room.enter',
+        ])
         player.refresh_from_db()
         self.assertEqual(player.world_id, runtime_id)
         run = InstanceRun.objects.get(spawned_world_id=runtime_id)
@@ -563,3 +568,162 @@ class InitialInstanceTests(AuthenticatedBuilderWorldTestCase):
         destination_queries = [q['sql'] for q in queries if '"instance_slug" =' in q['sql']]
         self.assertEqual(len(destination_queries), 1)
         self.assertIn('LIMIT 1', destination_queries[0])
+
+
+class InitialInstanceEntryOrderTests(TransactionTestCase):
+    """Exercise real commit callbacks, including the outer instance clock lock."""
+
+    def setUp(self):
+        from spawns import triggers
+
+        # TransactionTestCase flushes and recreates content types between tests.
+        triggers._scope_content_types_cache = None
+        self.addCleanup(setattr, triggers, '_scope_content_types_cache', None)
+        user = get_user_model().objects.create_user('entry-order@example.com', 'p')
+        self.world = World.objects.new_world(
+            name='Home', author=user, config=WorldConfig.objects.create(), is_multiplayer=True,
+        )
+        self.runtime = self.world.create_spawn_world()
+        self.template = create_instance_template(
+            base_world=self.world, author=user, name='Orientation',
+        )
+        self.template.config.instance_single_player = True
+        self.template.config.save(update_fields=['instance_single_player'])
+        self.world.config.player_creation = {'instance_routes': [
+            {'when': {'always': True}, 'instance': self.template.instance_slug},
+        ]}
+        self.world.config.save(update_fields=['player_creation'])
+        self.entry_room = self.template.config.starting_room
+        self.greeting = ['Tally marks cover the wall.', 'The watchman greets you.', 'Orders rise outside.']
+        self.trigger = Trigger.objects.create(
+            world=self.template,
+            scope=constants.TRIGGER_SCOPE_ROOM,
+            kind=constants.TRIGGER_KIND_EVENT,
+            target_type=ContentType.objects.get_for_model(self.entry_room),
+            target_id=self.entry_room.pk,
+            event=constants.TRIGGER_EVENT_ENTER,
+            steps=[{'after_seconds': 0, 'actions': [
+                {'type': 'command', 'subject': 'trigger_room', 'command': f'/echo {text}'}
+                for text in self.greeting
+            ]}],
+            gate_delay=0,
+        )
+
+    def _login(self, *, time_control=False):
+        self.template.config.instance_time_control = time_control
+        self.template.config.save(update_fields=['instance_time_control'])
+        with transaction.atomic():
+            player = Player.objects.create(
+                name=f'Newcomer {time_control}', user=self.world.author,
+                world=self.runtime, room=self.world.config.starting_room,
+            )
+            route_new_character_to_initial_instance(player)
+        player.world.lifecycle = constants.WORLD_LIFECYCLE_RUNNING
+        player.world.save(update_fields=['lifecycle'])
+        with mock.patch.object(WorldGate, 'preflight'), capture_game_messages() as messages:
+            player = WorldGate(player, player.world).enter()
+        self.assertFalse(any(row['message'].get('text') in self.greeting for row in messages))
+        return player
+
+    def _sync_messages(self, player, **payload):
+        with capture_game_messages() as messages:
+            dispatch_command('state.sync', player_id=player.pk, payload=payload, connection_id='entry-test')
+        return [row['message'] for row in messages if row['player_key'] == player.key]
+
+    def test_first_sync_announces_id_then_immediate_rp_then_room_without_replaying_on_resume(self):
+        for time_control in (False, True):
+            with self.subTest(time_control=time_control):
+                player = self._login(time_control=time_control)
+                run = InstanceRun.objects.get(spawned_world=player.world)
+                messages = self._sync_messages(player)
+                types = [message['type'] for message in messages]
+                announcement_index = types.index('cmd.enter.success')
+                snapshot_index = types.index('cmd.state.sync.success')
+                self.assertEqual(types.count('cmd.enter.success'), 1)
+                self.assertEqual(types.count('cmd.state.sync.success'), 1)
+                self.assertEqual(messages[announcement_index]['text'], f'Instance ID: {run.ref}')
+                self.assertEqual(messages[announcement_index]['data']['world_id'], player.world_id)
+                self.assertTrue(messages[announcement_index]['data']['first_entry'])
+                self.assertEqual(messages[snapshot_index]['data']['instance_entry'], 'initial')
+                for text in self.greeting:
+                    self.assertIn(text, [message.get('text') for message in messages])
+                greeting_indices = [
+                    next(i for i, message in enumerate(messages) if message.get('text') == text)
+                    for text in self.greeting
+                ]
+                ordered_indices = [announcement_index, *greeting_indices, snapshot_index]
+                self.assertEqual(ordered_indices, sorted(ordered_indices))
+                run.refresh_from_db()
+                self.assertNotIn('initial_room_enter_pending', run.progress)
+
+                with mock.patch.object(WorldGate, 'preflight'):
+                    WorldGate(player, player.world).enter()
+                resumed = self._sync_messages(player)
+                self.assertEqual([message['type'] for message in resumed], ['cmd.state.sync.success'])
+                self.assertEqual(resumed[0]['data']['world']['instance_ref'], run.ref)
+
+    def test_final_snapshot_uses_room_after_entry_trigger_transfer(self):
+        destination = self.entry_room.create_at('east')
+        self.trigger.steps = []
+        self.trigger.script = (
+            f'/cmd room -- /transfer {{{{ actor_key }}}} room@{destination.relative_id}'
+        )
+        self.trigger.save(update_fields=['steps', 'script'])
+        for time_control in (False, True):
+            with self.subTest(time_control=time_control):
+                player = self._login(time_control=time_control)
+                messages = self._sync_messages(player)
+                snapshots = [message for message in messages if message['type'] == 'cmd.state.sync.success']
+                self.assertEqual(len(snapshots), 1)
+                self.assertEqual(snapshots[0]['data']['room']['id'], destination.pk)
+
+    def test_return_replays_only_applicable_narration_before_room_without_trigger_effects(self):
+        from quests.models import QuestInstance, QuestTemplate
+        from spawns.models import ScheduledTriggerRun
+        from spawns.state_payloads import get_player_with_related
+        from worlds.entry_messages import returning_instance_message
+
+        introduction = '\n\n'.join(self.greeting)
+        self.template.config.entry_message = introduction
+        self.template.config.entry_message_conditions = {
+            'all': [{'not': {'quest_active': 'intro'}}, {'not': {'quest_completed': 'intro'}}],
+        }
+        self.template.config.save(update_fields=['entry_message', 'entry_message_conditions'])
+        quest = QuestTemplate.objects.create(world=self.template, slug='intro', name='Introduction')
+        player = self._login()
+        self._sync_messages(player, connection_entry=True)
+        trigger_count = ScheduledTriggerRun.objects.count()
+
+        ready_player = get_player_with_related(player.pk)
+        with CaptureQueriesContext(connection) as queries:
+            self.assertEqual(returning_instance_message(ready_player), introduction)
+        # Both quest predicates share one indexed, run-scoped lookup.
+        self.assertEqual(len(queries), 1)
+
+        resumed = self._sync_messages(player, connection_entry=True)
+        self.assertEqual([message['type'] for message in resumed], [
+            'cmd.enter.success', 'notification.instance.introduction', 'cmd.state.sync.success',
+        ])
+        self.assertEqual(resumed[1]['text'], introduction)
+        self.assertFalse(resumed[0]['data']['first_entry'])
+        self.assertEqual(resumed[-1]['data']['instance_entry'], 'return')
+        self.assertEqual(ScheduledTriggerRun.objects.count(), trigger_count)
+
+        for payload in ({}, {'connection_entry': True, 'reconnect': True}):
+            refreshed = self._sync_messages(player, **payload)
+            self.assertEqual([message['type'] for message in refreshed], ['cmd.state.sync.success'])
+            self.assertEqual(refreshed[0]['data']['instance_entry'], 'sync')
+
+        attempt = QuestInstance.objects.create(player=player, template=quest, world=player.world, status='active')
+        for status, resolution in (('active', ''), ('resolved', 'complete')):
+            attempt.status, attempt.resolution = status, resolution
+            attempt.save(update_fields=['status', 'resolution'])
+            resumed = self._sync_messages(player, connection_entry=True)
+            self.assertEqual([message['type'] for message in resumed], ['cmd.state.sync.success'])
+            self.assertEqual(resumed[0]['data']['instance_entry'], 'return')
+        attempt.delete()
+        destination = self.entry_room.create_at('east')
+        Player.objects.filter(pk=player.pk).update(room=destination)
+        resumed = self._sync_messages(player, connection_entry=True)
+        self.assertEqual([message['type'] for message in resumed], ['cmd.state.sync.success'])
+        self.assertEqual(resumed[0]['data']['room']['id'], destination.pk)
