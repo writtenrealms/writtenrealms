@@ -127,6 +127,95 @@ class TestInstanceGoals(WorldTestCase):
         self.assertTrue(record.single_player)
         self.assertEqual(record.ranking_player_id, self.player.pk)
 
+    def test_completion_identity_is_captured_before_delayed_delivery(self):
+        self.player.archetype = 'hoplite'
+        self.player.core_faction = self.greek
+        self.player.save(update_fields=['archetype', 'core_faction'])
+        self.world.config.stat_system['labels']['classes'] = {'hoplite': 'Hoplite of Athena'}
+        self.world.config.save(update_fields=['stat_system'])
+        mob = self.mob()
+        self.enter()
+        name_at_completion = self.player.name
+        self.defeat(mob)
+        self.player.archetype = 'tidehunter'
+        self.player.name = 'Renamed'
+        self.player.core_faction = self.persian
+        self.player.save(update_fields=['archetype', 'name', 'core_faction'])
+        self.world.config.stat_system['labels']['classes'] = {'hoplite': 'Changed label'}
+        self.world.config.save(update_fields=['stat_system'])
+        self.drain()
+        record = InstanceClearRecord.objects.get()
+        self.assertEqual(record.participants[0]['name'], name_at_completion)
+        self.assertEqual(record.participants[0]['class_key'], 'hoplite')
+        self.assertEqual(record.participants[0]['class_name'], 'Hoplite of Athena')
+        self.assertEqual(record.participants[0]['core_faction'], 'Greek')
+        self.assertEqual(self.run.outcome['participants'], record.participants)
+        self.assertNotIn('last_participants', self.run.progress)
+
+    def test_out_of_order_delivery_uses_identity_from_last_actual_death(self):
+        first, second = self.mob(), self.mob()
+        self.enter()
+        self.player.archetype = 'hoplite'
+        self.player.save(update_fields=['archetype'])
+        self.defeat(first, self.run.started_at + timedelta(seconds=5))
+        self.player.archetype = 'tidehunter'
+        self.player.save(update_fields=['archetype'])
+        self.defeat(second, self.run.started_at + timedelta(seconds=8))
+        events = list(GameEventOutbox.objects.filter(event_type=DEFEAT_EVENT).order_by('-pk'))
+        self.player.archetype = 'mystic'
+        self.player.save(update_fields=['archetype'])
+        for event in [events[0], events[0], events[1]]:
+            process_instance_mob_defeat(event.data)
+        self.drain()
+        record = InstanceClearRecord.objects.get()
+        self.assertEqual(record.clear_time_ms, 8000)
+        self.assertEqual(record.participants[0]['class_key'], 'tidehunter')
+        self.assertEqual(record.participants[0]['class_name'], 'Tidehunter')
+
+    def test_snapshot_queries_do_not_grow_with_party_size(self):
+        first, second = self.mob(), self.mob()
+        self.enter()
+        with CaptureQueriesContext(connection) as solo:
+            record_instance_mob_defeat(first)
+        members = [self.create_player(f'Member{i}') for i in range(12)]
+        self.enter(members)
+        with CaptureQueriesContext(connection) as party:
+            record_instance_mob_defeat(second)
+        self.assertEqual(len(solo), len(party))
+        identity_reads = [q for q in party if q['sql'].startswith('SELECT') and 'spawns_player' in q['sql']]
+        self.assertEqual(len(identity_reads), 1)
+        event = GameEventOutbox.objects.get(event_type=DEFEAT_EVENT, data__mob_id=second.pk)
+        self.assertEqual(len(event.data['participants']), 13)
+        self.assertTrue(all('class_key' in p for p in event.data['participants']))
+
+    def test_deleted_solo_character_keeps_snapshot_without_ranking_foreign_key(self):
+        self.run.single_player = True
+        self.run.owner = self.player
+        self.run.save(update_fields=['single_player', 'owner'])
+        mob = self.mob()
+        self.enter()
+        self.player.archetype = 'hoplite'
+        self.player.save(update_fields=['archetype'])
+        player_id = self.player.pk
+        self.defeat(mob)
+        self.player.delete()
+        self.drain()
+        record = InstanceClearRecord.objects.get()
+        self.assertIsNone(record.ranking_player_id)
+        self.assertEqual(record.participants[0]['player_id'], player_id)
+        self.assertEqual(record.participants[0]['class_key'], 'hoplite')
+
+    def test_classless_completion_records_empty_class_without_inventing_a_label(self):
+        self.player.archetype = ''
+        self.player.save(update_fields=['archetype'])
+        mob = self.mob()
+        self.enter()
+        self.defeat(mob)
+        self.drain()
+        participant = InstanceClearRecord.objects.get().participants[0]
+        self.assertEqual(participant['class_key'], '')
+        self.assertEqual(participant['class_name'], '')
+
     def test_builder_attempt_stays_unranked_after_builder_flag_is_removed(self):
         self.player.is_builder = True
         self.player.save(update_fields=['is_builder'])

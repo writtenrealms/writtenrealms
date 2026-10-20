@@ -1,8 +1,9 @@
 """Initial-population clear goals and durable, server-timed completion records.
 
-Combat keeps its shared instance lifecycle lock: it only marks one cohort row
-and writes to the existing outbox. Progress/completion takes the exclusive run
-lock after combat commits, avoiding lock upgrades between simultaneous kills.
+Combat keeps its shared instance lifecycle lock: it marks one cohort row and
+captures participant identity in the existing outbox. Progress/completion takes
+the exclusive run lock after combat commits, avoiding lock upgrades between
+simultaneous kills.
 """
 from copy import deepcopy
 from datetime import datetime
@@ -10,6 +11,7 @@ import re
 import uuid
 
 from django.db import transaction
+from django.db.models import F, Func, TextField, Value
 from django.utils import timezone
 
 from core.condition_dsl import ConditionContext, evaluate_condition, validate_condition_payload
@@ -18,6 +20,27 @@ from core.condition_dsl import ConditionContext, evaluate_condition, validate_co
 MAX_COHORT_MOBS = 10000
 DEFEAT_EVENT = 'private.instance.mob_defeated'
 MOB_PATHS = {'event.mob.core_faction', 'event.mob.definition_slug'}
+
+
+def _participant_snapshot(rows, *, capture_identity=False):
+    participants = []
+    for row in rows:
+        player = row.player
+        participant = {
+            'player_id': row.player_id, 'name': player.name, 'role': row.role,
+            'is_builder': player.is_builder,
+            'joined_at': row.joined_at.isoformat(),
+            'exited_at': row.exited_at.isoformat() if row.exited_at else None,
+        }
+        if capture_identity:
+            class_key = player.archetype or ''
+            participant.update({
+                'class_key': class_key,
+                'class_name': row.class_label or class_key.replace('_', ' ').capitalize(),
+                'core_faction': player.core_faction.name if player.core_faction_id else '',
+            })
+        participants.append(participant)
+    return participants
 
 
 def normalize_instance_goal(value):
@@ -120,7 +143,7 @@ def record_instance_mob_defeat(mob):
     """
     from spawns.combat_encounters import current_context
     from spawns.events import GameEvent, PRIVATE_CONTROL_EVENT_KEY, enqueue_game_events
-    from worlds.models import InstanceGoalMember
+    from worlds.models import InstanceGoalMember, InstanceParticipant
 
     context = current_context()
     if context is not None and not any(
@@ -133,8 +156,26 @@ def record_instance_mob_defeat(mob):
         defeated_at__isnull=True,
     ).update(defeated_at=timezone.now())
     if changed:
+        # One joined read per qualifying death, never per participant. Extract
+        # just each class label rather than loading whole stat configurations.
+        # The outbox is removed after delivery; progress keeps only the latest
+        # snapshot. Do not take an exclusive run
+        # lock here: concurrent room combats already hold shared run locks.
+        participants = _participant_snapshot(
+            InstanceParticipant.objects.filter(run__spawned_world_id=mob.world_id)
+            .annotate(class_label=Func(
+                F('run__base_world__config__stat_system'), Value('labels'), Value('classes'),
+                F('player__archetype'), function='jsonb_extract_path_text', output_field=TextField(),
+            ))
+            .select_related('player__core_faction').only(
+                'player_id', 'role', 'joined_at', 'exited_at', 'player__name',
+                'player__archetype', 'player__is_builder', 'player__core_faction__name',
+            ).order_by('player_id'),
+            capture_identity=True,
+        )
         enqueue_game_events([GameEvent(DEFEAT_EVENT, {
             'mob_id': mob.pk, 'world_id': mob.world_id,
+            'participants': participants,
             PRIVATE_CONTROL_EVENT_KEY: True,
         })])
 
@@ -164,22 +205,22 @@ def process_instance_mob_defeat(data):
     progress['remaining'] -= 1
     latest = datetime.fromisoformat(progress['last_defeated_at']) if progress.get('last_defeated_at') else run.started_at
     completed_at = max(latest, member.defeated_at)
+    if (member.defeated_at, member.mob_runtime_id) > (latest, progress.get('last_defeated_mob_id', 0)):
+        progress['last_participants'] = data.get('participants')
+        progress['last_defeated_mob_id'] = member.mob_runtime_id
     progress['last_defeated_at'] = completed_at.isoformat()
     run.progress = progress
     if progress['remaining']:
         run.save(update_fields=['progress'])
         return
 
-    participant_rows = list(run.participants.select_related('player').order_by('player_id'))
-    participants = [{
-        'player_id': p.player_id, 'name': p.player.name, 'role': p.role,
-        'is_builder': p.player.is_builder,
-        'joined_at': p.joined_at.isoformat(),
-        'exited_at': p.exited_at.isoformat() if p.exited_at else None,
-    } for p in participant_rows]
-    ranking_eligible = bool(run.progress.get('ranking_eligible')) and bool(participant_rows) and all(
-        not p.player.is_builder
-        for p in participant_rows
+    participants = progress.pop('last_participants', None)
+    if participants is None:
+        # Already-queued events without identity retain the old name-only
+        # behavior. Never guess their historical class from today's player.
+        participants = _participant_snapshot(run.participants.select_related('player').order_by('player_id'))
+    ranking_eligible = bool(run.progress.get('ranking_eligible')) and bool(participants) and all(
+        not p['is_builder'] for p in participants
     )
     delta = completed_at - run.started_at
     clear_time_ms = (delta.days * 86400 + delta.seconds) * 1000 + delta.microseconds // 1000
@@ -191,7 +232,11 @@ def process_instance_mob_defeat(data):
         time_control=run.time_control, goal_spec=deepcopy(run.goal_spec), participants=participants,
         single_player=run.single_player,
         ranking_eligible=ranking_eligible,
-        ranking_player_id=participant_rows[0].player_id if run.single_player and len(participant_rows) == 1 else None,
+        # The locked run's owner FK is cleared if the character was deleted
+        # before delivery. Keep their snapshot without creating a dangling FK.
+        ranking_player_id=run.owner_id if (
+            run.single_player and len(participants) == 1 and participants[0]['player_id'] == run.owner_id
+        ) else None,
     )
     run.completed_at = completed_at
     run.status = run.STATUS_COMPLETED

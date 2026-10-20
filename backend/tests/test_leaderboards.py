@@ -8,6 +8,7 @@ from django.core.cache import cache
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 
 from builders.manifests import apply_world_config_manifest, parse_world_config_manifest, world_config_to_manifest
@@ -62,7 +63,8 @@ class TestLeaderboards(WorldTestCase):
         return world_leaderboard_panels(self.world)
 
     def test_manifest_config_endpoint_and_export_preserve_panel_order_and_options(self):
-        panels = [{'type': 'instance_clear_time', 'instance': self.template.instance_slug, 'title': 'Outpost', 'limit': 5},
+        panels = [{'type': 'instance_clear_time', 'instance': self.template.instance_slug, 'title': 'Outpost', 'limit': 5,
+                   'entry_name': '{{ name }} the {{ class }}'},
                   {'type': 'dueling', 'minimum_matches': 3}]
         response = self.client.post(reverse('builder-world-manifest-apply', args=[self.world.pk]),
                                     {'manifest': yaml.safe_dump({'kind': 'world', 'spec': {'leaderboards': panels}})}, format='json')
@@ -122,6 +124,77 @@ class TestLeaderboards(WorldTestCase):
         self.assertEqual([r['name'] for r in panel['entries']], ['Joe, Ally'])
         # Party entries are keyed by record, so the lobby must not match them to characters.
         self.assertTrue(panel['entries'][0]['is_party'])
+
+    def test_personal_best_keeps_its_identity_until_a_faster_clear(self):
+        hoplite = {'player_id': self.player.pk, 'name': 'Onyx', 'class_key': 'hoplite',
+                   'class_name': 'Hoplite', 'core_faction': 'Greek'}
+        tidehunter = {**hoplite, 'class_key': 'tidehunter', 'class_name': 'Tidehunter'}
+        self.clear(milliseconds=23 * 60000, participants=[hoplite])
+        self.player.archetype = 'tidehunter'
+        self.player.name = 'Newname'
+        self.player.save(update_fields=['archetype', 'name'])
+        self.clear(milliseconds=25 * 60000, participants=[tidehunter])
+        panel = {'type': 'instance_clear_time', 'instance': self.template.instance_slug,
+                 'entry_name': '{{ name }} the {{ class }}'}
+        self.configure([panel])
+        entry = self.panels()[0]['entries'][0]
+        self.assertEqual(entry, {'id': self.player.pk, 'name': 'Onyx the Hoplite', 'archetype': 'Hoplite',
+                                 'core_faction': 'Greek', 'name_includes_class': True, 'clear_time_ms': 23 * 60000})
+        # Reformat immediately from the same saved facts, without clearing the cache.
+        self.configure([{**panel, 'entry_name': '{{class}}: {{name}}'}])
+        self.assertEqual(self.panels()[0]['entries'][0]['name'], 'Hoplite: Onyx')
+        self.clear(milliseconds=21 * 60000, participants=[tidehunter])
+        cache.clear()
+        self.assertEqual(self.panels()[0]['entries'][0]['name'], 'Tidehunter: Onyx')
+        self.assertEqual(self.panels()[0]['entries'][0]['clear_time_ms'], 21 * 60000)
+
+    def test_equal_personal_bests_choose_earliest_completion_then_record_id(self):
+        now = timezone.now()
+        self.clear(completed_at=now, participants=[{'player_id': self.player.pk, 'name': 'Later'}])
+        self.clear(completed_at=now - timedelta(minutes=1), participants=[{'player_id': self.player.pk, 'name': 'First'}])
+        self.clear(completed_at=now - timedelta(minutes=1), participants=[{'player_id': self.player.pk, 'name': 'Tied'}])
+        self.configure([{'type': 'instance_clear_time', 'instance': self.template.instance_slug}])
+        self.assertEqual(self.panels()[0]['entries'][0]['name'], 'First')
+
+    def test_missing_historical_class_falls_back_to_saved_name(self):
+        self.clear(participants=[{'player_id': self.player.pk, 'name': 'Oldname'}])
+        self.player.archetype = 'tidehunter'
+        self.player.save(update_fields=['archetype'])
+        self.configure([{'type': 'instance_clear_time', 'instance': self.template.instance_slug,
+                         'entry_name': '{{ name }} the {{ class }}'}])
+        entry = self.panels()[0]['entries'][0]
+        self.assertEqual(entry['name'], 'Oldname')
+        self.assertEqual(entry['archetype'], '')
+        self.assertEqual(entry['core_faction'], '')
+        self.assertFalse(entry['name_includes_class'])
+
+    def test_party_name_template_formats_each_saved_member(self):
+        self.template.config.instance_single_player = False
+        self.template.config.instance_time_control = False
+        self.template.config.save()
+        self.clear(single_player=False, time_control=False, participants=[
+            {'name': 'Onyx', 'class_key': 'hoplite', 'class_name': 'Hoplite'},
+            {'name': 'Ally', 'class_key': 'tidehunter', 'class_name': 'Tidehunter'},
+            {'name': 'Older'},
+        ])
+        self.configure([{'type': 'instance_clear_time', 'instance': self.template.instance_slug,
+                         'entry_name': '{{ name }} the {{ class }}'}])
+        self.assertEqual(self.panels()[0]['entries'][0]['name'], 'Onyx the Hoplite, Ally the Tidehunter, Older')
+
+    def test_invalid_entry_templates_are_rejected_by_manifest_and_serializer(self):
+        for template in [None, 1, '', ' ', 'x' * 161, '{{ title }}', '{{ Name }}', '{{ name',
+                         '{Name}', '{% if class %}yes{% endif %}', '{{ name.upper() }}',
+                         '{{ name | upper }}', '{{ name.__class__ }}']:
+            panels = [{'type': 'instance_clear_time', 'instance': self.template.instance_slug, 'entry_name': template}]
+            with self.subTest(template=template):
+                with self.assertRaisesRegex(ValidationError, r'leaderboards\[0\].entry_name'):
+                    parse_world_config_manifest(world=self.world, manifest={'kind': 'world', 'spec': {'leaderboards': panels}})
+                serializer = WorldConfigSerializer(self.world.config, data={'leaderboards': panels},
+                                                   partial=True, context={'world': self.world})
+                self.assertFalse(serializer.is_valid())
+        for kind in ['dueling', 'glory_experience']:
+            with self.assertRaisesRegex(ValueError, 'unsupported settings: entry_name'):
+                normalize_leaderboards([{'type': kind, 'entry_name': '{{ name }}'}], world=self.world)
 
     def test_duels_use_three_completed_matches_win_percentage_then_wins(self):
         more = self.create_player('More')

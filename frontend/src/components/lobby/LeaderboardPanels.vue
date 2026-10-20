@@ -28,8 +28,8 @@
               <router-link v-else class="ranking-name" :to="{ name: 'character_details', params: { player_id: entry.id } }">{{ entry.name }}</router-link>
               <span v-if="isOwn(entry)" class="tag tag-secondary ranking-own-tag">YOURS</span>
             </div>
-            <div v-if="entry.core_faction || entry.archetype" class="ranking-detail color-text-60">
-              {{ [entry.core_faction, entry.archetype].filter(Boolean).join(' · ') }}
+            <div v-if="entry.core_faction || (entry.archetype && !entry.name_includes_class)" class="ranking-detail color-text-60">
+              {{ [entry.core_faction, entry.name_includes_class ? '' : entry.archetype].filter(Boolean).join(' · ') }}
             </div>
           </div>
           <div class="ranking-score">
@@ -59,6 +59,7 @@ interface RankingEntry {
   name: string;
   core_faction?: string;
   archetype?: string;
+  name_includes_class?: boolean;
   is_party?: boolean;
   clear_time_ms?: number;
   win_percentage?: number;

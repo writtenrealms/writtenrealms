@@ -160,6 +160,7 @@ spec:
   leaderboards:
     - type: instance_clear_time
       instance: a-persian-outpost
+      entry_name: "{{ name }} the {{ class }}"
     - type: dueling
       minimum_matches: 3
 ```
@@ -171,7 +172,7 @@ entry with another slug. No separate leaderboard editor is required.
 
 | Type | Settings | Ranking |
 | --- | --- | --- |
-| `instance_clear_time` | Required `instance`; optional `timing: current`, `time_control`, or `continuous` | Fastest eligible clear first. Solo templates show one personal best per character; group templates show party runs. |
+| `instance_clear_time` | Required `instance`; optional `timing: current`, `time_control`, or `continuous`, and `entry_name` | Fastest eligible clear first. Solo templates show one personal best per character; group templates show party runs. |
 | `dueling` | `minimum_matches`, default `3` | Highest win percentage, then most wins. Only completed wins/losses count; exactly three matches qualifies at the default threshold. |
 | `glory_experience` | None required | Highest glory, then experience, then newest character, matching the original ranking. |
 
@@ -194,10 +195,43 @@ panels. Configuration is included in world and family exports. Unknown types,
 settings, slugs, and invalid thresholds produce save errors. Influence is not
 available yet and will become another panel type when that rating exists.
 
+### Completion entry names
+
+Instance panels accept an optional `entry_name` format of 1–160 characters.
+The default is `"{{ name }}"`. Available substitutions are:
+
+| Value | Meaning |
+| --- | --- |
+| `{{ name }}` | Character name saved at completion. |
+| `{{ class }}` | Class display name saved at completion, using the world's class label. |
+
+For example, `"{{ name }} the {{ class }}"` displays **Onyx the Hoplite**.
+Later class changes, character renames, and class-label edits do not change
+that result. The format can be edited later and will use the same saved facts.
+For party clears, it formats each participant before joining their names.
+The class is omitted from the secondary detail line when it appears in the name;
+any faction shown there also comes from the completion snapshot.
+
+Only the two substitutions and literal plain text are supported: no HTML
+formatting, filters, expressions, or conditionals. Unknown substitutions and
+malformed braces produce a save error. If a completion has no saved class
+(including older records and classless characters), a format requesting class
+falls back to the saved character name alone. Current class is never used to
+guess historical class. This setting is only available for instance panels.
+
+Personal bests still show one result per character. If Onyx later clears faster
+as a Tidehunter, that result replaces the Hoplite clear on the board; a slower
+clear does not. Both completions remain in history. Class-filtered rankings are
+not currently supported.
+
+### Ranking rules
+
 Instance `timing: current` follows the template's current time-control setting.
 Timing and solo/group modes are separate categories. Times measure wall-clock
 duration, including pauses and absences. Exact ties use a stable character ID
-(solo) or the earliest completion (party).
+(solo) or the earliest completion (party). When a character has multiple clears
+with the same personal-best time, the earliest completion supplies the identity;
+equal completion timestamps use the earliest record ID.
 
 Ranked instance attempts require non-builder participants when the timer starts
 and when the completion is recorded. Builder `/reset` attempts stay in completion history but are not

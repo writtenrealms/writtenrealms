@@ -41,6 +41,12 @@ notice only hides the message; it does not cancel entry.
 
 ## Character Pages
 
+Instance rankings show a character's identity when the clear was earned. A
+builder may display names such as **Onyx the Hoplite**; becoming a different
+class later does not change that entry. A faster clear replaces the personal
+best and displays the identity from that new clear. Opening the character's
+page shows their current profile, which may differ from the recorded result.
+
 Click a character in your list, or a name in a world's rankings, to open its
 character page. Other players see a character's name, title, class, level,
 description, and what they are wearing. On your own characters you also see

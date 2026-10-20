@@ -361,6 +361,11 @@ Current required mappings:
   imports defer this setting until child goals are applied, then validate it
   inside the family transaction. The optional WR1 authored-world exporter may
   emit panel configuration; rankings and result history are not exported.
+  Instance panels may include `entry_name` (1–160 characters, default
+  `"{{ name }}"`), supporting only `{{ name }}` and `{{ class }}` substitutions
+  plus literal text. These read WR2 completion snapshots. The exporter may
+  emit the authored format but must not synthesize historical identities or
+  export completion data. Other panel types do not accept this setting.
 - WR2 instance world documents may author `spec.instance_goal` as
   `{type: clear_initial_mobs, where: <shared condition DSL>}` or `{}`. It is local
   template configuration and round-trips in world/family manifests. Cohorts,

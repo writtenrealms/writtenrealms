@@ -17,8 +17,15 @@ never counts. The existing game event outbox delivers private death notification
 after combat releases its shared run lock. The subscriber locks only that run,
 counts each member once, and finalizes the result atomically. There are no per-tick
 population scans, per-player death fanouts, or shared-to-exclusive lock upgrades.
-Cohort selection batches faction reads; death processing is constant work per
-target and completion alone snapshots participants. The population cap is 10,000.
+Cohort selection batches faction reads. Each qualifying death adds one joined
+participant query to capture names, class keys/display labels, and core-faction
+names in the private durable event. The query extracts only the relevant class
+labels, not whole stat configurations, and adds no per-participant queries or
+locks. This costs O(run participants) data per qualifying death so a class change
+before delayed delivery cannot rewrite the result. Delivered outbox rows are
+removed; run progress retains only the latest death's snapshot, using mob ID to
+break equal-time ties. Completion moves that snapshot into the durable result.
+The population cap is 10,000.
 
 `InstanceClearRecord` retains start/completion UTC wall time, milliseconds, the
 goal and template snapshots, time-control mode, and participant identities.
@@ -36,7 +43,11 @@ eligibility. Builder participants at first entry or completion disqualify a
 result; builder resets are unranked. Records without this snapshot remain
 historical only. A partial index supports eligible personal-best queries. The
 lobby aggregates minima and duel results in PostgreSQL within a selected
-template/base world, limits responses to 50 entries per panel and eight panels,
+template/base world. Solo clears fetch the winning records in one additional
+indexed batch (at most 50 records), choosing the earliest completion/record ID
+for equal personal-best times. Identity and display templates use those saved
+records, never current player names or classes. The lobby limits responses to
+50 entries per panel and eight panels,
 and caches the shared response for 30 seconds. A refresh lease coalesces
 concurrent requests, serving stale data during refresh when available. No
 per-tick or per-player ranking jobs are added. Query-count regression coverage

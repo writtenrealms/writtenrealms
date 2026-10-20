@@ -995,10 +995,14 @@ the durable event subscriber marks the run `completed` and records:
 - `started_at` and `completed_at` as server UTC wall-clock timestamps;
 - `clear_time_ms`, calculated from those timestamps;
 - the goal snapshot, template identity, and whether time control was enabled;
-- participant IDs, names, roles, and entry/exit timestamps.
+- participant IDs, names, roles, and entry/exit timestamps;
+- each participant's class key, class display name, and core-faction name at
+  completion, retained even if the character or class labels later change.
 
 The completion timestamp comes from the last actual death, even when events
-are delivered late, retried, or out of order. Leaving and reentering does not
+are delivered late, retried, or out of order. Participant identity comes from
+that death's durable snapshot as well. Class is saved for every new completion,
+whether or not a leaderboard's name format displays it. Leaving and reentering does not
 restart the timer. Wall-clock timing includes pauses, time spent deciding what
 to do, and absences; the time-control flag is retained for future leaderboard
 filtering. Completion history includes builder attempts; public leaderboard

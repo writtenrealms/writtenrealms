@@ -11,6 +11,7 @@ import time
 from django.core.cache import cache
 from django.db.models import Count, F, FloatField, Min, Q, ExpressionWrapper
 
+from core.leaderboards import completion_identity, DEFAULT_ENTRY_NAME
 from spawns.models import DuelParticipant, Player
 from worlds.models import InstanceClearRecord, World
 
@@ -85,20 +86,42 @@ def _instance(world, panel, templates):
         template_world_id=template.pk, time_control=time_control,
         single_player=solo, ranking_eligible=True,
     )
+    entry_name = panel.get('entry_name', DEFAULT_ENTRY_NAME)
     if solo:
         bests = list(records.filter(
             ranking_player__is_builder=False, ranking_player__pending_deletion_ts__isnull=True,
         ).order_by().values('ranking_player_id').annotate(
             clear_time_ms=Min('clear_time_ms'),
         ).order_by('clear_time_ms', 'ranking_player_id')[:panel.get('limit', 10)])
-        players = _players([r['ranking_player_id'] for r in bests])
-        result['entries'] = [{**players[r['ranking_player_id']], 'clear_time_ms': r['clear_time_ms']}
-                             for r in bests if r['ranking_player_id'] in players]
+        # Keep the indexed aggregate, then fetch the actual winning records in
+        # one bounded batch. Equal times use the earliest clear, then record ID.
+        # Do not join today's class/name onto a historical result.
+        matches = Q(pk__in=[])
+        for best in bests:
+            matches |= Q(ranking_player_id=best['ranking_player_id'], clear_time_ms=best['clear_time_ms'])
+        winners = {
+            record.ranking_player_id: record
+            for record in records.filter(matches).order_by(
+                'ranking_player_id', 'completed_at', 'pk',
+            ).distinct('ranking_player_id').only('ranking_player_id', 'participants', 'clear_time_ms')
+        }
+        result['entries'] = []
+        for best in bests:
+            record = winners.get(best['ranking_player_id'])
+            if record is None:  # A character/result may have been deleted between reads.
+                continue
+            participant = next((p for p in record.participants if p.get('player_id') == record.ranking_player_id), {})
+            result['entries'].append({
+                'id': record.ranking_player_id, **completion_identity(participant, entry_name),
+                'clear_time_ms': record.clear_time_ms,
+            })
     else:
         # Party runs are records, not individual personal bests. Snapshot names
         # survive cleanup; one bounded query returns at most the requested rows.
         result['entries'] = [
-            {'id': r.pk, 'is_party': True, 'name': ', '.join(p['name'] for p in r.participants), 'clear_time_ms': r.clear_time_ms}
+            {'id': r.pk, 'is_party': True,
+             'name': ', '.join(completion_identity(p, entry_name)['name'] for p in r.participants),
+             'clear_time_ms': r.clear_time_ms}
             for r in records.only('id', 'participants', 'clear_time_ms').order_by('clear_time_ms', 'completed_at', 'pk')[:panel.get('limit', 10)]
         ]
     return result
@@ -118,7 +141,7 @@ def world_leaderboard_panels(world):
                            w.config.instance_single_player, w.config.instance_goal)
                           for w in sorted(templates.values(), key=lambda w: w.pk)]]
     digest = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()[:24]
-    key = f'lobby-rankings:v2:{world.pk}:{digest}'
+    key = f'lobby-rankings:v3:{world.pk}:{digest}'
     cached = cache.get(key)
     if cached is not None and cached['fresh_until'] > time.time():
         return cached['panels']

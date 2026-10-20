@@ -54,6 +54,21 @@ test('empty configured panels remain visible while disabled panels render no hea
   assert.match(await render({ error: true }), /RETRY/);
 });
 
+test('completion names keep character links and show the saved class only once', async () => {
+  const entry = { id: 5, name: 'Onyx the Hoplite', archetype: 'Hoplite', core_faction: 'Greek',
+    name_includes_class: true, clear_time_ms: 1380000 };
+  const html = await render({ panels: [{ ...panels[0], entries: [entry] }], ownPlayerIds: [5] });
+  assert.match(html, /href="\/characters\/5"[^>]*>Onyx the Hoplite<\/a>/);
+  assert.equal(html.match(/Hoplite/g).length, 1);
+  assert.match(html, /Greek/);
+  assert.match(html, /YOURS/);
+  const defaultName = await render({ panels: [{ ...panels[0], entries: [{ ...entry, name: 'Onyx', name_includes_class: false }] }] });
+  assert.match(defaultName, /Greek · Hoplite/);
+  const plainText = await render({ panels: [{ ...panels[0], entries: [{ ...entry, name: '<b>Onyx the Hoplite</b>' }] }] });
+  assert.match(plainText, /&lt;b&gt;Onyx the Hoplite&lt;\/b&gt;/);
+  assert.doesNotMatch(plainText, /<b>/);
+});
+
 test('multiple rankings become tabs showing one panel; own characters are tagged', async () => {
   const html = await render({ panels, ownPlayerIds: [5, 7] });
   assert.equal(html.match(/role="tab"/g).length, 3);
