@@ -24,8 +24,8 @@
           <div class="action" @click="onClickLeave" v-if="store.state.game.world.instance_of_id">
             <a href="#" class="exit-game" @click.prevent>Leave Instance</a>
           </div>
-          <div class="action" @click="onClickExit" v-else>
-            <a href="#" class="exit-game" @click.prevent>Exit World</a>
+          <div class="action" @click="onClickExit">
+            <a href="#" class="exit-game" @click.prevent>Exit Game</a>
           </div>
         </template>
       </div>

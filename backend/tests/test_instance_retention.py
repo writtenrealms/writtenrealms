@@ -5,6 +5,7 @@ from django.utils import timezone
 from config import constants
 from spawns.models import Mob
 from spawns.services import WorldGate
+from spawns.tasks import exit_current_world
 from tests.base import WorldTestCase
 from worlds.models import InstanceRun, World, WorldConfig
 from worlds.tasks import monitor_worlds
@@ -101,13 +102,32 @@ class TestSinglePlayerInstanceRetention(WorldTestCase):
         self._monitor(at=self.now + timezone.timedelta(hours=3))
         self.assertFalse(World.objects.filter(pk=self.instance.pk).exists())
 
+    @patch('spawns.tasks.notify_exit_world')
+    def test_quitting_returns_to_base_world_lobby_and_keeps_instance(self, notify_exit):
+        exit_current_world(self.player.pk)
+
+        notify_exit.assert_called_once_with(
+            player_id=self.player.pk,
+            world_id=self.instance.pk,
+            exit_to=self.world.pk,
+        )
+        self.player.refresh_from_db()
+        self.assertFalse(self.player.in_game)
+        self.assertEqual(self.player.world_id, self.instance.pk)
+        self.assertEqual(self.player.room_id, self.entry_room.pk)
+
     def test_idle_logout_starts_grace_in_the_same_monitor_pass(self):
         self.player.last_action_ts = self.now - timezone.timedelta(
             seconds=constants.IDLE_TIMEOUT + 1,
         )
         self.player.save(update_fields=['last_action_ts'])
-        with patch('worlds.tasks.notify_exit_world'):
+        with patch('worlds.tasks.notify_exit_world') as notify_exit:
             self._monitor(at=self.now)
+        notify_exit.assert_called_once_with(
+            player_id=self.player.pk,
+            world_id=self.instance.pk,
+            exit_to=self.world.pk,
+        )
         self.player.refresh_from_db()
         self.assertFalse(self.player.in_game)
         self.assertEqual(self.player.last_disconnection_ts, self.now)

@@ -61,7 +61,7 @@ def _disconnect_idle_player(player, spawn_world):
     notify_exit_world(
         player_id=player.id,
         world_id=spawn_world.id,
-        exit_to=spawn_world.context.id,
+        exit_to=spawn_world.context.instance_of_id or spawn_world.context_id,
     )
 
 

@@ -770,20 +770,9 @@ const receiveMessage = async ({
     }
   }
 
-  // Disconection
+  // Both the game socket and Forge can confirm the same exit.
   if (message_data.type === "system.disconnect.success") {
-    if (rootState.auth.user.is_temporary) {
-      dispatch("auth/logout", null, { root: true });
-      router.push({ name: 'home' });
-    } else {
-      const world_id = message_data.data.exit_to || state.world.context_id;
-      router.push({
-        name: 'lobby_world_details',
-        params: { world_id: world_id },
-      });
-    }
-    commit("closeWs");
-    commit("reset_state");
+    await dispatch("world_exited", message_data.data || {});
     return;
   }
 
@@ -1294,10 +1283,10 @@ const actions = {
       console.log('requesting entrance to ', state.transfer_to.transfer_to_world_id);
       return;
     } else {
-      const world_id = data.exit_to || (state.world && state.world.context_id);
+      const world_id = data.exit_to || state.world?.instance_of_id || state.world?.context_id;
       if (world_id &&
           (router.currentRoute.value.name !== 'lobby_world_details'
-            || router.currentRoute.value.params.world_id !== world_id)) {
+            || String(router.currentRoute.value.params.world_id) !== String(world_id))) {
         router.push({
           name: 'lobby_world_details',
           params: { world_id: world_id },

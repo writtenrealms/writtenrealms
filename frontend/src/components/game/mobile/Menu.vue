@@ -18,8 +18,8 @@
     <div class="menu-item" v-if="store.state.game.world.instance_of_id">
       <a href="#" class="exit-game" @click.prevent="store.dispatch('game/cmd', 'leave')">Leave Instance</a>
     </div>
-    <div class="menu-item" v-else>
-      <a href="#" class="exit-game" @click.prevent="store.dispatch('game/cmd', 'quit')">Exit World</a>
+    <div class="menu-item">
+      <a href="#" class="exit-game" @click.prevent="store.dispatch('game/cmd', 'quit')">Exit Game</a>
     </div>
   </div>
 </template>

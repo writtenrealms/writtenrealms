@@ -43,6 +43,12 @@ fails, your previous run is kept. Match arenas still require a new accepted duel
 
 ## Disconnecting In Single-Player Instances
 
+Choose **Exit Game** in the game menu (or type `quit`) to disconnect while
+inside an instance. On desktop and mobile, it appears below **Leave Instance**,
+which returns you to the base world while you keep playing.
+Exiting the game returns you to the base world's lobby page, where you can
+choose your character to resume the instance.
+
 Logging out or disconnecting while your character is inside a single-player
 instance keeps that run available for three hours. Reconnect during that time
 to continue in the same instance and location. Each later logout starts a new

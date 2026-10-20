@@ -1577,7 +1577,7 @@ def exit_world(player_id, world_id,
     notify_exit_world(
         player_id=player_id,
         world_id=world_id,
-        exit_to=world.context.id)
+        exit_to=world.context.instance_of_id or world.context_id)
 
 
 @shared_task
