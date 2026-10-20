@@ -1180,6 +1180,7 @@ def apply_player_death(
                 "world",
                 "world__context",
                 "world__context__config",
+                "world__context__instance_of__config",
                 "equipment",
                 "core_faction",
                 "room",
@@ -1366,9 +1367,6 @@ def apply_player_death(
                 code="no_death_room",
             )
 
-        updated_player.health = 1
-        updated_player.energy = 1
-        updated_player.stamina = 1
         ActiveEffect.objects.filter(target_player=updated_player).delete()
         clear_actor_effect_cache(updated_player)
         penalty_text, corpse_id, penalty_money = _apply_player_death_penalty(
@@ -1387,6 +1385,19 @@ def apply_player_death(
                 )
             ),
         )
+
+        # Use the remaining equipment and no effects: a class with no energy
+        # pool must not acquire a stray point when it dies.
+        stats = compute_stats(
+            updated_player.level,
+            updated_player.archetype,
+            char=updated_player,
+            world=updated_player.world,
+            character_effects=[],
+        )
+        updated_player.health = 1
+        updated_player.energy = int(stats["energy_max"] > 0)
+        updated_player.stamina = 1
 
         finish_locked_player_pve_encounters(player=updated_player)
 

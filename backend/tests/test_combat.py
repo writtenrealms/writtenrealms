@@ -20,6 +20,7 @@ from spawns.actions.combat import (
 )
 from spawns.events import publish_events
 from spawns.models import (
+    ActiveEffect,
     CombatEncounter,
     Item,
     Mob,
@@ -33,6 +34,7 @@ from worlds.models import Door, Doorway, Room
 from tests.utils import (
     apply_basic_stat_system,
     capture_game_messages,
+    create_active_effect,
 )
 
 
@@ -265,6 +267,73 @@ class TestKillCommand(WorldTestCase):
                     ),
                     (1, 1, 1),
                 )
+
+    def test_all_death_modes_preserve_zero_energy_capacity(self):
+        self.world.config.stat_system["formulas"]["base_resources"]["energy"] = {}
+        self.world.config.save(update_fields=["stat_system"])
+        for death_mode in adv_consts.DEATH_MODES:
+            with self.subTest(death_mode=death_mode):
+                self._set_death_mode(death_mode)
+                # Include the stray point left by the old death handler.
+                self.player.energy = 1
+                self.player.save(update_fields=["energy"])
+
+                updated_player, events = apply_player_death(player=self.player)
+
+                updated_player.refresh_from_db()
+                self.assertEqual(updated_player.energy, 0)
+                actor = self._death_event_by_type(events, "affect.death").data["actor"]
+                self.assertEqual(actor["energy"], 0)
+                self.assertEqual(actor["energy_max"], 0)
+
+    def test_death_energy_uses_capacity_after_equipment_penalty(self):
+        self.world.config.stat_system["formulas"]["base_resources"]["energy"] = {}
+        self.world.config.save(update_fields=["stat_system"])
+        for death_mode, expected_energy in (
+            (adv_consts.DEATH_MODE_LOSE_NONE, 1),
+            (adv_consts.DEATH_MODE_LOSE_EQ, 0),
+            (adv_consts.DEATH_MODE_DESTROY_EQ, 0),
+        ):
+            with self.subTest(death_mode=death_mode):
+                self._set_death_mode(death_mode)
+                self.player.refresh_from_db()
+                item = self._equipped_item()
+                item.energy_max = 20
+                item.save(update_fields=["energy_max"])
+
+                updated_player, events = apply_player_death(player=self.player)
+
+                updated_player.refresh_from_db()
+                self.assertEqual(updated_player.energy, expected_energy)
+                actor = self._death_event_by_type(events, "affect.death").data["actor"]
+                self.assertEqual(actor["energy"], expected_energy)
+                self.assertEqual(actor["energy_max"], 20 if expected_energy else 0)
+
+    def test_death_energy_ignores_removed_effects(self):
+        for capacity, modifier, expected_energy in ((0, 20, 0), (20, -20, 1)):
+            with self.subTest(capacity=capacity, modifier=modifier):
+                self.world.config.stat_system["formulas"]["base_resources"]["energy"] = {"flat": capacity}
+                self.world.config.save(update_fields=["stat_system"])
+                self.player.refresh_from_db()
+                self.player.energy = 0
+                self.player.save(update_fields=["energy"])
+                effect = create_active_effect(
+                    target=self.player,
+                    payload={"primitives": [
+                        {"type": "stat_modifier", "stat": "energy_max", "op": "add", "amount": modifier},
+                    ]},
+                )
+                self.assertEqual(compute_stats(
+                    self.player.level, self.player.archetype, char=self.player,
+                )["energy_max"], capacity + modifier)
+
+                updated_player, events = apply_player_death(player=self.player)
+
+                updated_player.refresh_from_db()
+                self.assertFalse(ActiveEffect.objects.filter(pk=effect.pk).exists())
+                self.assertEqual(updated_player.energy, expected_energy)
+                actor = self._death_event_by_type(events, "affect.death").data["actor"]
+                self.assertEqual(actor["energy_max"], capacity)
 
     def test_player_death_destroy_eq_destroys_equipment(self):
         self._set_death_mode(adv_consts.DEATH_MODE_DESTROY_EQ)

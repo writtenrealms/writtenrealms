@@ -1277,6 +1277,24 @@ class TestDeterministicDeathRoutingRuntime(WorldTestCase):
         )
         self.assertEqual(retry_events, [])
 
+    def test_base_delegation_preserves_zero_energy_capacity(self):
+        self.world.config.stat_system["formulas"]["base_resources"]["energy"] = {}
+        self.world.config.save(update_fields=["stat_system"])
+        instance_template = self._create_instance_template(
+            routing_source=DEATH_ROUTING_SOURCE_BASE_WORLD,
+        )
+        self._enter_instance(instance_template)
+
+        player, events = apply_player_death(player=self.player)
+
+        player.refresh_from_db()
+        self.assertEqual(player.world_id, self.spawn_world.pk)
+        self.assertEqual(player.energy, 0)
+        for event in events:
+            if event.type in ("affect.death", "cmd.state.sync.success"):
+                self.assertEqual(event.data["actor"]["energy"], 0)
+                self.assertEqual(event.data["actor"]["energy_max"], 0)
+
     def test_base_delegation_snapshot_queries_do_not_scale_with_explored_rooms(self):
         base_destination = self._create_room(self.world, "The Base Death Hall")
         self._install_policy(

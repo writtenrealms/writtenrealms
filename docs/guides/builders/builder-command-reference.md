@@ -201,7 +201,9 @@ Available modes:
 | `destroy_all` | Deletes equipped items and carried inventory. |
 | `lose_currency` | On non-PvP deaths, charges `death_currency_penalty` of the player's configured `death_currency` balance, capped by the current balance. PvP deaths do not charge this cost. |
 
-Every mode sets current health, energy, and stamina to 1. The modes only change
+Every mode sets current health and stamina to 1. Energy becomes 1 only if the
+player still has a positive energy maximum after effects are cleared and the
+equipment penalty is applied; otherwise it stays at 0. The modes only change
 the item or currency penalty; none refills a player's resources.
 
 Example world manifest fragment:

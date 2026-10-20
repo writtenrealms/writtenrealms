@@ -526,7 +526,9 @@ ordered conditional destinations without replacing that safety room. Routes
 are evaluated from top to bottom against the character and the room where the
 death occurred. Evaluation stops at the first match.
 
-Every completed player death sets current health, energy, and stamina to 1,
+Every completed player death sets current health and stamina to 1. Energy becomes
+1 only if the player still has a positive energy maximum after effects are cleared
+and the equipment penalty is applied; otherwise it stays at 0. This applies
 regardless of `death_mode`, the matched route, or whether an instance delegates
 to base-world routing. Normal regeneration resumes from those values.
 
