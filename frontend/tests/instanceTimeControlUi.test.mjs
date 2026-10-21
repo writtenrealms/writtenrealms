@@ -19,7 +19,7 @@ const control = {
   pending_revision: 11, simulation_time: "2026-09-05T00:00:14Z",
   pending_command: { command_type: "move", label: "north" }, can_advance: true, run_id: 14,
 };
-const render = (overrides = {}, component = TimeControl) => renderToString(createSSRApp(component).use(createStore({
+const render = (overrides = {}, component = TimeControl, props = {}) => renderToString(createSSRApp(component, props).use(createStore({
   state: { game: { instance_time_control: control, time_control_request: null,
     time_control_error: "", is_connected: true, messages: [], ...overrides } },
 })));
@@ -208,5 +208,66 @@ test("live exploration exposes a quick checkbox without an advance button", asyn
     assert.equal(advanceButton(html), undefined);
     const checkbox = html.match(/<input[^>]*type="checkbox"[^>]*>/)[0];
     assert.equal(/checked/.test(checkbox), enabled);
+  }
+});
+
+const renderCompact = (overrides = {}) => render(overrides, TimeControl, { compact: true });
+const compactAction = (html) => html.match(/<button[^>]*class="compact-action"[^>]*>/)?.[0];
+const compactClear = (html) => html.match(/<button[^>]*class="icon-button compact-clear"[^>]*>/)?.[0];
+
+test("mobile shows only the dense pause checkbox during exploration", async () => {
+  for (const pause_in_combat of [true, false]) {
+    const html = await renderCompact({ instance_time_control: { ...control, paused: false, pause_in_combat, pending_command: null } });
+    assert.match(html, /Pause Combat/);
+    assert.match(html, /combat-pause-toggle dense/);
+    assert.equal((html.match(/type="checkbox"/g) || []).length, 1);
+    assert.doesNotMatch(html, /Normal world timing|Combat paused|turn-summary|turn-actions|Settings/);
+    assert.equal(compactAction(html), undefined);
+    assert.equal(compactClear(html), undefined);
+    assert.equal(/<input[^>]*checked/.test(html), pause_in_combat);
+  }
+});
+
+test("mobile combines the queued action and advance control, with an accessible clear button", async () => {
+  const html = await renderCompact();
+  assert.match(html, /Action: north/);
+  assert.match(compactAction(html), /aria-label="Advance turn — Action: north"/);
+  assert.doesNotMatch(compactAction(html), /disabled/);
+  assert.match(compactClear(html), /aria-label="Clear queued action"/);
+  assert.doesNotMatch(compactClear(html), /disabled/);
+  assert.doesNotMatch(html, /turn-summary|turn-actions|Settings/);
+  const empty = await renderCompact({ instance_time_control: { ...control, pending_command: null } });
+  assert.match(empty, /Advance Turn/);
+  assert.doesNotMatch(compactAction(empty), /disabled/);
+  assert.equal(compactClear(empty), undefined);
+});
+
+test("mobile retains the full resolved action label and exposes errors without a summary panel", async () => {
+  const action = 'crest against the heavily armored veteran';
+  const html = await renderCompact({
+    instance_time_control: { ...control, pending_command: { command_type: 'text', label: '6', payload: { _hotkey_resolution: action } } },
+    time_control_error: 'The prepared action has changed.',
+  });
+  assert.ok(compactAction(html).includes(`aria-label="Advance turn — Action: ${action}"`));
+  assert.match(html, /role="alert"/);
+  assert.match(html, /aria-label="The prepared action has changed."/);
+  assert.doesNotMatch(html, /turn-summary/);
+  assert.match(await renderCompact({ messages: [{ echo: true, command_receipt: { phase: 'unconfirmed' } }] }), /Reconnect before advancing/);
+});
+
+test("mobile advance and clear wait for a connection and confirmed commands", async () => {
+  for (const state of [
+    { is_connected: false },
+    { time_control_request: { request_id: 'advance', label: 'advance' } },
+    { messages: [{ echo: true, command_receipt: { phase: 'received' } }] },
+    { messages: [{ echo: true, command_receipt: { phase: 'unconfirmed' } }] },
+  ]) {
+    const html = await renderCompact(state);
+    assert.match(compactAction(html), /disabled/);
+    assert.match(compactClear(html), /disabled/);
+  }
+  assert.match(compactAction(await renderCompact({ instance_time_control: { ...control, can_advance: false } })), /disabled/);
+  for (const instance_time_control of [null, { ...control, enabled: false }]) {
+    assert.doesNotMatch(await renderCompact({ instance_time_control }), /<section/);
   }
 });

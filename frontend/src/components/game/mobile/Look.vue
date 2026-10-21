@@ -18,7 +18,6 @@
     <Hint v-if="hint && hint.split(':')[0] === '9'" />
     <Exits v-if="hasExits && selectedTab === 'look' && mapDisplay === 'mini'" />
     <Hint v-if="hint && hint.split(':')[0] !== '9'" />
-    <Input v-if="selectedTab === 'type'" />
   </div>
 </template>
 
@@ -30,7 +29,6 @@ import eventbus from "@/core/eventbus";
 import { onOutsideClick } from "@/composables/onOutsideClick";
 import Console from "@/components/game/console/Console.vue";
 import Exits from "@/components/game/mobile/Exits.vue";
-import Input from "@/components/game/Input.vue";
 import GameMap from "@/components/game/panel/Map.vue";
 import Hint from "@/components/game/console/Hint.vue";
 
@@ -129,8 +127,5 @@ const onClickFullMap = () => {
     flex-shrink: 0;
   }
 
-  #input {
-    padding: 0 20px;
-  }
 }
 </style>

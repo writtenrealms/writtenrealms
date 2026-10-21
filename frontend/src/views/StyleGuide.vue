@@ -94,6 +94,9 @@
     <!-- Forms -->
     <section id="forms" class="sg-section">
       <h2>Forms</h2>
+      <p class="sg-note">In game, <span class="sg-code">CombatPauseToggle compact dense</span> is the small
+        Pause Combat checkbox. Mobile uses <span class="sg-code">TimeControl compact</span> in a single row:
+        queued actions truncate, clear and error controls use labeled icon buttons, and settings stay in the menu.</p>
       <p class="sg-note">Wrap each field in <span class="sg-code">.form-group</span>. Prefer the
         <span class="sg-code">FormField</span> component, which renders this markup from a schema.</p>
       <div class="sg-form">

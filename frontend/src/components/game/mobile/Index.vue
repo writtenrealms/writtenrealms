@@ -6,7 +6,8 @@
       :selectedTab="selectedTab"
       @taplook="onTap('look')"
     ></component>
-    <TimeControl />
+    <TimeControl compact />
+    <Input v-if="selectedTab === 'type'" />
     <Menu v-if="is_menu_open" @closeMenu="closeMenu" />
     <Footer @tap="onTap" :selectedTab="selectedTab" ref="footer" />
   </div>
@@ -14,6 +15,7 @@
 
 <script lang='ts' setup>
 import TimeControl from "@/components/game/TimeControl.vue";
+import Input from "@/components/game/Input.vue";
 import { computed, ref, nextTick, watch } from "vue";
 import { useStore } from "vuex";
 import eventbus from "@/core/eventbus";
@@ -123,6 +125,11 @@ const closeMenu = () => {
   flex-direction: column;
   width: 100%;
   position: relative;
+
+  #input {
+    flex-shrink: 0;
+    padding: 0 20px;
+  }
 
   .mobile-main {
     display: flex;

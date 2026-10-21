@@ -75,7 +75,8 @@ highlights the `pause`, `advance`, and `resume` commands.
 
 Open **Settings > Time Control** and check **Pause before every combat
 round**. On desktop, the small **Pause Combat** checkbox sits just above the
-right end of the command bar. On mobile, it is in the Time Control bar. The
+right end of the command bar. On mobile, it sits in a compact, single-line bar
+above the command input or navigation tabs; open **Menu > Settings** for settings. The
 setting belongs to this run and starts unchecked in a new adventure.
 
 Unchecked, the instance uses its ordinary timing and commands. Checked, you
@@ -90,12 +91,14 @@ action. A new action replaces the previous one. On desktop, it appears as an
 **Action: …** button inside the right end of the command bar; click it to
 advance. Hotkeys show their resolved command, such as **Action: crest**. With
 no action queued, the button reads **Advance Turn** and still advances the round.
-On mobile, review the Action in the Time Control bar and click **Advance Turn**.
+On mobile, tap the **Action: …** button in the Time Control bar to advance, or
+**Advance Turn** when no action is queued. Long action names are shortened to fit.
 You can also type `advance`, or press **Enter** with an empty command input while
 combat is paused, including when no action is set. One round passes,
 the results appear, and the instance waits again. An invalid action returns an
-error without consuming the turn. Click the **×** beside the desktop Action,
-use **Clear action** on mobile, or type `cancelturn` to clear the queued choice.
+error without consuming the turn. Click the **×** beside the Action on desktop
+or mobile, or type `cancelturn` to clear the queued choice. On mobile, tap the
+error icon in the bar to read a time-control error or connection warning.
 Clearing does not advance time or cancel an ability that is already charging;
 the button returns to **Advance Turn**, allowing the existing cast to continue.
 With no prepared action, combat uses your normal basic attack or continues an
