@@ -46,21 +46,19 @@ class StateSyncHandler(CommandHandler):
         if returning:
             from worlds.entry_messages import returning_instance_message
 
+            events.append(GameEvent(
+                type='cmd.enter.success', recipients=[player.key],
+                data={'world_id': player.world_id,
+                      'instance_ref': player.world.instance_ref,
+                      'first_entry': False},
+                text=f'Resuming Instance ID: {player.world.instance_ref}',
+            ))
             introduction = returning_instance_message(player)
             if introduction:
-                events.extend([
-                    GameEvent(
-                        type='cmd.enter.success', recipients=[player.key],
-                        data={'world_id': player.world_id,
-                              'instance_ref': player.world.instance_ref,
-                              'first_entry': False},
-                        text=f'Instance ID: {player.world.instance_ref}',
-                    ),
-                    GameEvent(
-                        type='notification.instance.introduction',
-                        recipients=[player.key], data={}, text=introduction,
-                    ),
-                ])
+                events.append(GameEvent(
+                    type='notification.instance.introduction',
+                    recipients=[player.key], data={}, text=introduction,
+                ))
         state = build_state_sync(player)
         payload = state.model_dump()
         if is_instance:

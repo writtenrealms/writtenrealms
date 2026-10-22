@@ -80,6 +80,8 @@ class TestEnterNewInstance(InstanceEntryFixture, TestCase):
         self.player.refresh_from_db()
         run = self.player.world.instance_run
         self.assertEqual(run.leader_id, self.player.pk)
+        announcement = GameEventOutbox.objects.get(event_type='cmd.enter.success', data__world_id=run.spawned_world_id)
+        self.assertEqual(announcement.text, f'New Instance ID: {run.ref}')
         self.assertTrue(any(m['type'] == 'cmd.state.sync.success' for m in messages))
         self.leave()
         self.assertEqual(self.enter().pk, run.spawned_world_id)
@@ -127,6 +129,8 @@ class TestEnterNewInstance(InstanceEntryFixture, TestCase):
         self.player.refresh_from_db()
         new = self.player.world.instance_run
         self.assertNotEqual(new.ref, run.ref)
+        announcement = GameEventOutbox.objects.get(event_type='cmd.enter.success', data__world_id=new.spawned_world_id)
+        self.assertEqual(announcement.text, f'New Instance ID: {new.ref}')
         self.assertEqual(new.status, InstanceRun.STATUS_ACTIVE)
         self.assertEqual(self.player.room_id, self.entry.pk)
         self.assertFalse(InstanceRun.objects.filter(pk=run.pk).exists())

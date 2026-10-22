@@ -267,9 +267,11 @@ the underlying editor URL.
 
 Each instance can also have its own optional [full-screen entry message](world-config-builder-guide.md#full-screen-entry-messages),
 with all-at-once, cumulative reveal, or paragraph replacement presentation.
-When a player enters a run, the console prints `Instance ID: <id>` before
-room-entry greetings and other arrival-trigger text. The room snapshot that
-follows does not repeat that ID. The full-screen entry message remains a
+When a player first enters a run, the console prints `New Instance ID: <id>`.
+Returning to that run prints `Resuming Instance ID: <id>`, including when
+resuming from the lobby. This appears before room-entry greetings and other
+arrival-trigger text. The room snapshot that follows does not repeat that ID.
+The full-screen entry message remains a
 separate presentation overlay.
 
 The instance template owns instance-local content and policy instead: starting
@@ -867,10 +869,10 @@ solo participation is marked exited. The old run is not destroyed immediately;
 cleanup policy handles inactive runs later.
 
 Current inactive cleanup is hardcoded rather than builder-configurable. When the
-last active player leaves a spawned instance, WR2 records activity on the
-`InstanceRun` and the world monitor keeps the empty instance alive for about five
-minutes, plus up to one monitor tick, before stopping and deleting the spawned
-runtime world.
+last active player leaves a spawned instance, either with `leave` or through
+death that returns them to the base world, the world monitor keeps the empty
+instance alive for about five minutes, plus up to one monitor tick, before
+stopping and deleting the spawned runtime world.
 
 The monitor runs once a minute while the backend services are running. Stopping
 normally deletes an instance immediately; an instance left in `stopped` state

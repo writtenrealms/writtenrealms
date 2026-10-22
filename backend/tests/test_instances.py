@@ -1470,6 +1470,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         run = spawned_instance.instance_run
         run.last_active_at = timezone.now() - timezone.timedelta(minutes=6)
         run.save(update_fields=["last_active_at"])
+        run.participants.update(exited_at=run.last_active_at)
 
         with patch("worlds.tasks.WorldSmith.stop") as mock_stop:
             monitor_worlds()
@@ -1490,6 +1491,9 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
                 old = timezone.now() - timezone.timedelta(minutes=6)
                 InstanceRun.objects.filter(spawned_world=spawned_instance).update(
                     last_active_at=old,
+                )
+                InstanceParticipant.objects.filter(run__spawned_world=spawned_instance).update(
+                    exited_at=old,
                 )
                 if stopped:
                     World.objects.filter(pk=spawned_instance.pk).update(
@@ -1577,7 +1581,8 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
                 types = [message["type"] for message in visible]
                 run = InstanceRun.objects.get()
                 announcement = self._message_by_type(messages, "cmd.enter.success")
-                self.assertEqual(announcement["text"], f"Instance ID: {run.ref}")
+                prefix = "New" if entry == 0 else "Resuming"
+                self.assertEqual(announcement["text"], f"{prefix} Instance ID: {run.ref}")
                 self.assertEqual(announcement["data"]["world_id"], run.spawned_world_id)
                 self.assertEqual(announcement["data"]["first_entry"], entry == 0)
                 self.assertEqual(types.count("cmd.enter.success"), 1)

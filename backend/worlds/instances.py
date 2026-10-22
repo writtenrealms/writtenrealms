@@ -986,7 +986,7 @@ def _instance_entry_events(
             recipients=[player.key],
             data={"world_id": run.spawned_world_id, "instance_ref": run.ref,
                   "first_entry": first_entry},
-            text=f"Instance ID: {run.ref}",
+            text=f"{'New' if first_entry else 'Resuming'} Instance ID: {run.ref}",
         ))
     events.append(player_room_enter_event(
         player=player,
@@ -1154,6 +1154,7 @@ def transfer_instance_participant(
 
     The helper deliberately does not lock or update InstanceRun, so delegated
     death can use it without turning one busy run into a shared lock hotspot.
+    The cleanup monitor includes the participant's exited_at in its idle timer.
     Callers that also mutate run lifecycle must lock the run first.
     """
     from spawns.models import Player

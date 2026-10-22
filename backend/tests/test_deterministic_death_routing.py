@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 
 from builders.models import FACTION_TYPE_CORE, Faction
 from config import constants as adv_consts
@@ -29,6 +30,7 @@ from worlds.models import (
     WorldConfig,
     Zone,
 )
+from worlds.tasks import _instance_idle_reference_ts, monitor_worlds
 
 
 class TestDeterministicDeathRoutingRuntime(WorldTestCase):
@@ -1209,6 +1211,75 @@ class TestDeterministicDeathRoutingRuntime(WorldTestCase):
             receipt.penalty["mode"],
             adv_consts.DEATH_MODE_LOSE_EQ,
         )
+
+    def test_death_exit_restarts_cleanup_grace_without_writing_shared_run(self):
+        template = self._create_instance_template(
+            routing_source=DEATH_ROUTING_SOURCE_BASE_WORLD,
+        )
+        template.config.instance_single_player = True
+        template.config.save(update_fields=['instance_single_player'])
+        instance = self._enter_instance(template)
+        run = instance.instance_run
+        now = timezone.now()
+        run.last_active_at = now - timezone.timedelta(hours=1)
+        run.save(update_fields=['last_active_at'])
+        token = uuid.uuid4()
+
+        with patch('worlds.instances.timezone.now', return_value=now):
+            player, _events = apply_player_death(player=self.player, death_token=token)
+
+        self.assertEqual(player.world_id, self.spawn_world.pk)
+        run.refresh_from_db()
+        self.assertEqual(run.last_active_at, now - timezone.timedelta(hours=1))
+        # The indexed exit lookup stays inside the monitor's existing query.
+        # The monitor has already loaded the authored context by this point.
+        instance = World.objects.select_related('context').get(pk=instance.pk)
+        with self.assertNumQueries(1):
+            self.assertEqual(_instance_idle_reference_ts(instance), now)
+        for elapsed in (0, 299, 300):
+            with patch('worlds.tasks.timezone.now', return_value=now + timezone.timedelta(seconds=elapsed)):
+                monitor_worlds()
+            self.assertTrue(World.objects.filter(pk=instance.pk).exists())
+
+        # A retried death receipt must not extend the original exit time.
+        with patch('worlds.instances.timezone.now', return_value=now + timezone.timedelta(minutes=4)):
+            _player, retry_events = apply_player_death(player=player, death_token=token)
+        self.assertEqual(retry_events, [])
+        with patch('worlds.tasks.timezone.now', return_value=now + timezone.timedelta(seconds=301)):
+            monitor_worlds()
+        self.assertFalse(World.objects.filter(pk=instance.pk).exists())
+
+    def test_death_exit_cleanup_uses_latest_exit_and_preserves_online_members(self):
+        template = self._create_instance_template(routing_source=DEATH_ROUTING_SOURCE_BASE_WORLD)
+        instance = self._enter_instance(template)
+        member = self.create_player('Companion')
+        World.enter_instance(
+            player=member, transfer_to_id=template.config.starting_room_id,
+            transfer_from_id=member.room_id, ref=instance.instance_ref,
+        )
+        member.in_game = True
+        member.config.idle_logout = False
+        member.config.save(update_fields=['idle_logout'])
+        member.save(update_fields=['in_game'])
+        now = timezone.now()
+        with patch('worlds.instances.timezone.now', return_value=now):
+            apply_player_death(player=self.player)
+        with patch('worlds.tasks.timezone.now', return_value=now + timezone.timedelta(minutes=6)):
+            monitor_worlds()
+        self.assertTrue(World.objects.filter(pk=instance.pk).exists())
+
+        later = now + timezone.timedelta(minutes=7)
+        with patch('worlds.instances.timezone.now', return_value=later):
+            apply_player_death(player=member)
+        instance = World.objects.select_related('context').get(pk=instance.pk)
+        with self.assertNumQueries(1):
+            self.assertEqual(_instance_idle_reference_ts(instance), later)
+        with patch('worlds.tasks.timezone.now', return_value=later + timezone.timedelta(minutes=4)):
+            monitor_worlds()
+        self.assertTrue(World.objects.filter(pk=instance.pk).exists())
+        with patch('worlds.tasks.timezone.now', return_value=later + timezone.timedelta(minutes=6)):
+            monitor_worlds()
+        self.assertFalse(World.objects.filter(pk=instance.pk).exists())
 
     def test_base_delegation_refreshes_world_and_explored_map_before_arrival(self):
         explored_room = self._create_room(self.world, "A Familiar Street")

@@ -1022,8 +1022,13 @@ safe.
 Cleanup should be policy-driven and status-aware.
 
 Current implementation: active spawned instance worlds with no in-game players
-use the `InstanceRun.last_active_at` timestamp as their idle reference and are
-stopped/deleted after roughly five minutes of inactivity, plus monitor cadence.
+use the later of `InstanceRun.last_active_at` and the latest participant
+`exited_at` as their idle reference. They are stopped/deleted after roughly
+five minutes of inactivity, plus monitor cadence. Both `leave` and a death
+that returns a player to the base world start a fresh five-minute grace period.
+The latest exit is read in the existing run query through the participant
+`(run, exited_at)` index. Death processing retains its player/participant
+locks without adding a shared run-row write or reversing entry's lock order.
 This is intentionally hardcoded until the fuller policy below is implemented.
 
 Single-player runs are exempt from automatic cleanup for three hours after

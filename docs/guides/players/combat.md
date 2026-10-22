@@ -12,6 +12,9 @@ combat timing and outcomes stay the same.
 
 ## Timed Instance Clears
 
+Your first entry into a run displays `New Instance ID: <id>`. Returning to the
+same run displays `Resuming Instance ID: <id>`, including after logging back in.
+
 Some instances, including a configured Persian Outpost, complete when every
 member of their initial target population has died. The timer starts on first
 entry and stops at the final target's death. You receive an **Instance Complete**
@@ -60,8 +63,10 @@ character in the same world's lobby to start a fresh introduction. Previously
 received starter rewards are not granted again.
 
 This applies whether or not the instance offers Time Control. It does not
-pause gameplay by itself. Leaving the instance to return to the base world
-uses the ordinary five-minute idle cleanup instead.
+pause gameplay by itself. Leaving the instance to return to the base world,
+whether with `leave` or by dying, gives the empty instance a fresh five-minute
+grace period. Cleanup runs once a minute, so removal normally happens after
+about five to six minutes. Another active player inside keeps it alive.
 
 ## Turn-Based Instances
 

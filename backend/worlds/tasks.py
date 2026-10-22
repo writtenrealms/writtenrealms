@@ -1,7 +1,7 @@
 import logging
 
 from django.db import transaction
-from django.db.models import Exists, F, OuterRef, Q
+from django.db.models import Exists, F, OuterRef, Q, Subquery
 from django.utils import timezone
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
@@ -16,7 +16,7 @@ from spawns.models import Player
 from spawns.loading import run_spawn_plans_for_world
 from spawns.instance_clock import is_time_controlled, live_worlds
 from spawns.services import WorldGate
-from worlds.models import InstanceRun, World
+from worlds.models import InstanceParticipant, InstanceRun, World
 from worlds.services import WorldSmith
 
 
@@ -107,10 +107,21 @@ def _instance_idle_reference_ts(spawn_world):
     if not getattr(spawn_world.context, 'instance_of_id', None):
         return None
 
-    run = InstanceRun.objects.filter(spawned_world=spawn_world).first()
+    # Death exits already record this timestamp on the participant. Read the
+    # latest exit through the (run, exited_at) index instead of adding a shared
+    # run-row write/lock to combat deaths. Keep this in the existing run query.
+    latest_exit = InstanceParticipant.objects.filter(
+        run_id=OuterRef('pk'), exited_at__isnull=False,
+    ).order_by('-exited_at').values('exited_at')[:1]
+    run = InstanceRun.objects.filter(spawned_world=spawn_world).annotate(
+        latest_exit_at=Subquery(latest_exit),
+    ).first()
     if not run:
         return spawn_world.lifecycle_change_ts
-    return run.last_active_at or run.started_at or spawn_world.lifecycle_change_ts
+    activity_at = run.last_active_at or run.started_at or spawn_world.lifecycle_change_ts
+    if run.latest_exit_at and (activity_at is None or run.latest_exit_at > activity_at):
+        return run.latest_exit_at
+    return activity_at
 
 
 def _world_idle_seconds(spawn_world, *, now):

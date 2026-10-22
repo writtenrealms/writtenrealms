@@ -27,8 +27,10 @@ const { default: AccessibleGame } = await server.ssrLoadModule("/src/components/
 
 const room = { id: 1, name: "Watch House Cell", description: "A barred cell.",
   inventory: [], chars: [], details: [], actions: [], quest_callouts: [] };
-const notice = { type: "cmd.enter.success", text: "Instance ID: orientation-run",
+const notice = { type: "cmd.enter.success", text: "New Instance ID: orientation-run",
   data: { world_id: 20, instance_ref: "orientation-run", first_entry: true } };
+const returningNotice = { ...notice, text: "Resuming Instance ID: orientation-run",
+  data: { ...notice.data, first_entry: false } };
 const snapshot = (world = {}, type = "cmd.state.sync.success") => ({
   type, data: { room, world: { id: 20, instance_ref: "orientation-run", ...world } },
 });
@@ -99,7 +101,7 @@ test("initial login shows the instance ID, opening RP, then room without an ente
 test("return narration preserves blank paragraph lines without adding a trailing blank line", async () => {
   for (const mobile of [false, true]) {
     const { store, add, render } = harness(mobile);
-    add({ ...notice, data: { ...notice.data, first_entry: false } });
+    add(returningNotice);
     add({ type: "notification.instance.introduction", text:
       "Tally marks cover the wall.\n\nThe watchman greets you.\n \nOrders rise outside.\n" });
     add({ ...snapshot(), text: "Watch House Cell" });
@@ -115,20 +117,37 @@ test("reentering the same run announces each arrival without duplicating its sna
   const { add, render } = harness();
   for (let entry = 0; entry < 2; entry += 1) {
     add({ type: "cmd.text", text: "enter", echo: true });
-    add(notice);
+    add(entry === 0 ? notice : returningNotice);
     add(snapshot());
     add(snapshot({ id: 1, instance_ref: null }));
   }
-  assert.equal((await render()).match(/Instance ID: orientation-run/g)?.length, 2);
+  const html = await render();
+  assert.equal(html.match(/New Instance ID: orientation-run/g)?.length, 1);
+  assert.equal(html.match(/Resuming Instance ID: orientation-run/g)?.length, 1);
+});
+
+test("new and resumed labels render once before the room with no introduction", async () => {
+  for (const mobile of [false, true]) {
+    for (const announcement of [notice, returningNotice]) {
+      const { store, add, render } = harness(mobile);
+      add(announcement);
+      add({ ...snapshot(), text: 'Watch House Cell' });
+      for (const html of [await render(), await renderToString(createSSRApp(AccessibleGame).use(store))]) {
+        assert.equal(html.split(announcement.text).length - 1, 1);
+        assert.ok(html.indexOf(announcement.text) < html.indexOf('Watch House Cell'));
+      }
+    }
+  }
 });
 
 test("completed status remains visible after an early ID announcement", async () => {
   const { add, render } = harness();
-  add(notice);
+  add(returningNotice);
   add(snapshot({ instance_status: "completed" }));
   const html = await render();
   assert.equal(html.match(/Instance ID: orientation-run/g)?.length, 1);
   assert.match(html, /Status: Completed/);
+  assert.match(html, /Resuming Instance ID: orientation-run/);
 });
 
 test("clearing the console also clears an unmatched entry announcement", async () => {
@@ -169,7 +188,7 @@ test("connection messages distinguish new visits, returns, and brief reconnects"
     });
 
     // A fresh browser session returning to a saved run must remain playable.
-    await receive({ ...notice, data: { ...notice.data, first_entry: false } });
+    await receive(returningNotice);
     await receive({ type: 'notification.instance.introduction', text: 'Opening scene.', data: {} });
     await receive(fullSnapshot('return'));
     assert.equal(store.state.game.world_entry.message, null);
@@ -178,6 +197,7 @@ test("connection messages distinguish new visits, returns, and brief reconnects"
     assert.ok(!store.state.game.transfer_to.world_name);
     const html = await renderToString(createSSRApp(Console).use(store).directive('interactive', {}));
     assert.equal(html.match(/Instance ID: orientation-run/g)?.length, 1);
+    assert.match(html, /Resuming Instance ID: orientation-run/);
     assert.ok(html.indexOf('Instance ID:') < html.indexOf('Opening scene.'));
     assert.ok(html.indexOf('Opening scene.') < html.indexOf('Watch House Cell'));
 
@@ -193,7 +213,7 @@ test("connection messages distinguish new visits, returns, and brief reconnects"
     await receive(fullSnapshot(undefined, 21));
     assert.ok(store.state.game.world_entry.message);
     store.commit('game/world_entry_dismiss');
-    await receive({ ...notice, data: { ...notice.data, first_entry: false } });
+    await receive(returningNotice);
     await receive(fullSnapshot(undefined));
     assert.equal(store.state.game.world_entry.message, null);
     store.commit('game/reset_state');
