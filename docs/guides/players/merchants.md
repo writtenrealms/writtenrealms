@@ -57,7 +57,7 @@ action showing the purchase price.
 
 Item lookups show the item's value and merchant action price with the currency
 label in uppercase. LIST and OFFER show the player's current balance below the
-entries.
+entries, with the buy or sell command hint beside it.
 
 OFFER includes only directly carried items the merchant can currently buy.
 Quest items, captured spoils marked for salvage, unpriced items, items valued

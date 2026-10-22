@@ -35,11 +35,13 @@
       Only the first {{ props.message?.data?.limit }} items are shown.
     </div>
 
-    <div v-if="walletDisplay" class="wallet-inv color-secondary mt-4">
-      You have {{ walletDisplay }}.
-    </div>
-    <div v-if="stock.length" class="purchase-hint color-text-50 font-text-light ml-2">
-      {{ purchaseHint }}
+    <div v-if="walletDisplay || stock.length" :class="{ 'mt-4': walletDisplay }">
+      <span v-if="walletDisplay" class="wallet-inv color-secondary">
+        You have {{ walletDisplay }}.
+      </span>
+      <span v-if="stock.length" class="purchase-hint color-text-50 font-text-light ml-2">
+        {{ purchaseHint }}
+      </span>
     </div>
   </div>
 </template>

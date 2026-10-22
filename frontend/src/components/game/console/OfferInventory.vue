@@ -33,11 +33,13 @@
       <div v-else>{{ capfirst(merchant.name || "The merchant") }} is not holding any of your recently sold items.</div>
     </template>
 
-    <div v-if="walletDisplay" class="wallet-inv color-secondary">
-      You have {{ walletDisplay }}.
-    </div>
-    <div v-if="isOffer && entries.length && offerHint" class="offer-hint color-text-50 font-text-light ml-2">
-      {{ offerHint }}
+    <div v-if="walletDisplay || (isOffer && entries.length && offerHint)">
+      <span v-if="walletDisplay" class="wallet-inv color-secondary">
+        You have {{ walletDisplay }}.
+      </span>
+      <span v-if="isOffer && entries.length && offerHint" class="offer-hint color-text-50 font-text-light ml-2">
+        {{ offerHint }}
+      </span>
     </div>
   </div>
 </template>

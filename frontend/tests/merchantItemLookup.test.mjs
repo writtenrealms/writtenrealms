@@ -14,7 +14,37 @@ const server = await createServer({
 after(() => server.close());
 const { default: Lookup } = await server.ssrLoadModule('/src/components/game/lookup/Lookup.vue');
 const { default: List } = await server.ssrLoadModule('/src/components/game/console/List.vue');
+const { default: OfferInventory } = await server.ssrLoadModule('/src/components/game/console/OfferInventory.vue');
 const { executeItemAction } = await server.ssrLoadModule('/src/core/itemActions.ts');
+
+test('merchant footers preserve balance and hint visibility for stock, offers, and buyback', async () => {
+  for (const kind of ['stock', 'offers', 'buyback']) {
+    for (const hasEntries of [true, false]) {
+      for (const hasBalance of [true, false]) {
+        const game = merchantLookupState();
+        const stockMessage = game.last_message['cmd.list.success'];
+        const entry = stockMessage.data.stock[0];
+        const hint = kind === 'stock' ? 'buy # to purchase an item' : 'sell # to sell an item';
+        const message = {
+          type: kind === 'stock' ? 'cmd.list.success' : `cmd.${kind}.success`,
+          data: {
+            merchant: stockMessage.data.merchant,
+            [kind]: hasEntries ? [entry] : [],
+            hint,
+            ...(hasBalance ? { balance: { amount: 160, currency: 'obol' } } : {}),
+          },
+        };
+        // Offers and buyback can also infer currency from an entry's price.
+        if (!hasBalance) entry.price = { amount: 75 };
+        const html = await renderToString(createSSRApp(kind === 'stock' ? List : OfferInventory, {
+          message,
+        }).use(createStore({ state: { game } })).directive('interactive', {}));
+        assert.equal(html.includes('You have 160 Obols.'), hasBalance, `${kind}: balance`);
+        assert.equal(html.includes(hint), hasEntries && kind !== 'buyback', `${kind}: hint`);
+      }
+    }
+  }
+});
 
 test('finite and unlimited shop lookups show equipment details and preserve the exact purchase target', async () => {
   for (const is_mobile of [false, true]) {

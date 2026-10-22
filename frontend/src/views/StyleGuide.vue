@@ -177,6 +177,12 @@
     <!-- Lists -->
     <section id="lists" class="sg-section">
       <h2>Lists</h2>
+      <p class="sg-note">Merchant list footers keep the balance and command hint inline, with
+        <span class="sg-code">.ml-2</span> spacing before the muted hint.</p>
+      <div class="mb-4">
+        <span class="color-secondary">You have 160 Obols.</span>
+        <span class="color-text-50 font-text-light ml-2">buy # to purchase an item</span>
+      </div>
       <div class="sg-columns">
         <div>
           <h3 class="sg-label">ul.list</h3>
