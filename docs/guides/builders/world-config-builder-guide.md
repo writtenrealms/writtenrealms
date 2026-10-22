@@ -390,13 +390,37 @@ merged with the base world's runtime state.
 | `can_select_gender` | boolean | `true` | If false, new characters use `default_gender`. |
 | `default_gender` | choice | `male` | `male`, `female`, or `non_binary`. Also used by mobs without an explicit `gender` override, including in instances. |
 | `non_ascii_names` | boolean | `false` | Allows non-ASCII character names. |
-| `name_exclusions` | text | empty | Names or tokens to block during character creation. |
+| `name_exclusions` | text | empty | Exact character names to reserve in multiplayer worlds; matching ignores case. Separate entries with whitespace, preferably one name per line. |
 
 World Config YAML and full-world exports always include `can_select_gender`
 and `default_gender`, even when they use the defaults. Importing into a new
 world or reimporting a later revision preserves both settings. Partial edits
 leave either setting unchanged when omitted. In family exports, these
 character-creation settings appear only on the base world's document.
+
+Use `name_exclusions` to reserve established characters, deities, or other
+identities in your setting. The field is a YAML text block, not a YAML list:
+
+```yaml
+spec:
+  name_exclusions: |
+    Heracles
+    Herakles
+    Hercules
+    Leonidas
+    Orpheus
+    Zeus
+```
+
+Each entry matches the whole character name after the normal name processing;
+`Zeus` also blocks `ZEUS`, but does not block `Zeuxis`. Enter spelling variants
+explicitly. Keep explanations and YAML comments outside the `|` block: inside
+it they become literal text, and each whitespace-separated word becomes another
+reserved name. Alphabetize and deduplicate longer lists for easier review.
+This setting validates submitted names; applying it does not rename or delete
+existing characters. A partial manifest containing `name_exclusions` replaces
+the entire reserved-name field, so include any existing reservations you want
+to retain. Omitting the field preserves it; an empty string clears it.
 
 To cap ordinary characters per account, set this on the base world's World YAML:
 
