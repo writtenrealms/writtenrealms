@@ -1026,8 +1026,10 @@ own entry, and the history remains available after the runtime is cleaned up.
 Participation may include a character who left before the final kill.
 
 Players receive an **Instance Complete** notice, styled consistently with the
-Time Control introduction and Message of the Day. They may leave and use
-`enter` to revisit their latest completed run with the same Instance ID and
+Time Control introduction and Message of the Day. The notice uses the rankings
+time format, with hours and minutes as needed and seconds rounded to tenths
+(for example, `14m 13.5s`); stored clear times retain millisecond precision.
+They may leave and use `enter` to revisit their latest completed run with the same Instance ID and
 recorded clear time. Entry and reconnect snapshots show **Status: Completed**
 below the Instance ID. Previous group participants may also revisit using
 `enter <instance_ref>`; new participants and completed duel matches remain

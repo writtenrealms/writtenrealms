@@ -19,9 +19,11 @@ Some instances, including a configured Persian Outpost, complete when every
 member of their initial target population has died. The timer starts on first
 entry and stops at the final target's death. You receive an **Instance Complete**
 notice, using the same framed style as Time Control and the Message of the Day,
-with your clear time, and the server saves the timestamps and participant
-history for records. Worlds may show a fastest-clear panel in their lobby;
-solo boards show your personal best, while group boards show party results.
+with your clear time in the same format as rankings: hours and minutes as needed,
+and seconds rounded to one decimal place (for example, `14m 13.5s`). The server
+keeps the exact time and participant history for records. Worlds may show a
+fastest-clear panel in their lobby; solo boards show your personal best, while
+group boards show party results.
 Time-controlled and continuous runs are ranked separately. Builder attempts
 and builder resets do not qualify. Results may take about 30 seconds to update.
 

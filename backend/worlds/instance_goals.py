@@ -254,4 +254,5 @@ def process_instance_mob_defeat(data):
     recipients = [f'player.{p.player_id}' for p in run.participants.filter(exited_at__isnull=True)]
     enqueue_game_events([GameEvent('instance.completed', {
         'run_id': run.pk, 'world_id': run.spawned_world_id, **run.outcome,
+        'template_name': record.template_name,
     }, recipients, f'{record.template_name} completed in {clear_time_ms / 1000:.3f} seconds.')])

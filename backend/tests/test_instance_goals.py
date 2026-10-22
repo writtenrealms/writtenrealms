@@ -26,7 +26,7 @@ PERSIAN_GOAL = {'type': 'clear_initial_mobs', 'where': {'eq': ['event.mob.core_f
 class TestInstanceGoals(WorldTestCase):
     def setUp(self):
         super().setUp()
-        self.enterContext(patch('spawns.events.publish_to_player'))
+        self.publish_to_player = self.enterContext(patch('spawns.events.publish_to_player'))
         self.enterContext(patch('spawns.tasks.resume_instance_schedulers.delay'))
         self.enterContext(patch('spawns.tasks.reconcile_combat_room.apply_async'))
         self.world.is_multiplayer = True
@@ -99,6 +99,13 @@ class TestInstanceGoals(WorldTestCase):
         self.assertEqual(self.run.completed_at, record.completed_at)
         self.assertEqual(self.run.status, 'completed')
         self.assertEqual(self.run.outcome['time_basis'], 'wall')
+        completion_messages = [
+            call.args[1] for call in self.publish_to_player.call_args_list
+            if call.args[1]['type'] == 'instance.completed'
+        ]
+        self.assertEqual(len(completion_messages), 1)
+        self.assertEqual(completion_messages[0]['data']['template_name'], record.template_name)
+        self.assertEqual(completion_messages[0]['data']['clear_time_ms'], 20123)
 
     def test_duplicate_and_out_of_order_death_events_are_idempotent(self):
         first, second = self.mob(), self.mob()

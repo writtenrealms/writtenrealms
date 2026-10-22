@@ -218,6 +218,9 @@
       <div class="metric-grid"><div class="metric-card"><span>Characters online</span><strong>24</strong><small>Across 3 running worlds</small></div><div class="metric-card"><span>New accounts · 24h</span><strong>8</strong><small>112 total accounts</small></div></div>
       <p class="inline-notice">.inline-notice — Settings saved. Access changes take effect shortly.</p>
       <p class="inline-notice inline-notice-error">.inline-notice.inline-notice-error — Could not refresh. Previously loaded values may be out of date.</p>
+      <p class="sg-note">ConsoleNotice frames the Message of the Day, Time Control, and instance completion.
+        Completion times use the rankings format, rounded to tenths of a second.</p>
+      <InstanceCompletionNotice :message="{ data: { template_name: 'A Persian Outpost', clear_time_ms: 853461 } }" />
     </section>
 
     <!-- Icons -->
@@ -403,6 +406,7 @@ import {
 } from "@lucide/vue";
 import ManifestValue from "@/components/builder/world/ManifestValue.vue";
 import ItemPreview from "@/components/ui/ItemPreview.vue";
+import InstanceCompletionNotice from "@/components/game/console/InstanceCompletionNotice.vue";
 import MobDefinitionPreview from "@/components/builder/world/MobDefinitionPreview.vue";
 import { useItemPreview } from "@/composables/useItemPreview";
 
