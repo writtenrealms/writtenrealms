@@ -186,9 +186,15 @@ class BuyHandler(CommandHandler):
     text_commands = ("buy",)
     help = {
         "name": "Buy",
-        "format": "buy <item> [from <merchant>]",
-        "description": "Buy an item from a merchant.",
+        "format": "buy | buy <number|item> [from <merchant>]",
+        "description": "View local stock or buy an item from a merchant.",
+        "details": [
+            "Use a number from the current list or shop view. Reopen the view if the selection expires or changes.",
+            "Specify from <merchant> when more than one merchant is available.",
+        ],
         "examples": [
+            "buy",
+            "buy 2",
             "buy sword",
             "buy sword from garron",
         ],
@@ -223,9 +229,15 @@ class SellHandler(CommandHandler):
     text_commands = ("sell",)
     help = {
         "name": "Sell",
-        "format": "sell <item> [to <merchant>]",
-        "description": "Sell an inventory item to a merchant.",
+        "format": "sell | sell <number|item> [to <merchant>]",
+        "description": "View local offers or sell an inventory item to a merchant.",
+        "details": [
+            "Use a number from the current offer view. Reopen the view if the selection expires or changes.",
+            "Specify to <merchant> when more than one merchant is available.",
+        ],
         "examples": [
+            "sell",
+            "sell 2",
             "sell dagger",
             "sell dagger to garron",
         ],
@@ -270,9 +282,10 @@ class BuybackHandler(CommandHandler):
     text_commands = ("buyback",)
     help = {
         "name": "Buyback",
-        "format": "buyback <merchant> | buyback <item> from <merchant>",
+        "format": "buyback [merchant] | buyback <item> from <merchant>",
         "description": "View or reclaim recently sold items from a merchant.",
         "examples": [
+            "buyback",
             "buyback garron",
             "buyback dagger from garron",
         ],

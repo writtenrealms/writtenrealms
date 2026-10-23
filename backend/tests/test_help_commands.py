@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 from builders.models import AbilityDefinition
+from spawns.handlers import get_handler, iter_text_handlers
 from tests.base import WorldTestCase
 from tests.utils import (
     BASIC_TEST_STAT_SYSTEM,
@@ -131,6 +132,67 @@ class TestHelpCommands(WorldTestCase):
         self.assertIn("drop <item>", message.get("text", ""))
         self.assertEqual(message["data"]["command"]["command"], "drop")
         self.assertNotIn("help", message["data"])
+
+    def test_help_index_covers_every_registered_route_without_database_queries(self):
+        handler = get_handler("help")
+        for include_builder in (False, True):
+            with self.subTest(include_builder=include_builder):
+                with self.assertNumQueries(0):
+                    entries = handler._build_command_list(include_builder)
+                indexed = [command for entry in entries for command in entry["commands"]]
+                routes = dict(iter_text_handlers(include_builder=include_builder))
+                self.assertCountEqual(indexed, routes)
+                self.assertEqual(len(indexed), len(set(indexed)))
+                for entry in entries:
+                    self.assertTrue(entry["category"])
+                    self.assertTrue(entry["description"])
+                    for command in entry["commands"]:
+                        self.assertEqual(
+                            entry["category"] == "Builder Commands",
+                            routes[command].builder_only,
+                        )
+
+    def test_every_indexed_command_opens_help(self):
+        for command, _handler in iter_text_handlers():
+            with self.subTest(command=command), capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, f"help {command}")
+                message = self._message_by_type(messages, "cmd.help.success")
+                self.assertIsNotNone(message)
+                self.assertEqual(message["data"]["command"]["command"], command)
+
+    def test_builder_flag_without_world_edit_access_does_not_expose_builder_help(self):
+        user = self.create_user("former-builder@example.com")
+        player = self.create_player("Former", user=user)
+        player.is_builder = True
+        player.save(update_fields=["is_builder"])
+
+        with capture_game_messages() as messages:
+            dispatch_text_command(player.id, "help")
+        message = self._message_by_type(messages, "cmd.help.success")
+        self.assertFalse(any(
+            entry["category"] == "Builder Commands"
+            for entry in message["data"]["commands"]
+        ))
+        with capture_game_messages() as messages:
+            dispatch_text_command(player.id, "help /set")
+        self.assertIsNotNone(self._message_by_type(messages, "cmd.help.error"))
+
+    def test_help_describes_current_discovery_and_merchant_syntax(self):
+        for command, snippets in {
+            "help": ("help <command|ability>", "can currently learn", "socials", "Room and quest"),
+            "who": ("visible players", "your world", "highlighted"),
+            "buy": ("buy | buy <number|item>", "current list or shop view"),
+            "sell": ("sell | sell <number|item>", "current offer view"),
+            "buyback": ("buyback [merchant]",),
+            "craft": ("currency fee", "rolled stats"),
+            "time": ("without an argument", "time control enabled"),
+        }.items():
+            with self.subTest(command=command), capture_game_messages() as messages:
+                dispatch_text_command(self.player.id, f"help {command}")
+                message = self._message_by_type(messages, "cmd.help.success")
+                self.assertIsNotNone(message)
+                for snippet in snippets:
+                    self.assertIn(snippet, message["text"])
 
     def test_help_edit_describes_room_identity_and_new_tab_behavior(self):
         with capture_game_messages() as messages:

@@ -11,6 +11,12 @@ can run them as a player, mob, room, zone, or world issuer.
 This guide covers slash commands only. Ordinary player commands such as `look`,
 `say`, `get`, `give`, `kill`, `shop`, and `learn` are not listed here.
 
+In game, `help` lists the currently registered commands you have permission to
+use. Select a slash command or type `help /set`, for example, to read its current
+syntax. Use the leading slash: `/reset` resets an instance; `reset` is not a
+Core command. The index also includes `/invisible` (alias `/inv`), which toggles
+your builder character's visibility to regular characters.
+
 ## Permission Model
 
 Direct builder use:

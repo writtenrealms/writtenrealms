@@ -138,6 +138,9 @@
         Game output uses Roboto Mono only for briefs and code.</p>
       <p class="sg-note">In game room notices, keep interactive text inline inside its layout wrapper so the
         dotted underline follows each wrapped line. Keep bracketed quest markers such as [ ! ] together without wrapping.</p>
+      <p class="sg-note">Console help uses compact, wrapping groups from the server's command index.
+        Its dotted command links are native buttons with the surrounding text font and keyboard focus ring;
+        click, tap, Enter, and Space open a topic. Preserve line breaks in ability help and plain-text output.</p>
       <p class="sg-note">Quest notices use <span class="sg-code">v-interactive</span> with a
         <span class="sg-code">questnotice</span> target. Desktop hover and mobile tap open
         <span class="sg-code">LookupQuestNotice</span>; its <span class="sg-code">.lookup-quest-notice</span>

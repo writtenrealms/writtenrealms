@@ -42,7 +42,9 @@ class TimeControlHandler(CommandHandler):
     command_type = 'time_control'
     text_commands = ('time',)
     help = {'name': 'Combat Pause', 'format': 'time [pause | resume | toggle]',
-            'description': 'Pause the whole instance between combat rounds, or resume normal world timing.'}
+            'description': 'Show or change combat pausing for the whole instance. Exploration keeps normal timing.',
+            'details': ['Available only in instances with time control enabled.',
+                        'Use time without an argument to show the current setting.']}
 
     def handle(self, ctx):
         args = ctx.payload.get('args') or []

@@ -170,7 +170,7 @@ class CraftHandler(CommandHandler):
     help = {
         "name": "Craft",
         "format": "craft [<number> | <item>] [at <workshop>]",
-        "description": "Spend materials to craft one randomly rolled item.",
+        "description": "Spend the recipe's materials and any currency fee to craft its item with rolled stats.",
         "details": [
             "Use craft with no item to list local recipes.",
             "Use craft <number> to make the corresponding listed recipe.",

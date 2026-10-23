@@ -11,10 +11,6 @@ const gameStoreSource = await readFile(
   new URL("../src/store/modules/game.ts", import.meta.url),
   "utf8",
 );
-const helpSource = await readFile(
-  new URL("../src/components/game/console/Help.vue", import.meta.url),
-  "utf8",
-);
 const compiled = ts.transpileModule(helperSource, {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
@@ -294,18 +290,4 @@ test("game command integration closes reservations on failures and state reset",
     gameStoreSource,
     /const onclose = \(\) => \{\s*cancelAllEditRoomTabs\(\)/,
   );
-});
-
-test("builder help lists the /edit command and requests its help topic", () => {
-  const builderHelpStart = helpSource.indexOf('<template v-if="isBuilder">');
-  const builderHelpEnd = helpSource.indexOf("</template>", builderHelpStart);
-  const builderHelpSource = helpSource.slice(builderHelpStart, builderHelpEnd);
-
-  assert.ok(builderHelpStart !== -1);
-  assert.ok(builderHelpEnd > builderHelpStart);
-  assert.match(
-    builderHelpSource,
-    /class="cmd" @click="cmdHelp\('\/edit'\)"\s*>\/edit<\/div>/,
-  );
-  assert.match(helpSource, /store\.dispatch\("game\/cmd", `help \$\{cmd\}`\)/);
 });

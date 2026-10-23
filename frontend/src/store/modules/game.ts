@@ -1,5 +1,6 @@
 import axios from "axios";
 import { FORGE_WS_URI } from "@/config";
+import { clientCommandHelpMessage } from "@/core/commandHelp";
 import type {
   CurrencyBalancesChangedData,
   PlayerEconomy,
@@ -1361,6 +1362,15 @@ const actions = {
 
     if (cmd.trim().toLowerCase() === "clear") {
       commit("messages_clear");
+      return;
+    }
+
+    const clientHelp = clientCommandHelpMessage(cmd);
+    if (clientHelp) {
+      if (!silent) {
+        commit("message_add", { type: "cmd.text", text: cmd, echo: true });
+      }
+      commit("message_add", clientHelp);
       return;
     }
 

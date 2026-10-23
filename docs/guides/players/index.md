@@ -85,6 +85,22 @@ stats remain private, and invisible characters stay hidden from non-staff.
 
 ## First Steps: Ask for Help
 
+Type `help` (or `h`) for the current Core command index. Click or tap a command,
+or focus it and press Enter, to open its syntax, description, and examples.
+You can also type `help <command>`, such as `help buy`, `help craft`, or
+`help enter`. Builder commands appear only for characters with builder access
+and permission to edit the current world.
+
+The index covers Core commands, including crafting, instances, and time control.
+Some need a local merchant or trainer, an instance, or another gameplay condition.
+Use `help <ability>` for an ability you know or can currently learn, `learn`
+for local training, and `socials` for the world's social commands. Room and quest
+actions can offer additional commands specific to the world.
+
+The browser also supports `quit` to disconnect and `clear` to clear the visible
+console. Type either on its own. `clear` leaves your command history intact;
+`help quit` and `help clear` explain these commands.
+
 When reporting a problem to the team, include your character name, world,
 approximate time and timezone, what you expected, and what happened. Reports
 made promptly are easier to investigate: key gameplay history is retained for

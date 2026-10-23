@@ -19,10 +19,6 @@ const statusPanelSource = await readFile(
   new URL("../src/components/game/panel/Status.vue", import.meta.url),
   "utf8",
 );
-const consoleHelpSource = await readFile(
-  new URL("../src/components/game/console/Help.vue", import.meta.url),
-  "utf8",
-);
 const compiled = ts.transpileModule(roundEffectsSource, {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
@@ -165,5 +161,4 @@ test("disengage refreshes room combatants and clears or switches the target", ()
     gameStoreSource,
     /cmd\.disengage\.success[\s\S]*player_target_set", null[\s\S]*actor\?\.target \|\| null/,
   );
-  assert.match(consoleHelpSource, /cmdHelp\('disengage'\)/);
 });

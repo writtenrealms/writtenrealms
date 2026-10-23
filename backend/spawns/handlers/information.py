@@ -36,6 +36,31 @@ from spawns.triggers import (
 )
 
 
+# Presentation categories only: membership always comes from registered handlers.
+# New handler modules fall back to Commands so their topics cannot silently vanish.
+HELP_CATEGORIES = {
+    "Basic Commands": ("aliases", "player_state"),
+    "Combat Commands": ("combat", "duels"),
+    "Abilities": ("abilities",),
+    "Information": ("information", "currencies"),
+    "Movement": ("movement", "following"),
+    "Doors": ("doors",),
+    "Communication": ("communication", "socials"),
+    "Item Manipulation": ("items",),
+    "Quest Commands": ("quests",),
+    "Merchants": ("merchants",),
+    "Crafting": ("crafting",),
+    "Instances and Time": ("instances", "time_control"),
+    "Commands": (),
+    "Builder Commands": (),
+}
+HELP_CATEGORY_BY_MODULE = {
+    module: category
+    for category, modules in HELP_CATEGORIES.items()
+    for module in modules
+}
+
+
 @register_handler
 class LookHandler(CommandHandler):
     command_type = "look"
@@ -265,9 +290,8 @@ class WhoHandler(CommandHandler):
         "name": "Who",
         "format": "who",
         "description": (
-            "List all currently logged in players. Players with a ~ in "
-            "front of their names are Builders, who can give special "
-            "assistance if needed."
+            "List visible players currently in your world. Builder names "
+            "are highlighted in the game client."
         ),
         "examples": ["who"],
     }
@@ -292,7 +316,7 @@ class RollHandler(CommandHandler):
     text_commands = ("roll",)
     help = {
         "name": "Roll",
-        "format": "roll <size> | roll <num>d<size>",
+        "format": "roll | roll <size> | roll <num>d<size>",
         "description": (
             "Roll a die by size, or use XdY format where X is the number of "
             "rolls and Y is the die size. If no argument is given, rolls 1d6. "
@@ -337,8 +361,13 @@ class HelpHandler(CommandHandler):
     text_commands = ("help",)
     help = {
         "name": "Help",
-        "format": "help | help <command>",
-        "description": "List available commands or show details for one command.",
+        "format": "help | help <command|ability>",
+        "description": "List Core commands or show details for a command or available ability.",
+        "details": [
+            "Some commands require a local provider, an instance, or another gameplay condition.",
+            "Use help <ability> for an ability you know or can currently learn; learn lists training here.",
+            "Use socials for this world's social commands. Room and quest actions may offer additional commands.",
+        ],
         "examples": [
             "help",
             "help look",
@@ -356,15 +385,23 @@ class HelpHandler(CommandHandler):
                 continue
             seen_handlers.add(handler_id)
             help_data = handler.get_help_data(command_name=command_name) or {}
+            module = type(handler).__module__.rsplit(".", 1)[-1]
+            category = (
+                "Builder Commands" if handler.builder_only
+                else HELP_CATEGORY_BY_MODULE.get(module, "Commands")
+            )
             commands.append(
                 {
                     "command": command_name,
+                    "commands": list(handler.text_commands),
+                    "category": category,
                     "format": help_data.get("format", command_name),
                     "description": help_data.get("description", ""),
                 }
             )
 
-        return commands
+        category_order = {category: index for index, category in enumerate(HELP_CATEGORIES)}
+        return sorted(commands, key=lambda entry: category_order[entry["category"]])
 
     def _resolve_help_target_text(self, ctx: CommandContext) -> str | None:
         args = ctx.payload.get("args", [])
