@@ -1,5 +1,36 @@
 # Items, Corpses, and Storage
 
+## Using items and containers
+
+Item commands accept common prepositions and optional leading articles such
+as `the`, `a`, and `an`:
+
+| Action | Examples |
+| --- | --- |
+| Examine an item or its contents | `l pouch`, `l in pouch`, `look inside the pouch`, `look at the spear`, `examine pouch` |
+| Pick something up | `get spear`, `take spear`, `pick up the spear` |
+| Take something from a container | `get spear from pouch`, `take spear out of the pouch` |
+| Store something | `put spear in pouch`, `put spear into the pouch`, `put spear inside pouch` |
+| Give something to an NPC | `give spear to guard` |
+| Wear equipment | `put on the helmet`, `put the helmet on` |
+| Remove equipment | `take off the helmet`, `take the helmet off` |
+
+Short forms such as `get spear pouch`, `put spear pouch`, and `give spear guard`
+still work. Use an explicit preposition for multiword names, for example
+`get the shieldguard spear from the leather pouch` or
+`give the shieldguard spear to the palace guard`. Item names and authored
+keywords both identify items; every word in the selector must match.
+
+Numbered and bulk selectors work with either phrasing: `get 2.spear from pouch`
+takes the second matching spear, `put all.spear into pouch` stores every matching
+carried spear, and `get all.spear from all.pouch` takes matching spears from every
+accessible pouch. `loot from pouch` takes all its pickable contents. Containers
+must be directly carried or in the room; another character's possessions are
+not accessible. An unfinished command such as `get spear from` asks for the
+missing container without moving anything.
+
+## Retention and cleanup
+
 Use `look corpse` or examine an item to see its retention notice. The time
 shown is a snapshot taken when you inspect it. World builders can change all
 supported durations; the following are the defaults.

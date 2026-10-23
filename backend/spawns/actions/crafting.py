@@ -921,6 +921,7 @@ class SalvageItemAction:
         spoils: bool = False,
         request_id=None,
         request_segment="r",
+        build_events: bool = True,
     ) -> ActionResult:
         spoils = spoils is True
         with transaction.atomic():
@@ -933,13 +934,15 @@ class SalvageItemAction:
             )
             if receipt is not None:
                 data = deepcopy(receipt.result or {})
+                data["replayed"] = True
+                if not build_events:
+                    return ActionResult(data=data)
                 updated_player = get_player_with_related(player.id)
                 data["actor"] = serialize_actor(
                     updated_player,
                     updated_player.room,
                 ).model_dump()
                 data["materials"] = list_material_balances(updated_player)
-                data["replayed"] = True
                 data = _json_safe(data)
                 return ActionResult(
                     data=data,
@@ -1122,27 +1125,29 @@ class SalvageItemAction:
                 ]
             )
 
-            updated_player = get_player_with_related(player.id)
-            data = {
-                "actor": serialize_actor(updated_player, updated_player.room).model_dump(),
+            data = _json_safe({
                 "items": item_snapshots,
                 "count": len(item_snapshots),
                 "yielded": yielded,
-                "materials": list_material_balances(updated_player),
                 "remaining_spoils": remaining_spoils,
                 "replayed": False,
-            }
-            data = _json_safe(data)
-            receipt_data = deepcopy(data)
-            receipt_data.pop("actor", None)
-            receipt_data.pop("materials", None)
+            })
             _store_receipt(
                 player=player,
                 request_id=request_id,
                 request_segment=request_segment,
                 action="salvage",
-                result=receipt_data,
+                result=deepcopy(data),
             )
+
+            # Offline callers serialize the character once, after releasing
+            # their player lock. Keep domain events above, but skip game output.
+            if not build_events:
+                return ActionResult(data=data)
+            updated_player = get_player_with_related(player.id)
+            data["actor"] = serialize_actor(updated_player, updated_player.room).model_dump()
+            data["materials"] = list_material_balances(updated_player)
+            data = _json_safe(data)
 
         return ActionResult(
             data=data,

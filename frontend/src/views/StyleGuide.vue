@@ -42,7 +42,9 @@
           <span class="sg-code">.btn-thin</span>
           <div class="sg-inline">
             <button class="btn-thin">SHOW ALL</button>
-            <button class="btn-thin">RETRY</button>
+            <button class="btn-thin">EQUIP</button>
+            <button class="btn-thin">REMOVE</button>
+            <button class="btn-thin">SALVAGE</button>
           </div>
         </div>
         <div class="sg-row">
@@ -73,6 +75,8 @@
       </div>
       <p class="sg-note">Modifiers: <span class="sg-code">.button-gray</span> (small, medium) and
         <span class="sg-code">.button-red</span> (small). Keyboard focus shows a gold ring on every control.</p>
+      <p class="sg-note">Use <span class="sg-code">.btn-thin</span> consistently for inline character item actions:
+        equip, remove, salvage, and take out. In narrow rows, inventory actions wrap below the item name.</p>
     </section>
 
     <section id="notifications" class="sg-section">

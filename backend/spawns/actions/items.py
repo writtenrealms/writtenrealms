@@ -20,7 +20,7 @@ from quests.services.room_items import (
     quest_room_item_projections_for_room,
 )
 from spawns.actions.base import ActionError, ActionResult
-from spawns.actions.targeting import resolve_room_mob_target
+from spawns.actions.targeting import matches_keyword_phrase, resolve_room_mob_target
 from spawns.events import GameEvent
 from spawns.models import Equipment, Item, Mob, Player
 from spawns.state_payloads import (
@@ -90,6 +90,7 @@ def _candidate_equipment_type(item: Item | QuestRoomItemProjection) -> str:
 def _item_tokens(item: Item | QuestRoomItemProjection) -> set[str]:
     keywords = _candidate_keywords(item)
     tokens = set(_tokenize_keywords(keywords))
+    tokens.update(_tokenize_keywords(_candidate_name(item)))
     tokens.add("item")
     item_type = _candidate_type(item)
     if item_type == adv_consts.ITEM_TYPE_CONTAINER:
@@ -116,7 +117,7 @@ def _item_matches(item: Item | QuestRoomItemProjection, token: str) -> bool:
     item_key = str(getattr(item, "key", "") or "").lower()
     if item_key and item_key == token:
         return True
-    return token in _item_tokens(item)
+    return matches_keyword_phrase(token, _item_tokens(item))
 
 
 def _is_container_item(item: Item) -> bool:

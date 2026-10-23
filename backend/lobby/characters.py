@@ -16,6 +16,7 @@ from rest_framework.views import APIView
 from builders.models import WorldBuilder
 from config import constants as adv_consts
 from spawns.actions.base import ActionError
+from spawns.actions.crafting import SalvageItemAction
 from spawns.actions.items import (
     EquipAction,
     GetAction,
@@ -118,7 +119,7 @@ def private_payload(player_id):
         'can_manage_items': not player.in_game,
         'can_transfer': player.world.lifecycle == adv_consts.WORLD_STATE_COMPLETE,
         'world_config': serialize_world(player.world),
-        'character': serialize_actor(player, None).model_dump(mode='json'),
+        'character': serialize_actor(player, None, include_container_contents=True).model_dump(mode='json'),
     }
 
 
@@ -177,12 +178,12 @@ class CharacterDetail(CharacterView):
 class CharacterItems(CharacterView):
     """
     Move a character's items while they are out of the game: equip, remove,
-    put into a bag they carry, or take out of one. Reuses the game's item
-    actions, so the same equipment rules apply. Offline/ownership validation
+    put into a bag they carry, take out of one, or salvage. Reuses the game's
+    item actions, so the same item rules apply. Offline/ownership validation
     and item changes share the player lock; game event payloads are skipped.
     """
 
-    ACTIONS = ('equip', 'remove', 'put', 'take')
+    ACTIONS = ('equip', 'remove', 'put', 'take', 'salvage')
 
     def post(self, request, pk):
         action = request.data.get('action')
@@ -213,6 +214,8 @@ class CharacterItems(CharacterView):
                     RemoveEquipmentAction().execute(player.pk, item.key, build_events=False)
                 elif action == 'put':
                     PutAction().execute(player.pk, item.key, container.key, build_events=False)
+                elif action == 'salvage':
+                    SalvageItemAction().execute(player.pk, item.key, build_events=False)
                 else:
                     GetAction().execute(player.pk, item.key, container.key, build_events=False)
             except ActionError as error:

@@ -11,6 +11,7 @@ from spawns.command_history import (
     record_player_command_history,
     resolve_player_command_history,
 )
+from spawns.command_syntax import item_relation
 from spawns.handlers.base import CommandHandler, CommandContext
 from spawns.handlers.permissions import (
     builder_permission_error,
@@ -357,6 +358,26 @@ class TextCommandHandler(CommandHandler):
         if command == "eq" and not args:
             command = "equipment"
 
+        # Resolve compound item verbs before permissions and time handling so
+        # they follow exactly the same path as their canonical commands.
+        # Explicit container relations take precedence over trailing on/off.
+        if command == "take" and args and args[0].lower() == "off":
+            command, args = "remove", args[1:]
+        elif (
+            command == "take" and args and args[-1].lower() == "off"
+            and not item_relation(args, (("from",), ("out", "of")))[2]
+        ):
+            command, args = "remove", args[:-1]
+        elif command == "put" and args and args[0].lower() == "on":
+            command, args = "wear", args[1:]
+        elif (
+            command == "put" and args and args[-1].lower() == "on"
+            and not item_relation(args, (("in",), ("into",), ("inside",)))[2]
+        ):
+            command, args = "wear", args[:-1]
+        elif command == "pick" and args and args[0].lower() == "up":
+            command, args = "get", args[1:]
+
         ctx.payload["args"] = args
         ctx.payload["command"] = command
         ctx.payload["raw_text"] = raw_text
@@ -465,24 +486,10 @@ class TextCommandHandler(CommandHandler):
             )
             return
 
-        if handler.command_type == "look" and args:
-            ctx.payload["target"] = " ".join(args)
-        elif handler.command_type == "move":
+        if handler.command_type == "move":
             ctx.payload["direction"] = resolved_command
         elif handler.command_type in {"kill", "talk"} and args:
             ctx.payload["target"] = " ".join(args)
-        elif handler.command_type == "drop" and args:
-            ctx.payload["item"] = " ".join(args)
-        elif handler.command_type == "get" and args:
-            ctx.payload["selector"] = args[0]
-            if len(args) > 1:
-                ctx.payload["source"] = " ".join(args[1:])
-        elif handler.command_type in {"put", "give"} and args:
-            ctx.payload["selector"] = args[0]
-            if len(args) > 1:
-                ctx.payload["target"] = " ".join(args[1:])
-        elif handler.command_type in {"equip", "wear", "wield", "remove"} and args:
-            ctx.payload["selector"] = " ".join(args)
         elif handler.command_type == "help" and args:
             ctx.payload["target"] = args[0]
 

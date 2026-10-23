@@ -12,6 +12,7 @@ from spawns.actions.items import (
 )
 from spawns.actions.information import EquipmentAction
 from spawns.events import publish_events
+from spawns.command_syntax import item_relation, selector_words, strip_leading_relation
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
 
@@ -36,7 +37,7 @@ def _selector_from_payload(ctx: CommandContext) -> str | None:
     if selector is None:
         args = ctx.payload.get("args", [])
         if args:
-            selector = " ".join(args)
+            selector = selector_words(args)
 
     return _selector_value(selector)
 
@@ -151,10 +152,11 @@ class WearHandler(_EquipHandlerBase):
     text_commands = ("wear",)
     help = {
         "name": "Wear",
-        "format": "wear <item>",
+        "format": "wear <item> | put on <item> | put <item> on",
         "description": "Wear an equippable item from your inventory.",
         "examples": [
             "wear helmet",
+            "put helmet on",
             "wear all.armor",
         ],
     }
@@ -182,10 +184,11 @@ class RemoveHandler(CommandHandler):
     text_commands = ("remove",)
     help = {
         "name": "Remove",
-        "format": "remove <item>",
+        "format": "remove <item> | take off <item> | take <item> off",
         "description": "Remove an equipped item and return it to your inventory.",
         "examples": [
             "remove helmet",
+            "take helmet off",
             "remove all",
             "remove all.armor",
         ],
@@ -256,11 +259,16 @@ class EquipmentHandler(CommandHandler):
 class GetHandler(CommandHandler):
     command_type = "get"
     text_commands = ("get", "loot")
+    # Exact aliases leave established abbreviations (such as `ta` for talk)
+    # unchanged.
+    text_aliases = {"take": "get", "pickup": "get"}
     help = {
         "name": "Get",
-        "format": "get <item> | get <item> <container> | loot [all | <corpse>]",
+        "format": "get <item> [from <container>] | get <item> <container> | loot [all | <corpse>]",
         "description": "Take an item from the room, or from a container in the room/inventory.",
         "details": [
+            "You can also use `take <item>` or `pick up <item>`, and `out of` "
+            "instead of `from`. Include `from` when using a multiword item name.",
             "`loot` is shorthand for `get all corpse`. Add a corpse selector "
             "to choose among multiple corpses. `loot all` means `get all all.corpse`.",
             "Use `all.<container>` to take items from every matching container. "
@@ -269,6 +277,8 @@ class GetHandler(CommandHandler):
         ],
         "examples": [
             "get lantern",
+            "get spear from pouch",
+            "take the shieldguard spear out of the leather pouch",
             "get all chest",
             "get all all.corpse",
             "get all.coin all.pouch",
@@ -289,17 +299,21 @@ class GetHandler(CommandHandler):
             or _selector_value(ctx.payload.get("from"))
         )
         args = ctx.payload.get("args", [])
+        explicit_source = False
 
         if ctx.payload.get("command") == "loot":
             selector = "all"
-            source = " ".join(args).strip() or "corpse"
+            args, explicit_source = strip_leading_relation(args, (("from",),))
+            source = selector_words(args)
+            if not source and not explicit_source:
+                source = "corpse"
             if source.lower() == "all":
                 source = "all.corpse"
         elif not selector:
-            if args:
-                selector = args[0]
-                if len(args) > 1:
-                    source = " ".join(args[1:])
+            selector, parsed_source, explicit_source = item_relation(
+                args, (("out", "of"), ("from",)),
+            )
+            source = parsed_source or source
 
         if not selector:
             ctx.publish(
@@ -309,6 +323,14 @@ class GetHandler(CommandHandler):
                     "data": {"error": "Missing item.", "code": "missing_item"},
                 }
             )
+            return
+
+        if explicit_source and not source:
+            ctx.publish({
+                "type": "cmd.get.error",
+                "text": "Get from where?",
+                "data": {"error": "Missing container.", "code": "missing_container"},
+            })
             return
 
         try:
@@ -336,25 +358,27 @@ class PutHandler(CommandHandler):
     text_commands = ("put",)
     help = {
         "name": "Put",
-        "format": "put <item> <container>",
+        "format": "put <item> [in|into|inside] <container>",
         "description": "Put an inventory item into a container in the room or in your inventory.",
         "examples": [
             "put apple backpack",
+            "put spear into pouch",
             "put all chest",
             "put 2.coin pouch",
         ],
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        selector = ctx.payload.get("selector")
-        target = ctx.payload.get("target")
+        selector = _selector_value(ctx.payload.get("selector"))
+        target = _selector_value(ctx.payload.get("target"))
 
         if not selector or not target:
-            args = ctx.payload.get("args", [])
-            if args:
-                selector = args[0]
-            if len(args) > 1:
-                target = " ".join(args[1:])
+            parsed_selector, parsed_target, _ = item_relation(
+                ctx.payload.get("args", []),
+                (("inside", "of"), ("into",), ("in",), ("inside",)),
+            )
+            selector = selector or parsed_selector
+            target = target or parsed_target
 
         if not selector:
             ctx.publish(
@@ -401,24 +425,25 @@ class GiveHandler(CommandHandler):
     text_commands = ("give",)
     help = {
         "name": "Give",
-        "format": "give <item> <mob>",
+        "format": "give <item> [to] <mob>",
         "description": "Hand an inventory item to a mob in the current room.",
         "examples": [
             "give apple guard",
+            "give the apple to the guard",
             "give 2.pelt quartermaster",
         ],
     }
 
     def handle(self, ctx: CommandContext) -> None:
-        selector = ctx.payload.get("selector")
-        target = ctx.payload.get("target")
+        selector = _selector_value(ctx.payload.get("selector"))
+        target = _selector_value(ctx.payload.get("target"))
 
         if not selector or not target:
-            args = ctx.payload.get("args", [])
-            if args:
-                selector = args[0]
-            if len(args) > 1:
-                target = " ".join(args[1:])
+            parsed_selector, parsed_target, _ = item_relation(
+                ctx.payload.get("args", []), (("to",),),
+            )
+            selector = selector or parsed_selector
+            target = target or parsed_target
 
         if not selector:
             ctx.publish(

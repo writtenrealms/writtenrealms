@@ -22,6 +22,14 @@ def _normalize_selector(selector: str | None) -> str:
     return str(selector or "").strip().lower()
 
 
+def matches_keyword_phrase(selector: str, tokens: set[str]) -> bool:
+    # Keys and numbered selectors are resolved by callers, never as name words.
+    if "." in selector:
+        return False
+    words = _tokenize_keywords(selector)
+    return bool(words) and all(word in tokens for word in words)
+
+
 def _mob_tokens(mob: Mob) -> set[str]:
     keywords = mob.keywords or ""
     if not keywords and mob.definition:
@@ -29,6 +37,7 @@ def _mob_tokens(mob: Mob) -> set[str]:
     if not keywords:
         keywords = mob.name or ""
     tokens = set(_tokenize_keywords(keywords))
+    tokens.update(_tokenize_keywords(mob.name or ""))
     tokens.add("mob")
     return tokens
 
@@ -39,7 +48,7 @@ def mob_matches_selector(mob: Mob, selector: str) -> bool:
         return False
     if mob.key and mob.key.lower() == selector:
         return True
-    return selector in _mob_tokens(mob)
+    return matches_keyword_phrase(selector, _mob_tokens(mob))
 
 
 def _player_tokens(player: Player) -> set[str]:
@@ -58,7 +67,7 @@ def room_char_matches_selector(char: Player | Mob, selector: str) -> bool:
         return mob_matches_selector(char, selector)
     if char.key and char.key.lower() == selector:
         return True
-    return selector in _player_tokens(char)
+    return matches_keyword_phrase(selector, _player_tokens(char))
 
 
 def find_room_player_target(
@@ -245,6 +254,7 @@ def _item_tokens(item: Item) -> set[str]:
     if not keywords:
         keywords = _resolve_item_name(item)
     tokens = set(_tokenize_keywords(keywords))
+    tokens.update(_tokenize_keywords(_resolve_item_name(item)))
     tokens.add("item")
 
     item_type = item.type or (
@@ -266,7 +276,7 @@ def item_matches_selector(item: Item, selector: str) -> bool:
         return False
     if item.key and item.key.lower() == selector:
         return True
-    return selector in _item_tokens(item)
+    return matches_keyword_phrase(selector, _item_tokens(item))
 
 
 def find_accessible_item_target(

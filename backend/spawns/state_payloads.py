@@ -9,6 +9,7 @@ import json
 from datetime import timedelta
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from django.contrib.contenttypes.models import ContentType
 from django.db.models import F, OuterRef, Prefetch, Q, Subquery
 from django.db.models.functions import Coalesce
 from django.utils import timezone
@@ -523,17 +524,35 @@ def serialize_inventory(
             ).values_list("item_definition_id", flat=True)
         )
 
-    return [
+    payloads = [
         serialize_item(
             item,
             viewer=viewer,
-            include_inventory=include_inventory,
             salvageable_definition_ids=salvageable_definition_ids,
             action_labels=action_labels.get(item.id, []),
             upkeep_now=upkeep_now,
         )
         for item in item_list
     ]
+    if include_inventory:
+        containers = {
+            item.id: payload for item, payload in zip(item_list, payloads)
+            if payload.is_container
+        }
+        if containers:
+            # Load and serialize each depth together, so multiple bags do not
+            # add a separate contents, action-label, or salvage query per bag.
+            contents = list(with_item_salvageability(
+                Item.objects.filter(
+                    container_type=ContentType.objects.get_for_model(Item),
+                    container_id__in=containers,
+                    is_pending_deletion=False,
+                ).select_related("definition", "currency").order_by("id")
+            ))
+            content_payloads = serialize_inventory(contents, viewer=viewer, include_inventory=True)
+            for item, payload in zip(contents, content_payloads):
+                containers[item.container_id].inventory.append(payload)
+    return payloads
 
 
 def serialize_equipment(equipment, *, viewer: Player | Mob | None = None) -> EquipmentSchema:
@@ -1110,7 +1129,9 @@ def serialize_room(
     )
 
 
-def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
+def serialize_actor(
+    player: Player, room: Optional[Room], *, include_container_contents: bool = False,
+) -> Actor:
     if room:
         player.room = room
     try:
@@ -1168,7 +1189,9 @@ def serialize_actor(player: Player, room: Optional[Room]) -> Actor:
     )
     actor_data["room"] = {"key": room_payload_key_for(room)} if room else None
     actor_data["equipment"] = serialize_equipment(player.equipment, viewer=player)
-    actor_data["inventory"] = serialize_inventory(player.inventory.all(), viewer=player)
+    actor_data["inventory"] = serialize_inventory(
+        player.inventory.all(), viewer=player, include_inventory=include_container_contents,
+    )
     source_world = _definition_world(player.world)
     prefetched = getattr(player, "_prefetched_objects_cache", {})
     if "material_balances" in prefetched:

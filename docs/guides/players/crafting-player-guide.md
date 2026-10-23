@@ -71,6 +71,11 @@ and ambiguous item selections are rejected. Rolled item stats never change the
 salvage yield. Materials persist through logout and death but cannot initially
 be dropped, sold, or traded directly.
 
+While your character is out of the game, you can also use **Salvage** beside
+eligible inventory items on their [character page](./index.md#character-pages).
+The item is permanently destroyed and the Purse shows your updated materials.
+Take items out of bags and remove equipped gear before salvaging them.
+
 The numbered list includes at most 100 eligible items in inventory order. Its
 numbers are not permanent item identifiers: picking up, dropping, equipping,
 or salvaging gear may change them, so run `salvage` again when in doubt.

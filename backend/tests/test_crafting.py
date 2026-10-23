@@ -1759,6 +1759,15 @@ class TestSalvageRuntime(CraftingRuntimeTestCase):
             item.key,
             request_id=request_id,
         )
+        with patch('spawns.actions.crafting.get_player_with_related') as reload_player:
+            offline_replay = SalvageItemAction().execute(
+                self.player.id, item.key, request_id=request_id, build_events=False,
+            )
+            reload_player.assert_not_called()
+        self.assertTrue(offline_replay.data['replayed'])
+        self.assertEqual(offline_replay.data['yielded'], first.data['yielded'])
+        self.assertEqual(offline_replay.events, [])
+        self.assertNotIn('actor', offline_replay.data)
 
         prepared.refresh_from_db()
         self.assertFalse(first.data["replayed"])

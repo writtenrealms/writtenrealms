@@ -56,6 +56,7 @@ description, and what they are wearing. On your own characters you also see
 stats, currencies, and everything they carry, and you can:
 
 - equip and remove gear, and move items into or out of bags you carry;
+- salvage eligible carried items into crafting materials;
 - edit the description other players see when they look at you;
 - delete the character.
 
@@ -63,6 +64,14 @@ Hover over an item name in equipment, inventory, or an open bag to see its
 description and stats beside it. On mobile, tap the name to open a centered
 preview. Close it with the **×** button, by tapping outside, or with Escape.
 Keyboard users can focus an item name and press Enter to move into its preview.
+
+Expand a bag with its arrow to see the items inside, or preview the bag to
+see its contents. Moving an item into or out of a bag updates that list immediately.
+
+**Salvage** appears beside eligible items in your inventory. It permanently
+destroys that item and updates your material balances in the Purse. Remove
+equipped gear or take items out of bags first; quest items and nonempty bags
+cannot be salvaged.
 
 Item changes and deletion are only available while the character is out of
 the game; manage items in the game while you are playing.

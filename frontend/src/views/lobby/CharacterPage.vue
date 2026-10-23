@@ -66,7 +66,9 @@
                   <span v-else class="bag-toggle"></span>
                   <button class="item-name" :class="item.quality" v-bind="itemPreviewBindings(item)">{{ item.name }}</button>
                   <div class="item-actions">
-                    <button v-if="item.type === 'equippable'" class="btn-small" :disabled="!canAct" @click="act('equip', item)">EQUIP</button>
+                    <button v-if="item.type === 'equippable'" class="btn-thin" :disabled="!canAct" @click="act('equip', item)">EQUIP</button>
+                    <button v-if="canSalvage(item)" class="btn-thin" :disabled="!canAct"
+                      :aria-label="`Salvage ${item.name}`" @click="act('salvage', item)">SALVAGE</button>
                     <select v-if="!isBag(item) && bags.length" class="put-select" :disabled="!canAct"
                       :aria-label="`Put ${item.name} in a bag`" value="" @change="onPut(item, $event)">
                       <option value="" disabled>Put in…</option>
@@ -268,6 +270,8 @@ const equipmentSlots = computed(() => {
 
 const inventory = computed(() => character.value.inventory || []);
 const isBag = (item: any) => item.type === "container";
+// This is only used for directly carried items. The server rechecks eligibility.
+const canSalvage = (item: any) => item.is_salvageable && item.type !== "quest" && !(item.inventory || []).length;
 const bags = computed(() => inventory.value.filter(isBag));
 
 const isSelected = (item: any) => !!item && item.key === preview.value?.item.key;
@@ -286,6 +290,7 @@ async function act(action: string, item: any, container: any = null) {
     });
     data.value = response.data;
     if (action === "put") openBags[container.key] = true;
+    if (action === "salvage") store.commit("ui/notification_set", `Salvaged ${item.name}.`);
   } catch (error: any) {
     const detail = error.response?.data?.detail || error.response?.data?.container || error.response?.data?.item;
     store.commit("ui/notification_set_error", detail || "That didn't work. Please try again.");
@@ -556,7 +561,24 @@ const createdLabel = computed(() => new Date(data.value.created_ts).toLocaleDate
 
 .inventory-row,
 .bag-content-row {
-  grid-template-columns: 32px minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 4px;
+
+  .bag-toggle {
+    flex: 0 0 32px;
+  }
+
+  .item-name {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+
+  .item-actions {
+    margin-left: auto;
+    max-width: calc(100% - 44px);
+    flex-wrap: wrap;
+  }
 }
 
 .bag-content-row {

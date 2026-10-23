@@ -4,6 +4,7 @@ Information / observation commands (look, inspect, etc).
 Implements information-oriented commands such as look, inventory, and help.
 """
 from spawns.command_history import get_player_command_history
+from spawns.command_syntax import selector_words, strip_leading_relation
 from spawns.actions.base import ActionError
 from spawns.actions.abilities import (
     known_ability_slugs,
@@ -39,9 +40,10 @@ from spawns.triggers import (
 class LookHandler(CommandHandler):
     command_type = "look"
     text_commands = ("look",)
+    text_aliases = {"examine": "look"}
     help = {
         "name": "Look",
-        "format": "look | look <target|direction>",
+        "format": "look | look [at|in|inside|into] <target|direction> | examine <target>",
         "description": (
             "Look at your current room, a specific target in it, or a door "
             "in a direction."
@@ -51,6 +53,8 @@ class LookHandler(CommandHandler):
             "look north",
             "look soldier",
             "look sword",
+            "l in pouch",
+            "look at the sword",
         ],
     }
 
@@ -59,7 +63,13 @@ class LookHandler(CommandHandler):
         if target is None:
             args = ctx.payload.get("args", [])
             if args:
-                target = " ".join(args)
+                args, _ = strip_leading_relation(
+                    args, (("inside", "of"), ("at",), ("in",), ("inside",), ("into",)),
+                )
+                target = selector_words(args)
+                if not target:
+                    ctx.publish_error("look", "Look at or in what?")
+                    return
 
         try:
             result = LookAction().execute(ctx.player.id, target_selector=target)
