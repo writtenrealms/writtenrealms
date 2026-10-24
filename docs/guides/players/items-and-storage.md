@@ -29,6 +29,21 @@ must be directly carried or in the room; another character's possessions are
 not accessible. An unfinished command such as `get spear from` asks for the
 missing container without moving anything.
 
+### Bag capacity
+
+Bags and other storage containers hold **100 items by default**, though builders
+can give particular containers a different capacity. Each individual item counts,
+even when identical copies appear together as a stack. A full bag refuses further
+deposits; a bulk `put` that would exceed its capacity moves nothing.
+
+You cannot put bags, other containers, or corpses inside a storage container.
+A bag filled to its capacity can still be picked up and dropped. Death recovery
+is separate: a corpse can retain your bags and their contents.
+
+If a builder lowers a bag's capacity, its existing contents remain available.
+Remove enough items before adding more. Any previously nested bags must be
+removed before those bags accept new deposits.
+
 ## Retention and cleanup
 
 Use `look corpse` or examine an item to see its retention notice. The time

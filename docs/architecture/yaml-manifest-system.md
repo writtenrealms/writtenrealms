@@ -151,6 +151,14 @@ Current required mappings:
   `StartingEq` model.
 - WR1 `ItemTemplate` rows export as `kind: itemdefinition`; WR2 no longer has an
   `ItemTemplate` model, manifest kind, API endpoint, or runtime item FK.
+- WR2 container `spec.capacity` is an individual-item count from 1 through
+  4,095, defaulting to 100. The upper bound leaves room for the bag itself in
+  the 4,096-item interactive transfer budget. The optional WR1 authored-world
+  converter should preserve positive capacities within that range, omit zero
+  or unspecified capacities to select the WR2 default, and report out-of-range
+  values for builder review. Container-in-container spawn targets are no longer
+  supported; report those authored placements for builder restructuring.
+  Corpse death equipment remains independent of storage-container limits.
 - WR1 `ItemTemplate.ground_description` exports as `kind: itemdefinition`
   `spec.room_description`. Do not emit `spec.ground_description`; it is not
   part of the canonical WR2 contract. Preserve explicitly authored blank values

@@ -264,7 +264,7 @@ class TestWorldAdminInstanceEndpoint(BuilderTestCase):
         Item.objects.create(
             name='Pending Dust',
             world=self.spawn_world,
-            container=ground_item,
+            container=chest,
             is_pending_deletion=True,
         )
 

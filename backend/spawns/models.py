@@ -2135,7 +2135,7 @@ class Item(ItemMixin, AdventBaseModel):
         from spawns.item_lifecycle import save_item, lifecycle_write
         fields = kwargs.get('update_fields')
         if not lifecycle_write.get() and (self._state.adding or fields is None or
-                {'container', 'container_type', 'container_type_id', 'container_id'} & set(fields)):
+                {'container', 'container_type', 'container_type_id', 'container_id', 'type', 'capacity'} & set(fields)):
             return save_item(self, args, kwargs)
         return super().save(*args, **kwargs)
 

@@ -117,8 +117,10 @@ class ItemLifecycleTests(WorldTestCase):
 
     def test_nested_bag_recovery_cancels_all_ground_deadlines(self):
         bag = self.item(type='container', name='a bag')
-        inner = self.item(bag, type='container')
+        inner = self.item(type='container')
         loot = self.item(inner)
+        Item.objects.filter(pk=inner.pk).update(
+            container_type=ContentType.objects.get_for_model(Item), container_id=bag.pk)
         GetAction().execute(self.player.pk, 'bag')
         for obj in [bag, inner, loot]:
             obj.refresh_from_db()
@@ -201,8 +203,10 @@ class ItemLifecycleTests(WorldTestCase):
 
     def test_retiring_ancestor_blocks_put_and_get(self):
         bag = self.item(type='container')
-        inner = self.item(bag, type='container')
+        inner = self.item(type='container')
         loot = self.item(inner)
+        Item.objects.filter(pk=inner.pk).update(
+            container_type=ContentType.objects.get_for_model(Item), container_id=bag.pk)
         Item.objects.filter(pk=bag.pk).update(upkeep_retiring=True, is_pending_deletion=True)
         with self.assertRaises(ActionError):
             move_items([loot], self.player)
@@ -228,20 +232,18 @@ class ItemLifecycleTests(WorldTestCase):
         item.refresh_from_db()
         self.assertEqual(item.upkeep_due_ts, deadline)
 
-    def test_pickup_and_put_into_protected_storage_cancels_descendant_timers(self):
+    def test_deposit_into_protected_storage_cancels_item_timer(self):
         bag = self.item(type='container')
         loot = self.item(bag)
         with authored_placement({'contents':'preserve'}):
             storage = self.item(type='container')
-        move_items([bag], storage)
-        for item in [bag, loot]:
-            item.refresh_from_db()
-            self.assertIsNone(item.upkeep_due_ts)
+        move_items([loot], storage)
+        loot.refresh_from_db()
+        self.assertIsNone(loot.upkeep_due_ts)
 
-    def test_deposit_uses_an_inner_containers_earlier_deadline(self):
-        outer = self.item(type='container')
-        inner = self.item(outer, type='container')
-        earlier = outer.upkeep_due_ts-timedelta(minutes=20)
+    def test_deposit_uses_the_containers_earlier_deadline(self):
+        inner = self.item(type='container')
+        earlier = inner.upkeep_due_ts-timedelta(minutes=20)
         Item.objects.filter(pk=inner.pk).update(upkeep_due_ts=earlier)
         deposit = self.item(self.player)
         move_items([deposit], inner)

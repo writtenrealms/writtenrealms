@@ -5,6 +5,7 @@ import math
 import random
 from typing import Any
 
+from django.db import transaction
 from django.db.models import NOT_PROVIDED
 
 from core.model_mixins import ItemMixin
@@ -341,6 +342,11 @@ def sync_spawned_items_from_definition(definition) -> int:
         # not retroactively reinterpret player inventory or merchant stock.
         item_fields.pop("cost", None)
         item_fields.pop("currency", None)
+        # Only storage-policy changes need the lifecycle's physical-root lock;
+        # ordinary definition edits should not reacquire it for every instance.
+        for field_name in ('type', 'capacity'):
+            if item_fields[field_name] == getattr(item, field_name):
+                item_fields.pop(field_name)
         for field_name, value in item_fields.items():
             setattr(item, field_name, value)
         item.roll_metadata = {
@@ -378,6 +384,7 @@ def choose_item_bundle_entry(bundle, rng: random.Random | None = None):
     return candidates[selected_index]
 
 
+@transaction.atomic
 def spawn_item_from_bundle(
     bundle,
     target,

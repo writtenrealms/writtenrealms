@@ -5,6 +5,7 @@ from django.contrib.contenttypes.fields import GenericRelation
 from django.db import models
 
 from core.db import list_to_choice, optional
+from core.item_storage import DEFAULT_CONTAINER_CAPACITY
 
 
 def get_auto_keywords(self):
@@ -315,7 +316,7 @@ class ItemMixin(models.Model):
 
     # Container options
     is_persistent = models.BooleanField(default=False)
-    capacity = models.IntegerField(default=0)
+    capacity = models.IntegerField(default=DEFAULT_CONTAINER_CAPACITY)
 
     quality = models.TextField(
         choices=list_to_choice(adv_consts.ITEM_QUALITIES),

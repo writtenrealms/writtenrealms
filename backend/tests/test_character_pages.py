@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
+from django.contrib.contenttypes.models import ContentType
 from django.db import OperationalError, close_old_connections, connection, transaction
 from django.test import TransactionTestCase
 from django.test.utils import CaptureQueriesContext
@@ -67,9 +68,12 @@ class TestCharacterPage(WorldTestCase):
         def add_bag(index):
             bag = create_test_item(self.world, self.spawn_world, self.player, f'Bag {index}',
                                    item_type=adv_consts.ITEM_TYPE_CONTAINER)
-            inner = create_test_item(self.world, self.spawn_world, bag, f'Inner bag {index}',
+            inner = create_test_item(self.world, self.spawn_world, self.player, f'Inner bag {index}',
                                      item_type=adv_consts.ITEM_TYPE_CONTAINER)
             create_test_item(self.world, self.spawn_world, inner, f'Spear {index}')
+            # Preserve preview coverage for already-stored nested graphs.
+            Item.objects.filter(pk=inner.pk).update(
+                container_type=ContentType.objects.get_for_model(Item), container_id=bag.pk)
 
         self.client.force_authenticate(self.user)
         add_bag(0)

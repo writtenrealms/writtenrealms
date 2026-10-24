@@ -45,6 +45,47 @@ objects, and any other item where every copy should be identical.
 Containers, corpses, trash containers, augmented items, and randomized items do
 not stack.
 
+## Container Capacity
+
+Containers and trash containers hold **100 individual items by default**. Set
+`spec.capacity` on the item definition to choose a whole-number limit from
+**1 through 4,095**:
+
+```yaml
+kind: itemdefinition
+metadata:
+  slug: leather-pouch
+  name: a leather pouch
+spec:
+  type: container
+  capacity: 20
+```
+
+Each item instance occupies one place, including identical items displayed as
+a stack. Capacity measures item count, not weight or volume. Containers cannot
+hold other containers, trash containers, or corpses. This also applies to
+spawn-plan and Trigger deposits, not just player commands.
+
+The upper limit reserves one place for the container itself within the
+4,096-item transfer budget, so a full bag can still be picked up or dropped.
+An oversized bulk deposit fails without moving any of its items. Concurrent
+deposits share the same capacity check.
+
+Omitting capacity on a new definition selects 100; omitting it in an update
+preserves the existing value. Canonical container YAML includes the effective
+capacity. Previously unconfigured runtime containers with a stored zero also
+use 100; zero does not mean unlimited and is not accepted in new YAML.
+Definition edits follow the usual synchronization of unmodified spawned items.
+Reducing capacity preserves existing contents, but further deposits are refused
+until there is room. Previously nested bags can be removed, but must be
+unnested before accepting new deposits.
+
+Corpses retain death loot, including bags, independently of storage capacity.
+Keep authored container contents within their capacity and avoid nested
+container spawn targets. Spawn replenishment skips deposits that cannot fit,
+continues with other destinations, and can refill on a later reconciliation
+after space is available. A bundle that cannot fit is not partially deposited.
+
 ## Fixed Stat Items
 
 Fixed stats are still stable. If there is no `randomization` block, two copies

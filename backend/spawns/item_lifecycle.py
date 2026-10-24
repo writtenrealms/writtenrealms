@@ -13,15 +13,15 @@ from time import monotonic
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
-from django.db.models import Exists, F, OuterRef, Q
+from django.db.models import Count, Exists, F, OuterRef, Q
 
+from core.item_storage import MAX_TRANSFER_ITEMS, STORAGE_CONTAINER_TYPES, effective_container_capacity
 from spawns.actions.base import ActionError
 from spawns.instance_clock import clock_guard, gameplay_now, live_worlds
 from worlds.upkeep_policy import effective_upkeep, timer_seconds
 
 lifecycle_write = ContextVar('item_lifecycle_write', default=False)
 _placement = ContextVar('item_authored_placement', default=None)
-MAX_TRANSFER_ITEMS = 4096
 MAX_CONTAINER_DEPTH = 32
 logger = logging.getLogger(__name__)
 FIELDS = ['container_type', 'container_id', 'upkeep_kind', 'upkeep_root', 'upkeep_placed', 'upkeep_storage',
@@ -110,6 +110,42 @@ def _tree(items):
             raise ActionError('Move fewer items at once.', code='item_transfer_budget')
         frontier = [i.pk for i in children]
     raise ActionError('The containers are nested too deeply.', code='item_transfer_budget')
+
+
+def _validate_container_deposit(items, target, *, target_chain, members=None):
+    """Check a whole deposit while its destination's physical root is locked.
+
+    One aggregate query counts individual rows, including hidden/retiring items
+    because those also consume the transfer budget. No per-item count queries.
+    Corpses must retain death equipment, including bags, independently of these
+    storage rules.
+    """
+    Item, _, _ = _models()
+    if not isinstance(target, Item) or target.type == 'corpse':
+        return
+    if target.type not in STORAGE_CONTAINER_TYPES:
+        raise ActionError('That item is not a container.', code='invalid_container')
+    container_types = (*STORAGE_CONTAINER_TYPES, 'corpse')
+    if (any(item.type in container_types for item in items)
+            or any(ancestor.type in STORAGE_CONTAINER_TYPES for ancestor in target_chain[1:])
+            or (members is not None and len(members) != len(items))):
+        raise ActionError('You cannot put containers inside other containers.', code='container_nested')
+    # An idempotent move must not count an existing resident twice.
+    incoming = sum(item._state.adding or item.container_type_id != _item_ct()
+                   or item.container_id != target.pk for item in items)
+    if not incoming:
+        return
+    contents = Item.objects.filter(
+        container_type_id=_item_ct(), container_id=target.pk,
+    ).aggregate(count=Count('pk'), containers=Count('pk', filter=Q(type__in=container_types)))
+    if contents['containers']:
+        raise ActionError('Remove the nested containers before adding more items.', code='container_nested')
+    capacity = effective_container_capacity(target.capacity)
+    if contents['count'] + incoming > capacity:
+        raise ActionError(
+            f'That container can hold at most {capacity} items; there is not enough room.',
+            code='container_full',
+        )
 
 
 def _ground_timer(world, room):
@@ -202,6 +238,8 @@ def _set_state(items, target, world, *, placed=None, inherited_deadlines=None):
 def save_item(item, args, kwargs):
     """Cover ordinary model writes; bulk transfer callers use move_items."""
     Item, _, World = _models()
+    fields = kwargs.get('update_fields')
+    writes_type = fields is None or 'type' in fields
     world = World.objects.select_related('config', 'context__config',
                                         'context__instance_of__config').get(pk=item.world_id)
     with clock_guard(world), transaction.atomic():
@@ -212,9 +250,15 @@ def save_item(item, args, kwargs):
                 Item.objects.select_for_update().get(pk=root.pk)
                 previous = Item.objects.select_for_update().get(pk=item.pk)
                 current_chain = _chain(previous)
-                _available(current_chain)
+                # Capacity edits may also update items already awaiting cleanup.
+                # Movement and type changes still require an available chain.
+                if (fields is None or {'container', 'container_type', 'container_type_id', 'container_id'} & set(fields)
+                        or (writes_type and item.type != previous.type)):
+                    _available(current_chain)
                 if current_chain[-1].pk != root.pk:
                     raise ActionError('That item has moved. Try again.', code='item_moved')
+                if writes_type and item.type != previous.type and len(current_chain) > 1:
+                    _validate_container_deposit([item], current_chain[1], target_chain=current_chain[1:])
                 for name in FIELDS:
                     name = name + '_id' if name in ('upkeep_root', 'container_type') else name
                     setattr(item, name, getattr(previous, name))
@@ -222,6 +266,8 @@ def save_item(item, args, kwargs):
                     return item.save(*args, **kwargs)
             target = item.container
             moved = move_items([item], target, world=world)
+            if writes_type and item.type != previous.type and isinstance(target, Item):
+                _validate_container_deposit([item], target, target_chain=_chain(target))
             # Preserve non-containment fields in a caller's ordinary save.
             state = moved[0]
             for name in FIELDS:
@@ -242,6 +288,7 @@ def save_item(item, args, kwargs):
                 raise ActionError('That container has moved. Try again.', code='item_moved')
             if target.world_id != world.pk or any(i.upkeep_retiring for i in current_chain):
                 raise ActionError('That container is no longer available.', code='item_not_found')
+            _validate_container_deposit([item], target, target_chain=current_chain)
         from spawns.item_stock import lock_destinations
         lock_destinations(world.pk, [target])
         with raw_writes():
@@ -287,15 +334,16 @@ def move_items(items, target, *, world=None):
                 raise ActionError('That item has moved. Try again.', code='item_moved')
         if isinstance(target, Item):
             target = Item.objects.get(pk=target.pk, world_id=world.pk)
-            chain = _chain(target)
-            _available(chain)
-            if chain[-1].pk not in roots:
+            target_chain = _chain(target)
+            _available(target_chain)
+            if target_chain[-1].pk not in roots:
                 raise ActionError('That container has moved. Try again.', code='item_moved')
         members = _tree(current)
         if isinstance(target, Item) and target.pk in {i.pk for i in members}:
             raise ActionError('You cannot place a container inside itself.', code='invalid_target')
         if isinstance(target, Item) and any(i.upkeep_kind in ('npc_corpse', 'player_corpse') for i in members):
             raise ActionError('A corpse must remain outside other containers.', code='invalid_target')
+        _validate_container_deposit(current, target, target_chain=target_chain, members=members)
         from spawns.item_stock import lock_destinations
         lock_destinations(world.pk, [target])
         # A shared inherited deadline cannot make one unrelated item expire early.

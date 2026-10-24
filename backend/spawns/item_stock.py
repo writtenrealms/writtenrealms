@@ -125,6 +125,7 @@ def assign_parents(placements, candidates):
 
 
 def reconcile_item_entry(*, world, run, entry, placements, eligible_ids, parents, has_children, context):
+    from spawns.actions.base import ActionError
     from spawns.models import Mob
     from spawns.spawn_plans import _materialize_placement
 
@@ -179,8 +180,15 @@ def reconcile_item_entry(*, world, run, entry, placements, eligible_ids, parents
         for slot in slots:
             if slot.pk in occupied or slot.pk not in eligible_ids:
                 continue
-            spawned = _materialize_placement(placement=slot, spawn_world=world,
-                reconcile_context=context, target=targets[key], check_live_output=False, entry=entry)
+            try:
+                spawned = _materialize_placement(placement=slot, spawn_world=world,
+                    reconcile_context=context, target=targets[key], check_live_output=False, entry=entry)
+            except ActionError as exc:
+                if exc.code not in ('container_full', 'container_nested', 'invalid_container'):
+                    raise
+                # Single spawns and whole bundles roll back their own failed
+                # deposit. Full chests must not interrupt other destinations.
+                break
             spawned_count += len(spawned)
             if spawned and has_children:
                 parents[(entry.slug, slot.slot_index)] = spawned[0]

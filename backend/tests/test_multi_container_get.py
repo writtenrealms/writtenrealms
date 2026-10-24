@@ -179,8 +179,11 @@ class TestMultiContainerGet(WorldTestCase):
 
     def test_quest_ownership_scan_keeps_nested_and_equipped_items(self):
         bag = self.container("Bag", owner=self.player, item_type=adv_consts.ITEM_TYPE_CONTAINER)
-        pouch = self.container("Pouch", owner=bag, item_type=adv_consts.ITEM_TYPE_CONTAINER)
+        pouch = self.container("Pouch", owner=self.player, item_type=adv_consts.ITEM_TYPE_CONTAINER)
         nested = self.item(pouch, "Quest Token", item_type=adv_consts.ITEM_TYPE_QUEST)
+        # Ownership still includes graphs stored before nested deposits were disabled.
+        Item.objects.filter(pk=pouch.pk).update(
+            container_type=ContentType.objects.get_for_model(Item), container_id=bag.pk)
         equipped = self.item(self.player.equipment, "Ring")
         self.item(self.room, "Unowned Coin")
         self.assertEqual(_player_owned_item_ids(self.player), {bag.id, pouch.id, nested.id, equipped.id})

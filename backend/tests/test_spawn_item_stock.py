@@ -51,6 +51,21 @@ class SpawnItemStockTests(StockFixture, WorldTestCase):
         super().setUp()
         self.setup_stock()
 
+    def test_full_chest_skips_refill_without_blocking_other_destinations(self):
+        _, chest = self.add_chest()
+        chest.capacity = 2
+        chest.save(update_fields=['capacity'])
+        move_items([chest.inventory.first()], self.player)
+        deposit = Item.objects.create(world=self.spawn_world, container=chest, name='a deposit')
+        move_items([self.floor().get()], self.player)
+        result = self.reconcile()
+        self.assertEqual(result['spawned'], 1)
+        self.assertEqual(chest.inventory.count(), 2)
+        self.assertEqual(self.floor().count(), 1)
+        move_items([deposit], self.player)
+        self.assertEqual(self.reconcile()['spawned'], 1)
+        self.assertEqual(chest.inventory.count(), 2)
+
     def test_pickup_allows_replacement_and_return_before_poll_prevents_it(self):
         original = self.floor().get()
         provenance = original.spawn_placement_id

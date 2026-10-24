@@ -54,6 +54,12 @@ from builders.models import (
     Trigger,
 )
 from config import constants as adv_consts
+from core.item_storage import (
+    DEFAULT_CONTAINER_CAPACITY,
+    MAX_CONTAINER_CAPACITY,
+    STORAGE_CONTAINER_TYPES,
+    effective_container_capacity,
+)
 from core.abilities import (
     AbilityValidationError,
     COOLDOWN_TRIGGERS,
@@ -1415,6 +1421,8 @@ def _item_definition_spec_from_instance(item_definition: ItemDefinition) -> dict
             spec[field_name] = ""
         else:
             spec[field_name] = value
+    if item_definition.item_type in STORAGE_CONTAINER_TYPES:
+        spec['capacity'] = effective_container_capacity(spec.get('capacity'))
     if item_definition.cost is not None:
         spec["cost"] = int(item_definition.cost)
         spec["currency"] = _serialize_currency_reference(item_definition.currency)
@@ -4539,6 +4547,16 @@ def _coerce_item_definition_fields(*, world: World, spec_patch: dict[str, Any], 
             base_properties[field_name] = _coerce_text(value)
             continue
         base_properties[field_name] = value
+
+    if 'capacity' in spec_patch:
+        capacity = spec_patch['capacity']
+        if (isinstance(capacity, bool) or not isinstance(capacity, int)
+                or not 1 <= capacity <= MAX_CONTAINER_CAPACITY):
+            raise serializers.ValidationError(
+                f'spec.capacity must be a whole number from 1 through {MAX_CONTAINER_CAPACITY}.')
+    if item_type in STORAGE_CONTAINER_TYPES:
+        base_properties['capacity'] = effective_container_capacity(
+            base_properties.get('capacity', DEFAULT_CONTAINER_CAPACITY))
 
     has_cost = "cost" in spec_patch
     has_currency = "currency" in spec_patch
@@ -8248,6 +8266,8 @@ def apply_world_config_manifest(parsed: ParsedWorldConfigManifest):
 
 
 def apply_item_definition_manifest(parsed: ParsedItemDefinitionManifest) -> ItemDefinition:
+    from spawns.actions.base import ActionError
+
     with transaction.atomic():
         if parsed.item_definition is None:
             item_definition = ItemDefinition.objects.create(
@@ -8258,7 +8278,10 @@ def apply_item_definition_manifest(parsed: ParsedItemDefinitionManifest) -> Item
             item_definition = parsed.item_definition
             for field_name, value in parsed.fields.items():
                 setattr(item_definition, field_name, value)
-            item_definition.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+            try:
+                item_definition.save(update_fields=[*parsed.fields.keys(), "modified_ts"])
+            except ActionError as exc:
+                raise serializers.ValidationError(exc.message) from exc
 
         if parsed.salvage_yields is not None:
             ItemSalvageYield.objects.filter(item_definition=item_definition).delete()

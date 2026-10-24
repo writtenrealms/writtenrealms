@@ -822,7 +822,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             world=self.spawn_world,
             definition=bag_def,
             definition_slug_snapshot=bag_def.slug,
-            container=bag,
+            container=self.player,
             name="small pouch",
             type=adv_consts.ITEM_TYPE_CONTAINER,
         )
@@ -834,6 +834,9 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
             name="blue gem",
             type=adv_consts.ITEM_TYPE_INERT,
         )
+        # Previously nested bags must still follow their owner across worlds.
+        Item.objects.filter(pk=pouch.pk).update(
+            container_type=ContentType.objects.get_for_model(Item), container_id=bag.pk)
         sword = Item.objects.create(
             world=self.spawn_world,
             definition=sword_def,
