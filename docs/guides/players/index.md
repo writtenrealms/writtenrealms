@@ -27,6 +27,10 @@ When the builders have provided a credit, **Built by** appears below the heading
 Use **Back to** at the top of that page to return to the world lobby. Private
 worlds keep the same access requirements on their information page.
 
+Worlds can also have a short URL registered by site staff. For example,
+`/worlds/phalanx` opens the Phalanx lobby and `/worlds/phalanx/about` opens its
+information page. The numeric URLs continue to work.
+
 A world may limit how many characters each account can have. If you select
 **New character** after reaching the limit, the lobby shows an explanation.
 Builder characters do not count; characters inside introductions or other

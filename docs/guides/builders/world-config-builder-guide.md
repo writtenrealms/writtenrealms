@@ -12,6 +12,15 @@ Open **More information** below the description in your world's lobby to visit
 `/worlds/<world_id>/about`. Players see a formatted page; the author, staff, and
 builders with editing access can choose **Edit**. An empty page opens the editor
 automatically for these builders.
+
+Site administrators can register a stable short URL in Django admin under
+**Worlds → World URLs**: select the world and enter a unique lowercase slug
+such as `phalanx` in **URL**. Leave **Is private** unchecked for an ordinary
+alias that follows the world's existing access rules. This enables both
+`/worlds/phalanx` and `/worlds/phalanx/about`; numeric URLs remain valid. These
+site-specific aliases are configured separately from World Config and world
+manifests, and do not change when the world is renamed.
+
 Write plain Markdown, use **Preview** to check it, then **Save** to publish it on
 the world's information page. **Cancel** discards the draft. Failed saves keep
 your draft available for retry, and leaving with unsaved changes asks first.
