@@ -161,6 +161,7 @@ For engineering setup, architecture, and troubleshooting, see:
 - [Support Event History](docs/dev/support-events.md)
 - [Onboarding Persistence](docs/dev/onboarding.md)
 - [World Upkeep Implementation Plan](docs/architecture/world-upkeep-plan.md)
+- [Shared LLM Integration and Mob Conversations](docs/architecture/llm-integration-and-mob-conversations.md)
 - [Architecture Notes](docs/architecture/)
 
 ## Project Structure
