@@ -44,6 +44,15 @@ The 14-day chart groups signups and distinct accounts entering worlds by **UTC d
 
 Online status comes from Core's game records. A disconnected character can remain listed until connection cleanup. A running world can have no players. Use the world and character links for the existing world administration and character tools.
 
+Choose **Manage** beside an online world to open its runtime administration page.
+It uses the same summary cards, status tags, and section layout as the Control
+Panel. The cards summarize mobs, items, logged-in players, the last spawn-plan
+run, and assignments. Below them are runtime timestamps, world details, item
+distribution, linked player records, and the current spawn world's state.
+On small screens, cards and sections rearrange vertically; wide player tables
+scroll within their panel. **Refresh** updates the current snapshot. Reset and
+recovery controls appear only when available for that world's lifecycle state.
+
 Snapshots are cached for 15 seconds. Lists show at most 50 running worlds and 100 online characters; totals cover the full population. Refreshing does not discard unsaved access edits.
 
 ## Queues and jobs

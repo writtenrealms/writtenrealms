@@ -52,6 +52,11 @@ svg.lucide {
     color: $color-green-chat;
     border-color: rgba(39, 144, 132, 0.6);
   }
+
+  &.tag-red {
+    color: $color-red;
+    border-color: rgba($color-red, 0.35);
+  }
 }
 
 .panel {
@@ -729,6 +734,78 @@ svg.lucide {
   }
 }
 
+// Shared administration presentation. Keep page-specific layouts in their views.
+.dashboard-view {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
+
+  h1, h2, h3, p { margin: 0; }
+  h1 { @include font-title-light; font-size: 34px; line-height: 1.2; margin: 0.35rem 0 0.5rem; overflow-wrap: anywhere; }
+  h2 { @include font-title-regular; font-size: 20px; }
+  .tag + .tag { margin-left: 4px; }
+
+  @media ($mobile-site) {
+    h1 { font-size: 28px; }
+    .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
+    .metric-card { padding: 0.85rem; }
+    .metric-card > span { font-size: 11px; }
+    .metric-card > strong { font-size: 34px; }
+    .metric-card > .metric-value-text { font-size: 26px; }
+    .metric-card > small { font-size: 10px; }
+  }
+}
+
+.dashboard-heading,
+.dashboard-section-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  > div { min-width: 0; }
+  p { color: $color-text-hex-60; font-size: 12px; line-height: 1.6; }
+}
+.dashboard-heading {
+  align-items: flex-end;
+  margin-bottom: 1.75rem;
+  @media ($mobile-site) { align-items: flex-start; flex-direction: column; gap: 0.75rem; }
+}
+.dashboard-eyebrow { @include font-title-regular; font-size: 10px; color: $color-secondary; display: flex; align-items: center; gap: 7px; }
+.dashboard-actions { display: flex; align-items: center; gap: 0.65rem; flex-wrap: wrap; }
+.dashboard-stack { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 1.25rem; min-width: 0; }
+.dashboard-section {
+  padding: 1.25rem;
+  min-width: 0;
+  @media ($mobile-site) { padding: 1rem; }
+}
+.dashboard-section-heading {
+  margin-bottom: 1rem;
+  align-items: flex-start;
+  p { margin-top: 0.25rem; }
+  @media ($mobile-site) { flex-wrap: wrap; gap: 0.5rem; }
+}
+.dashboard-note { color: $color-text-hex-60; font-size: 12px; line-height: 1.6; }
+.dashboard-empty { color: $color-text-hex-60; padding: 1.25rem 0; }
+.dashboard-table {
+  width: 100%;
+  th, td { padding: 0.75rem 0.6rem; font-size: 12px; }
+  th:first-child, td:first-child { padding-left: 0; }
+  th:last-child, td:last-child { padding-right: 0; }
+  th { font-weight: 400; }
+  tbody th { white-space: normal; }
+  small { display: block; color: $color-text-hex-60; font-weight: 300; font-size: 11px; margin-top: 4px; overflow-wrap: anywhere; }
+}
+.dashboard-facts {
+  margin: 0;
+  font-size: 12px;
+  > div { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(60%); gap: 1rem; padding: 0.75rem 0; border-bottom: 1px solid $color-background-light-border; }
+  > div:first-child { padding-top: 0; }
+  > div:last-child { padding-bottom: 0; border-bottom: 0; }
+  dt, dd { margin: 0; overflow-wrap: anywhere; }
+  dt { color: $color-text-hex-60; }
+  dd { text-align: right; }
+}
+
 // Summary metrics and persistent feedback for administration and data views.
 .metric-grid {
   display: grid;
@@ -742,8 +819,9 @@ svg.lucide {
   min-width: 0;
 
   > span { @include font-title-regular; color: $color-text-hex-70; font-size: 13px; }
-  > strong { @include font-title-light; display: block; font-size: 42px; line-height: 1.2; margin: 0.4rem 0; font-variant-numeric: tabular-nums; }
-  > small { display: block; color: $color-text-hex-60; font-size: 11px; line-height: 1.5; }
+  > strong { @include font-title-light; display: block; font-size: 42px; line-height: 1.2; margin: 0.4rem 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  > .metric-value-text { font-size: 28px; }
+  > small { display: block; color: $color-text-hex-60; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 }
 .inline-notice {
   background: $color-background-light;

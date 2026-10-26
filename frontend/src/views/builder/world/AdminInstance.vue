@@ -1,30 +1,31 @@
 <template>
-  <div v-if="instance" class="admin-instance">
-    <div class="header-row">
+  <div v-if="instance" class="admin-instance dashboard-view">
+    <header class="dashboard-heading">
       <div>
-        <h2>{{ root_world.name.toUpperCase() }} WORLD #{{ instance.id }}</h2>
-        <div class="header-meta">
-          <span class="status-pill" :class="statusClass(instance.lifecycle_details.current)">
+        <div class="dashboard-eyebrow"><Shield :size="15" aria-hidden="true" /> WORLD ADMINISTRATION</div>
+        <h1>{{ root_world.name }} world #{{ instance.id }}</h1>
+        <div class="dashboard-actions dashboard-note">
+          <span class="tag" :class="statusClass(instance.lifecycle_details.current)">
             {{ instance.lifecycle_details.current }}
           </span>
-          <span class="color-text-50">{{ worldModeLabel }}</span>
-          <span v-if="instance.parent_world" class="color-text-50">
+          <span>{{ worldModeLabel }}</span>
+          <span v-if="instance.parent_world" class="color-text-60">
             Base {{ instance.parent_world.name }} #{{ instance.parent_world.id }}
           </span>
         </div>
       </div>
 
-      <div class="header-actions">
+      <div class="dashboard-actions">
         <button
-          class="btn btn-small"
+          class="btn-small button-gray"
           :disabled="isRefreshing"
           @click="refreshInstance"
         >
-          {{ isRefreshing ? "REFRESHING..." : "REFRESH" }}
+          <RefreshCw :size="13" aria-hidden="true" /> {{ isRefreshing ? "REFRESHING…" : "REFRESH" }}
         </button>
         <button
           v-if="canResetWorld"
-          class="btn btn-small"
+          class="btn-small"
           :disabled="isResetting"
           @click="onResetWorld"
         >
@@ -32,190 +33,181 @@
         </button>
         <button
           v-if="canRecoverWorld"
-          class="btn btn-small"
+          class="btn-small"
           :disabled="isRecovering"
           @click="onRecoverWorld"
         >
           {{ isRecovering ? "RECOVERING..." : "RECOVER" }}
         </button>
       </div>
-    </div>
+    </header>
 
-    <div v-if="canResetWorld" class="reset-note color-text-60">
-      Reset clears transient runtime state for this stopped world: mobs, ground items, and other cleanup-safe spawn data.
-    </div>
-
-    <div class="summary-grid">
-      <div v-for="card in summaryCards" :key="card.label" class="panel summary-card">
-        <div class="summary-label color-text-50">{{ card.label }}</div>
-        <div class="summary-value">{{ card.value }}</div>
-        <div v-if="card.note" class="summary-note color-text-60">{{ card.note }}</div>
+    <div class="dashboard-stack">
+      <div v-if="canResetWorld" class="inline-notice">
+        Reset clears transient runtime state for this stopped world: mobs, ground items, and other cleanup-safe spawn data.
       </div>
-    </div>
 
-    <div class="details-grid">
-      <section class="panel detail-panel">
-        <h3 class="mb-3">Runtime Timeline</h3>
+      <div class="metric-grid">
+        <div v-for="card in summaryCards" :key="card.label" class="metric-card">
+          <span>{{ card.label }}</span>
+          <strong :class="{ 'metric-value-text': card.textValue }">{{ card.value }}</strong>
+          <small v-if="card.note">{{ card.note }}</small>
+        </div>
+      </div>
 
-        <div class="detail-row">
-          <span class="color-text-50">Lifecycle changed</span>
-          <span>{{ formatTimestamp(instance.lifecycle_details.changed_at) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Last spawn-plan run</span>
-          <span>{{ formatTimestamp(instance.lifecycle_details.last_spawn_plan_run_ts) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Last extraction</span>
-          <span>{{ formatTimestamp(instance.lifecycle_details.last_extraction_ts) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Last entered</span>
-          <span>{{ formatTimestamp(instance.lifecycle_details.last_entered_ts) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Last played</span>
-          <span>{{ formatTimestamp(instance.lifecycle_details.last_played_ts) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Cleanup in progress</span>
-          <span>
-            <template v-if="instance.lifecycle_details.cleanup_started_ts">
-              {{ formatTimestamp(instance.lifecycle_details.cleanup_started_ts) }}
-            </template>
-            <template v-else>No</template>
-          </span>
-        </div>
-      </section>
+      <div class="dashboard-grid">
+        <section class="panel dashboard-section">
+          <div class="dashboard-section-heading"><h2>Runtime timeline</h2></div>
+          <dl class="dashboard-facts">
+            <div>
+              <dt>Lifecycle changed</dt>
+              <dd>{{ formatTimestamp(instance.lifecycle_details.changed_at) }}</dd>
+            </div>
+            <div>
+              <dt>Last spawn-plan run</dt>
+              <dd>{{ formatTimestamp(instance.lifecycle_details.last_spawn_plan_run_ts) }}</dd>
+            </div>
+            <div>
+              <dt>Last extraction</dt>
+              <dd>{{ formatTimestamp(instance.lifecycle_details.last_extraction_ts) }}</dd>
+            </div>
+            <div>
+              <dt>Last entered</dt>
+              <dd>{{ formatTimestamp(instance.lifecycle_details.last_entered_ts) }}</dd>
+            </div>
+            <div>
+              <dt>Last played</dt>
+              <dd>{{ formatTimestamp(instance.lifecycle_details.last_played_ts) }}</dd>
+            </div>
+            <div>
+              <dt>Cleanup in progress</dt>
+              <dd>
+                <template v-if="instance.lifecycle_details.cleanup_started_ts">
+                  {{ formatTimestamp(instance.lifecycle_details.cleanup_started_ts) }}
+                </template>
+                <template v-else>No</template>
+              </dd>
+            </div>
+          </dl>
+        </section>
 
-      <section class="panel detail-panel">
-        <h3 class="mb-3">World Details</h3>
+        <section class="panel dashboard-section">
+          <div class="dashboard-section-heading"><h2>World details</h2></div>
+          <dl class="dashboard-facts">
+            <div>
+              <dt>World key</dt>
+              <dd>{{ instance.key }}</dd>
+            </div>
+            <div>
+              <dt>Mode</dt>
+              <dd>{{ worldModeLabel }}</dd>
+            </div>
+            <div>
+              <dt>Instance ref</dt>
+              <dd>{{ instance.instance_ref || "None" }}</dd>
+            </div>
+            <div>
+              <dt>Leader</dt>
+              <dd>{{ instance.leader ? instance.leader.name : "None" }}</dd>
+            </div>
+            <div>
+              <dt>Instance assignments</dt>
+              <dd>{{ formatNumber(instance.counts.instance_assignments) }}</dd>
+            </div>
+            <div>
+              <dt>Player records</dt>
+              <dd>{{ formatNumber(instance.counts.player_records) }}</dd>
+            </div>
+            <div>
+              <dt>Configured spawn plans</dt>
+              <dd>{{ formatNumber(instance.spawn_plan_details.configured_spawn_plan_count) }}</dd>
+            </div>
+            <div>
+              <dt>Configured spawn entries</dt>
+              <dd>{{ formatNumber(instance.spawn_plan_details.configured_spawn_entry_count) }}</dd>
+            </div>
+          </dl>
+        </section>
 
-        <div class="detail-row">
-          <span class="color-text-50">World key</span>
-          <span>{{ instance.key }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Mode</span>
-          <span>{{ worldModeLabel }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Instance ref</span>
-          <span>{{ instance.instance_ref || "None" }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Leader</span>
-          <span>{{ instance.leader ? instance.leader.name : "None" }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Instance assignments</span>
-          <span>{{ formatNumber(instance.counts.instance_assignments) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Player records</span>
-          <span>{{ formatNumber(instance.counts.player_records) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Configured spawn plans</span>
-          <span>{{ formatNumber(instance.spawn_plan_details.configured_spawn_plan_count) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Configured spawn entries</span>
-          <span>{{ formatNumber(instance.spawn_plan_details.configured_spawn_entry_count) }}</span>
-        </div>
-      </section>
+        <section class="panel dashboard-section">
+          <div class="dashboard-section-heading"><h2>Item distribution</h2></div>
+          <dl class="dashboard-facts">
+            <div>
+              <dt>On the ground</dt>
+              <dd>{{ formatNumber(instance.counts.items_by_container_type.rooms) }}</dd>
+            </div>
+            <div>
+              <dt>Carried by players</dt>
+              <dd>{{ formatNumber(instance.counts.items_by_container_type.players) }}</dd>
+            </div>
+            <div>
+              <dt>Held by mobs</dt>
+              <dd>{{ formatNumber(instance.counts.items_by_container_type.mobs) }}</dd>
+            </div>
+            <div>
+              <dt>Inside other items</dt>
+              <dd>{{ formatNumber(instance.counts.items_by_container_type.inside_items) }}</dd>
+            </div>
+            <div>
+              <dt>Equipped</dt>
+              <dd>{{ formatNumber(instance.counts.items_by_container_type.equipment) }}</dd>
+            </div>
+            <div>
+              <dt>Without container</dt>
+              <dd>{{ formatNumber(instance.counts.items_by_container_type.without_container) }}</dd>
+            </div>
+            <div>
+              <dt>Pending deletion</dt>
+              <dd>{{ formatNumber(instance.counts.items_pending_deletion) }}</dd>
+            </div>
+          </dl>
+        </section>
 
-      <section class="panel detail-panel">
-        <h3 class="mb-3">Item Distribution</h3>
+      </div>
 
-        <div class="detail-row">
-          <span class="color-text-50">On the ground</span>
-          <span>{{ formatNumber(instance.counts.items_by_container_type.rooms) }}</span>
+      <section class="panel dashboard-section" aria-labelledby="world-players-heading">
+        <div class="dashboard-section-heading">
+          <h2 id="world-players-heading">Logged in players</h2>
+          <span class="tag">{{ formatNumber(instance.counts.players_logged_in) }} active</span>
         </div>
-        <div class="detail-row">
-          <span class="color-text-50">Carried by players</span>
-          <span>{{ formatNumber(instance.counts.items_by_container_type.players) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Held by mobs</span>
-          <span>{{ formatNumber(instance.counts.items_by_container_type.mobs) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Inside other items</span>
-          <span>{{ formatNumber(instance.counts.items_by_container_type.inside_items) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Equipped</span>
-          <span>{{ formatNumber(instance.counts.items_by_container_type.equipment) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Without container</span>
-          <span>{{ formatNumber(instance.counts.items_by_container_type.without_container) }}</span>
-        </div>
-        <div class="detail-row">
-          <span class="color-text-50">Pending deletion</span>
-          <span>{{ formatNumber(instance.counts.items_pending_deletion) }}</span>
-        </div>
-      </section>
-
-      <section class="panel detail-panel players-panel">
-        <div class="section-heading">
-          <h3>Logged In Players</h3>
-          <div class="color-text-50">{{ formatNumber(instance.counts.players_logged_in) }} active</div>
-        </div>
-
-        <div v-if="!instance.active_players.length" class="empty-state color-text-60">
+        <p v-if="!instance.active_players.length" class="dashboard-empty">
           No players are currently logged into this world.
-        </div>
-
-        <div v-else class="player-list">
-          <router-link
-            v-for="player in instance.active_players"
-            :key="player.id"
-            class="player-card"
-            :to="playerLink(player)"
-          >
-            <div class="player-topline">
-              <div class="player-name">{{ player.name }}</div>
-              <div v-if="player.is_builder" class="player-flag">Builder</div>
-            </div>
-
-            <div class="color-text-60">
-              {{ player.room ? player.room.name : "No room" }}
-            </div>
-            <div class="player-times color-text-50">
-              <div>Connected {{ formatRelativeTime(player.last_connection_ts) }}</div>
-              <div>Active {{ formatRelativeTime(player.last_action_ts) }}</div>
-            </div>
-          </router-link>
+        </p>
+        <div v-else class="data-table-scroll" tabindex="0" role="region" aria-label="Logged in players table">
+          <table class="data-table dashboard-table">
+            <thead><tr><th scope="col">Character</th><th scope="col">Room</th><th scope="col">Connected</th><th scope="col">Last active</th></tr></thead>
+            <tbody>
+              <tr v-for="player in instance.active_players" :key="player.id">
+                <th scope="row"><router-link :to="playerLink(player)">{{ player.name }}</router-link> <span v-if="player.is_builder" class="tag tag-secondary">Builder</span></th>
+                <td>{{ player.room ? player.room.name : "No room" }}</td>
+                <td>{{ formatRelativeTime(player.last_connection_ts) }}</td>
+                <td>{{ formatRelativeTime(player.last_action_ts) }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
-      <section class="panel detail-panel state-panel">
-        <div class="section-heading">
-          <h3>Spawn World State</h3>
-          <div class="color-text-50">{{ formatNumber(stateEntries.length) }} keys</div>
-        </div>
-
-        <div class="color-text-60 section-note">
-          This is the current `world`-scope state snapshot for spawn world #{{ instance.id }}, not the template world.
-        </div>
-
-        <div v-if="!stateEntries.length" class="empty-state color-text-60">
-          No world state is currently set on this spawn world.
-        </div>
-
-        <div v-else class="state-list">
-          <div v-for="entry in stateEntries" :key="entry.key" class="state-row">
-            <div class="state-key">{{ entry.key }}</div>
-            <div class="state-value">{{ formatStateValue(entry.value) }}</div>
+      <section class="panel dashboard-section" aria-labelledby="world-state-heading">
+        <div class="dashboard-section-heading">
+          <div>
+            <h2 id="world-state-heading">Spawn world state</h2>
+            <p>Current world-scope state for spawn world #{{ instance.id }}.</p>
           </div>
+          <span class="tag">{{ formatNumber(stateEntries.length) }} keys</span>
         </div>
+        <p v-if="!stateEntries.length" class="dashboard-empty">No world state is currently set on this spawn world.</p>
+        <dl v-else class="dashboard-facts world-state">
+          <div v-for="entry in stateEntries" :key="entry.key">
+            <dt>{{ entry.key }}</dt>
+            <dd class="state-value">{{ formatStateValue(entry.value) }}</dd>
+          </div>
+        </dl>
       </section>
     </div>
   </div>
 
-  <div v-else class="color-text-60">
+  <div v-else class="color-text-60" role="status">
     Loading world data...
   </div>
 </template>
@@ -224,6 +216,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useStore } from 'vuex';
 import { useRoute } from 'vue-router';
+import { RefreshCw, Shield } from '@lucide/vue';
 
 const store = useStore();
 const route = useRoute();
@@ -313,6 +306,7 @@ const summaryCards = computed(() => {
     },
     {
       label: 'Last spawn-plan run',
+      textValue: true,
       value: formatRelativeTime(instance.value.spawn_plan_details.last_run_ts),
       note: formatTimestamp(instance.value.spawn_plan_details.last_run_ts),
     },
@@ -432,10 +426,10 @@ const onRecoverWorld = async () => {
 };
 
 const statusClass = (status: string) => {
-  if (!status) {
-    return '';
-  }
-  return `status-${status}`;
+  if (status === 'running') return 'tag-green';
+  if (['starting', 'stopping', 'restarting', 'queued'].includes(status)) return 'tag-secondary';
+  if (['killed', 'error', 'failed'].includes(status)) return 'tag-red';
+  return '';
 };
 
 const formatNumber = (value: number | string | null | undefined) => {
@@ -509,273 +503,17 @@ const formatRelativeTime = (value: string | null | undefined) => {
 </script>
 
 <style lang="scss" scoped>
-@import "@/styles/colors.scss";
+@import "@/styles/layout.scss";
 
 .admin-instance {
-  max-width: 1200px;
-}
+  width: 100%;
 
-.eyebrow {
-  font-size: 12px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
+  .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .world-state > div { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+  .state-value { white-space: pre-wrap; text-align: left; }
 
-.header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-}
-
-.header-actions {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.header-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 16px;
-  margin-top: 12px;
-}
-
-.back-link {
-  color: $color-secondary;
-  text-decoration: none;
-  padding-top: 6px;
-}
-
-.reset-note {
-  margin: -8px 0 20px;
-  max-width: 720px;
-}
-
-.summary-grid,
-.details-grid {
-  display: grid;
-  gap: 16px;
-}
-
-.summary-grid {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  margin-bottom: 16px;
-}
-
-.details-grid {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-}
-
-.summary-card,
-.detail-panel {
-  border: 1px solid $color-background-light-border;
-  background:
-    linear-gradient(180deg, rgba($color-primary, 0.1), rgba($color-background-light, 0.35)),
-    $color-background-light;
-}
-
-.summary-card {
-  min-height: 120px;
-}
-
-.summary-label {
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.summary-value {
-  font-size: 30px;
-  font-weight: 600;
-  line-height: 1.05;
-  margin-top: 10px;
-}
-
-.summary-note {
-  margin-top: 10px;
-  font-size: 13px;
-}
-
-.detail-panel {
-  padding: 18px 20px;
-}
-
-.section-note {
-  margin: -4px 0 16px;
-}
-
-.detail-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 11px 0;
-  border-top: 1px solid rgba($color-background-light-border-selected, 0.18);
-}
-
-.detail-row:first-of-type {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.section-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: baseline;
-  margin-bottom: 16px;
-}
-
-.state-panel {
-  grid-column: span 2;
-}
-
-.state-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.state-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
-  gap: 16px;
-  padding: 11px 0;
-  border-top: 1px solid rgba($color-background-light-border-selected, 0.18);
-}
-
-.state-row:first-of-type {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.state-key {
-  font-weight: 600;
-  word-break: break-word;
-}
-
-.state-value {
-  color: $color-text-70;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.player-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.player-card {
-  display: block;
-  padding: 14px;
-  border: 1px solid $color-background-light-border;
-  background: rgba($color-background-black, 0.55);
-  text-decoration: none;
-  color: $color-text;
-  transition: border-color 0.12s ease, transform 0.12s ease;
-}
-
-.player-card:hover {
-  border-color: rgba($color-secondary, 0.55);
-  transform: translateY(-1px);
-}
-
-.player-topline {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 6px;
-}
-
-.player-name {
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.player-flag,
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.player-flag {
-  color: $color-secondary;
-  background: rgba($color-secondary, 0.12);
-  border: 1px solid rgba($color-secondary, 0.3);
-}
-
-.status-pill {
-  border: 1px solid $color-background-light-border-selected;
-  background: rgba($color-background-light-border-selected, 0.15);
-}
-
-.status-running {
-  color: $color-green;
-  border-color: rgba($color-green, 0.35);
-  background: rgba($color-green, 0.14);
-}
-
-.status-starting,
-.status-stopping {
-  color: $color-secondary;
-  border-color: rgba($color-secondary, 0.35);
-  background: rgba($color-secondary, 0.14);
-}
-
-.status-stopped,
-.status-stored,
-.status-new,
-.status-clean {
-  color: $color-text-70;
-}
-
-.status-killed,
-.status-error,
-.status-failed {
-  color: $color-red;
-  border-color: rgba($color-red, 0.35);
-  background: rgba($color-red, 0.14);
-}
-
-.player-times {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  margin-top: 10px;
-  font-size: 12px;
-}
-
-.empty-state {
-  padding: 18px 0 6px;
-}
-
-@media (max-width: 720px) {
-  .summary-value {
-    font-size: 26px;
-  }
-
-  .detail-row {
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .state-panel {
-    grid-column: auto;
-  }
-
-  .state-row {
-    grid-template-columns: 1fr;
-    gap: 6px;
+  @media ($mobile-site) {
+    .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 }
 </style>

@@ -230,6 +230,48 @@
       <InstanceCompletionNotice :message="{ data: { template_name: 'A Persian Outpost', clear_time_ms: 853461 } }" />
     </section>
 
+    <section id="dashboards" class="sg-section">
+      <h2>Administration dashboards</h2>
+      <p class="sg-note">The Control Panel and running world administration share this presentation. Use
+        <span class="sg-code">.dashboard-view</span> for typography, <span class="sg-code">.dashboard-heading</span>
+        with an h1, and <span class="sg-code">.dashboard-eyebrow</span> for the context label.
+        Keep panels flat and use sentence case for headings and metric labels.</p>
+      <p class="sg-note"><span class="sg-code">.dashboard-stack</span> spaces sections vertically;
+        <span class="sg-code">.dashboard-grid</span> arranges detail panels in columns that collapse with available space.
+        Pair <span class="sg-code">.panel.dashboard-section</span> with
+        <span class="sg-code">.dashboard-section-heading</span> for an h2, optional description, and tag or action.
+        <span class="sg-code">.dashboard-actions</span> wraps controls and status labels.</p>
+      <div class="dashboard-view">
+        <header class="dashboard-heading">
+          <div><div class="dashboard-eyebrow">WORLD ADMINISTRATION</div><h1>Phalanx world #13</h1><p>Runtime activity and maintenance.</p></div>
+          <div class="dashboard-actions"><span class="tag tag-green">Running</span><button class="btn-small button-gray">REFRESH</button></div>
+        </header>
+        <div class="dashboard-stack">
+          <div class="metric-grid">
+            <div class="metric-card"><span>Players logged in</span><strong>24</strong><small>28 player records in world</small></div>
+            <div class="metric-card"><span>Last spawn-plan run</span><strong class="metric-value-text">2 minutes ago</strong><small>Text values use .metric-value-text</small></div>
+          </div>
+          <div class="dashboard-grid">
+            <section class="panel dashboard-section">
+              <div class="dashboard-section-heading"><h2>World details</h2><span class="tag">#13</span></div>
+              <dl class="dashboard-facts"><div><dt>World key</dt><dd>world.13</dd></div><div><dt>Mode</dt><dd>Multiplayer spawn</dd></div></dl>
+            </section>
+            <section class="panel dashboard-section">
+              <div class="dashboard-section-heading"><div><h2>Logged in players</h2><p>Characters currently in this world.</p></div></div>
+              <div class="data-table-scroll"><table class="data-table dashboard-table"><thead><tr><th scope="col">Character</th><th scope="col">Room</th></tr></thead><tbody><tr><th scope="row">Onyx<small>Builder character</small></th><td>The agora</td></tr></tbody></table></div>
+            </section>
+          </div>
+          <p class="dashboard-note">.dashboard-note — Supporting context stays muted and readable.</p>
+          <p class="dashboard-empty">.dashboard-empty — No world state is currently set.</p>
+        </div>
+      </div>
+      <p class="sg-note mt-4">Use <span class="sg-code">.dashboard-facts</span> on a dl with div-wrapped dt/dd pairs;
+        long keys and values wrap. Add <span class="sg-code">.dashboard-table</span> to
+        <span class="sg-code">.data-table</span> for compact rows, with <span class="sg-code">.data-table-scroll</span>
+        around wide tables. At mobile widths, dashboard metrics use two columns and headings stack.
+        Page-specific column counts belong in the page's layout styles.</p>
+    </section>
+
     <!-- Icons -->
     <section id="icons" class="sg-section">
       <h2>Icons</h2>
@@ -268,8 +310,13 @@
           <span class="tag">Builder</span>
           <span class="tag tag-secondary">Maintenance</span>
           <span class="tag tag-green">In game</span>
+          <span class="tag tag-red">Failed</span>
         </div>
       </div>
+      <p class="sg-note">Tag variants: <span class="sg-code">.tag-green</span> for running/healthy,
+        <span class="sg-code">.tag-secondary</span> for transitions or maintenance,
+        <span class="sg-code">.tag-red</span> for failures, and plain <span class="sg-code">.tag</span> for neutral states.
+        Always include the state text so color is not the only signal.</p>
       <div class="sg-columns">
         <div>
           <h3 class="sg-label">.loading-container .spinner</h3>
@@ -458,6 +505,7 @@ const sections = [
   { id: "lists", title: "Lists" },
   { id: "panels", title: "Panels" },
   { id: "metrics", title: "Metrics and notices" },
+  { id: "dashboards", title: "Dashboards" },
   { id: "icons", title: "Icons" },
   { id: "feedback", title: "Status" },
   { id: "navigation", title: "Navigation" },
