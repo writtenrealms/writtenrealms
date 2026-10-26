@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'rest_framework',
 
     'builders.apps.BuildersConfig',
+    'inference.apps.InferenceConfig',
     'lobby.apps.LobbyConfig',
     'quests.apps.QuestsConfig',
     'spawns.apps.SpawnsConfig',
@@ -123,6 +124,13 @@ DATABASES = {
 }
 
 TESTING = False
+
+# Credentials belong to the deployment, never the database or world manifests.
+LLM_API_KEY = os.environ.get('WR_LLM_API_KEY', '')
+LLM_OPENAI_PROJECT = os.environ.get('WR_LLM_OPENAI_PROJECT', '')
+LLM_WORKER = os.environ.get('WR_LLM_WORKER', '') == '1'
+LLM_NETWORK_ENABLED = True
+CELERY_TASK_ROUTES = {'inference.tasks.execute_request': {'queue': 'inference'}}
 
 # Password validation
 # https://docs.djangoproject.com/en/1.10/ref/settings/#auth-password-validators

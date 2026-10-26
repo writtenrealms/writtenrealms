@@ -20,8 +20,12 @@ and signing secrets for the API, gateway, worker, and scheduler.
 | --- | --- | --- |
 | API | `uvicorn backend.config.asgi:application --host 0.0.0.0 --port 8000` | `/code/backend` |
 | Gateway | `uvicorn fastapi_app.main:app --host 0.0.0.0 --port 8001` | `/code` |
-| Worker | `celery -A backend.config worker -l info` | `/code/backend` |
+| Worker | `celery -A backend.config worker -l info -Q celery` | `/code/backend` |
 | Scheduler | `celery -A backend.config beat -l info` | `/code/backend` |
+
+Optional inference uses a separate `inference` queue and worker process; see
+[LLM integration](llm-integration.md). Only that worker sets `WR_LLM_WORKER=1`.
+Keep provider network requests off game workers even when using the same image.
 
 Set `PYTHONPATH=/code:/code/backend`. Keep **one active scheduler** for an
 installation. The gateway needs the backend source, Django settings, and database

@@ -103,6 +103,7 @@ const adminSidebar: DefaultTheme.SidebarItem[] = [
     items: [
       { text: "Control Panel", link: "/administrators/control-panel" },
       { text: "Operations and backups", link: "/administrators/operations" },
+      { text: "LLM integration", link: "/administrators/llm-integration" },
     ],
   },
 ];

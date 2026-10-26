@@ -18,6 +18,8 @@ services:
       - PYTHONPATH=/code
       # Local sign-in emails must appear immediately in docker compose logs.
       - PYTHONUNBUFFERED=1
+      - WR_LLM_API_KEY=${WR_LLM_API_KEY:-}
+      - WR_LLM_OPENAI_PROJECT=${WR_LLM_OPENAI_PROJECT:-}
       - INSTANCE_ID=container
       - DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE}
       - POSTGRES_DB=${POSTGRES_DB}
@@ -53,9 +55,10 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: sh -c "celery -A backend.config worker -l info"
+    command: sh -c "celery -A backend.config worker -l info -Q celery"
     working_dir: /code/backend
     environment:
+      - WR_LLM_API_KEY=${WR_LLM_API_KEY:-}
       - PYTHONPATH=/code
       - INSTANCE_ID=container
       - DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE}
@@ -83,6 +86,35 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      rabbitmq:
+        condition: service_started
+      redis-celery:
+        condition: service_started
+  llm-worker:
+    profiles: [ai]
+    logging: *default-logging
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: celery -A backend.config worker -l info -Q inference -n inference@%h --concurrency=4 --prefetch-multiplier=1
+    working_dir: /code/backend
+    environment:
+      - PYTHONPATH=/code
+      - INSTANCE_ID=container
+      - DJANGO_SETTINGS_MODULE=${DJANGO_SETTINGS_MODULE}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - WR_LLM_API_KEY=${WR_LLM_API_KEY:-}
+      - WR_LLM_OPENAI_PROJECT=${WR_LLM_OPENAI_PROJECT:-}
+      - WR_LLM_WORKER=1
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-amqp://rabbitmq:5672}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis-celery:6379/0}
+    depends_on:
+      db:
+        condition: service_healthy
       rabbitmq:
         condition: service_started
       redis-celery:

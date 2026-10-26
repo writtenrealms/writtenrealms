@@ -36,6 +36,16 @@ def _spawn_plan_interval_seconds() -> float:
 
 
 app.conf.beat_schedule = {
+    'dispatch-inference': {
+        'task': 'inference.tasks.dispatch_requests',
+        'schedule': 2.0,
+        'options': {'expires': 2},
+    },
+    'prune-inference': {
+        'task': 'inference.tasks.prune_requests',
+        'schedule': crontab(minute='35'),
+        'options': {'expires': 3300},
+    },
     'prune-support-events': {
         'task': 'system.tasks.prune_support_events',
         'schedule': crontab(minute='40'),

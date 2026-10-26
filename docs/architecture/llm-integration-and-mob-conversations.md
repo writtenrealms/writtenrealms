@@ -1,8 +1,10 @@
 # Shared LLM Integration and Mob Conversations
 
-Status: proposed architecture, October 24, 2026. No implementation accompanies
-this document. New configuration fields, manifest examples, services, and
-records below describe proposed contracts, not currently supported features.
+Status: Phase 1A implemented October 26, 2026; the conversation, knowledge,
+manifest, and later-phase contracts below remain proposals. The shared service
+is in `backend/inference/`. See the [administrator integration guide](../guides/administrators/llm-integration.md)
+for its supported configuration and commands. TALK/SAY routing is not connected
+yet, and the integration starts disabled.
 
 ## Objective and Scope
 
@@ -54,7 +56,7 @@ proposal. Their presence does not imply the proposed AI behavior exists.
 | Mob authoring | [Builder models](../../backend/builders/models.py) contain descriptions, `talkable`, type, service profiles, factions, initial state, and spawn placement definitions. |
 | Setting and geography | [World models](../../backend/worlds/models.py) contain world/zone/room descriptions, room connections, landmarks, hidden room details, and scoped runtime state. |
 | Reputation | `FactionAssignment` and existing quest reputation effects provide mutable faction standing. New conversation reads must expose needed values through the shared condition framework. |
-| Provider helper | [The current AI wrapper](../../backend/core/ai.py) is a small synchronous OpenAI helper. It does not provide the required shared admission, accounting, or execution boundary. |
+| Shared inference | [The inference service](../../backend/inference/service.py) implements Phase 1A admission, accounting, and worker claims. It replaces the unused synchronous `core.ai.GPT` wrapper. |
 
 Related architecture: [YAML manifests](yaml-manifest-system.md),
 [factions](faction-system.md), [scoped state](scoped-state-system.md),
@@ -668,6 +670,20 @@ Performance requirements:
 ## Phased Implementation Plan
 
 ### Phase 1A: Shared foundations required by mob conversations
+
+Implemented: a single operator-controlled provider connection, bounded text
+adapters, fast/optional deliberate profiles, UTC monthly/daily ledgers,
+linked-owner quotas, base-world allocations, a durable request outbox, and a
+dedicated `inference` worker queue. Normal game paths only write the database;
+the bounded outbox dispatcher runs every two seconds. The operator guide is the
+configuration reference; the examples later in this design are not import syntax.
+
+The worker claims a request under the accounting lock before calling a provider,
+uses no automatic retries, and retains the maximum charge after uncertain
+billing. Price revisions are snapshotted per request. Completed input is erased;
+generated text is retained for three days and request receipts for ninety days.
+This phase only returns a bounded `{text}` result: game publication and richer
+quest outcomes belong to subsequent phases.
 
 Implement the provider boundary, operator enable/disable control, fast and
 optional deliberate profile configuration, bounded provider adapters, durable

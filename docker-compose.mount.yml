@@ -11,6 +11,10 @@ services:
     volumes:
       - ./backend:/code/backend
       - ./fastapi_app:/code/fastapi_app
+  llm-worker:
+    volumes:
+      - ./backend:/code/backend
+      - ./fastapi_app:/code/fastapi_app
   fastapi:
     volumes:
       - ./backend:/code/backend

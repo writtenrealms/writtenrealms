@@ -2,6 +2,9 @@ from backend.config.settings.base import *
 
 DEBUG = True
 TESTING = True
+LLM_NETWORK_ENABLED = False
+LLM_API_KEY = ''
+LLM_WORKER = False
 
 def _default_postgres_host():
     env_host = os.environ.get('POSTGRES_HOST')
@@ -77,6 +80,7 @@ MIGRATION_MODULES = {
     'sessions': None,
 
     'core': None,
+    'inference': None,
     'builders': None,
     'quests': None,
     'worlds': None,

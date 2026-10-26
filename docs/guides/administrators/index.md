@@ -35,6 +35,7 @@ worlds; that role does not grant site administration privileges.
 | Configure public URLs and WebSockets | [Production hosting](production-hosting.md#public-routing) |
 | Inspect activity and recover delayed work | [Control Panel](control-panel.md#queues-and-jobs) |
 | Back up or restore an installation | [Operations and backups](operations.md#backups-and-restore) |
+| Configure providers, inference budgets, and worker isolation | [LLM integration](llm-integration.md) |
 
 ## Add your content
 
