@@ -877,6 +877,21 @@ def _resolve_room_world(room: Room | None) -> World | None:
     return getattr(room_world, "instance_of", None) or room_world
 
 
+def mob_owns_speech(actor, mob, text):
+    """Read-only ownership check, including authored gates and silent reactions."""
+    cts = _scope_content_types()
+    target = Q(target_type=cts[Mob], target_id=mob.pk)
+    if mob.definition_id:
+        target |= Q(target_type=cts[MobDefinition], target_id=mob.definition_id)
+    triggers = Trigger.objects.filter(
+        target, world=_resolve_trigger_world(actor, actor.room), is_active=True,
+        kind=adv_consts.TRIGGER_KIND_EVENT, event=adv_consts.MOB_REACTION_EVENT_SAYING,
+    )
+    return any(_event_match_expression_matches(
+        trigger=trigger, event=adv_consts.MOB_REACTION_EVENT_SAYING, match_text=text,
+    ) for trigger in triggers)
+
+
 def execute_mob_event_triggers(
     *,
     event: str,
@@ -889,7 +904,7 @@ def execute_mob_event_triggers(
     source_event_data: dict | None = None,
     capture_output: bool = False,
     gate_claim_collector: list[tuple[str, str]] | None = None,
-) -> None:
+) -> set[int] | None:
     normalized_event = _normalized_text(event)
     if normalized_event not in adv_consts.MOB_REACTION_EVENTS:
         return
@@ -928,6 +943,7 @@ def execute_mob_event_triggers(
     mob_definition_ct = cts[MobDefinition]
 
     target_filter = Q()
+    handled_mob_ids = set()
     for mob in mobs:
         target_filter |= Q(target_type=mob_ct, target_id=mob.id)
         if mob.definition_id:
@@ -989,6 +1005,7 @@ def execute_mob_event_triggers(
             ):
                 continue
 
+            handled_mob_ids.add(mob.pk)
             scope_key = f"runtime:{mob.world_id}:mob:{mob.id}"
             if _trigger_has_steps(trigger):
                 from spawns.trigger_steps import start_trigger_steps
@@ -1053,6 +1070,8 @@ def execute_mob_event_triggers(
                     capture_only=capture_output,
                     defer_until_commit=True,
                 )
+
+    return handled_mob_ids
 
 
 def _trigger_scope_key(

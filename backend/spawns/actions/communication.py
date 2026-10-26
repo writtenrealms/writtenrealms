@@ -113,7 +113,7 @@ def _zone_player_recipient_ids(actor: Player | Mob) -> list[int]:
 
 
 class SayAction:
-    def execute(self, actor: Player | Mob, text: str | None) -> ActionResult:
+    def execute(self, actor: Player | Mob, text: str | None, *, metadata=None) -> ActionResult:
         normalized_text = _normalize_text(text)
         if not normalized_text:
             raise ActionError("Say what?", code="invalid_args")
@@ -159,7 +159,7 @@ class SayAction:
                 )
             )
 
-        record_communication(actor, "say", normalized_text)
+        record_communication(actor, "say", normalized_text, metadata=metadata)
         return ActionResult(events=events)
 
 

@@ -6,3 +6,4 @@ class SpawnsConfig(AppConfig):
 
     def ready(self):
         from spawns import combat_signals  # noqa: F401
+        from spawns.conversations import signals  # noqa: F401

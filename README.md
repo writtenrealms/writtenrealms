@@ -162,7 +162,7 @@ For engineering setup, architecture, and troubleshooting, see:
 - [Onboarding Persistence](docs/dev/onboarding.md)
 - [World Upkeep Implementation Plan](docs/architecture/world-upkeep-plan.md)
 - [Shared LLM Integration and Mob Conversations](docs/architecture/llm-integration-and-mob-conversations.md)
-- [LLM Provider Setup and Budget Controls](docs/guides/administrators/llm-integration.md) — shared foundations are implemented; mob conversations follow in Phase 1B.
+- [LLM Provider Setup and Budget Controls](docs/guides/administrators/llm-integration.md) — shared foundations and an opt-in TALK/SAY mob conversation pilot, with free greetings/refusals and enforced spending limits.
 - [Architecture Notes](docs/architecture/)
 
 ## Project Structure

@@ -7,6 +7,7 @@ from spawns.actions.communication import (
     SayAction, TalkAction, YellAction,
 )
 from spawns.events import publish_events
+from spawns.conversations.inputs import stamp, voluntary
 from spawns.handlers.base import CommandContext, CommandHandler
 from spawns.handlers.registry import register_handler
 
@@ -63,7 +64,7 @@ class SayHandler(CommandHandler):
             return
 
         publish_events(
-            result.events,
+            stamp(ctx, result.events),
             actor_key=ctx.actor_key,
             connection_id=ctx.connection_id,
         )
@@ -150,8 +151,8 @@ class TalkHandler(CommandHandler):
     trigger_step_mode = "events_only"
     help = {
         "name": "Talk",
-        "format": "talk <mob>",
-        "description": "Speak directly with a mob in your room.",
+        "format": "talk [mob|stop]",
+        "description": "Speak with a mob. Continue an open conversation with say; talk stop ends it.",
         "examples": [
             "talk guard",
         ],
@@ -162,6 +163,12 @@ class TalkHandler(CommandHandler):
         target = ctx.payload.get("target")
         if not target and args:
             target = " ".join(args)
+
+        if str(target or '').strip().lower() == 'stop' and voluntary(ctx):
+            from spawns.conversations.service import stop
+            stop(ctx.player.pk)
+            ctx.publish_success('talk', {'stopped': True}, 'You end the conversation.')
+            return
 
         try:
             result = TalkAction().execute(ctx.player, target)
@@ -176,7 +183,7 @@ class TalkHandler(CommandHandler):
             return
 
         publish_events(
-            result.events,
+            stamp(ctx, result.events),
             actor_key=ctx.actor_key,
             connection_id=ctx.connection_id,
         )

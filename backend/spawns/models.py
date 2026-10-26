@@ -1642,12 +1642,54 @@ class EventSubscriptionReceipt(BaseModel):
     subscriber = models.SlugField(max_length=120)
 
     class Meta(BaseModel.Meta):
+        indexes = [models.Index(fields=['created_ts'],
+                   condition=models.Q(subscriber='mob_conversations'), name='mob_conversation_receipt_idx')]
         constraints = [
             models.UniqueConstraint(
                 fields=['event_id', 'subscriber'],
                 name='spawns_event_receipt_unique_subscriber',
             ),
         ]
+
+
+class MobConversationFocus(models.Model):
+    player = models.OneToOneField('Player', on_delete=models.CASCADE, primary_key=True)
+    mob = models.OneToOneField('Mob', on_delete=models.SET_NULL, null=True)
+    world_id = models.PositiveBigIntegerField()
+    generation = models.UUIDField(default=uuid.uuid4)
+    world_session = models.UUIDField()
+    policy_revision = models.UUIDField()
+    inference_generation = models.PositiveBigIntegerField()
+    room_id = models.PositiveBigIntegerField()
+    player_location_sequence = models.BigIntegerField()
+    mob_move_sequence = models.BigIntegerField()
+    player_disconnection_ts = models.DateTimeField(null=True)
+    expires_at = models.DateTimeField(db_index=True)
+    hard_expires_at = models.DateTimeField()
+    pending_request = models.OneToOneField('inference.InferenceRequest', on_delete=models.SET_NULL, null=True)
+    publication_batch = models.UUIDField(null=True)
+    transcript = models.JSONField(default=list)
+    turns = models.PositiveSmallIntegerField(default=0)
+    started_at = models.DateTimeField(default=timezone.now)
+    last_notice_at = models.DateTimeField(null=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['expires_at'], condition=models.Q(mob__isnull=False),
+                               name='mob_conversation_expiry_idx')]
+
+
+class MobConversationAllowance(models.Model):
+    owner = models.CharField(max_length=40)
+    definition = models.ForeignKey('builders.MobDefinition', on_delete=models.CASCADE)
+    day = models.DateField()
+    used = models.PositiveSmallIntegerField(default=0)
+    attention = models.PositiveSmallIntegerField(default=0)
+    last_turn_at = models.DateTimeField(null=True)
+    last_notice_at = models.DateTimeField(null=True)
+    touched_at = models.DateTimeField(db_index=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['owner', 'definition'], name='mob_conversation_owner_npc')]
 
 
 class PlayerData(BaseModel):

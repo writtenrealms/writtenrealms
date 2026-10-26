@@ -96,6 +96,43 @@ channel messages allow up to 560. Longer messages are shortened to those limits.
 Communication restrictions may prevent speaking or using channels. A muted
 character can still send a tell to a builder to ask for help.
 
+## Talking With Mobs
+
+Use `talk <mob>` to start. Bare `talk` works when there is a single eligible
+mob to address. Applicable quest dialogue and hand-in guidance take priority.
+In worlds with conversations enabled, selected humanoids can also greet you
+and respond to ordinary speech:
+
+```text
+talk potter
+say What are you making?
+say Is it difficult work?
+talk stop
+```
+
+The greeting and replies are ordinary room speech: everyone nearby hears both
+sides. Keep using `say` after the greeting. One mob listens to one player at a
+time, and you can address one mob at a time. Bystanders can hear the exchange,
+but their speech does not start another conversation. `talk stop` ends your
+conversation; `talk <another mob>` switches your attention.
+
+Wait for a reply before sending another question. Extra speech remains audible
+to the room but is not saved up for later answers. A mob may turn away because
+it is busy or unwilling to talk. Repeatedly using `talk` does not restore its
+patience. The pilot allows six conversational turns before a break, with patience
+recovering after 30 minutes without an accepted turn. Daily allowances also
+apply across your characters.
+
+Conversation ends when either participant leaves, dies, enters combat, or when
+you log out. It also expires after 90 seconds without an accepted turn or reply,
+or after five minutes overall. Start again with `talk` when appropriate.
+Tells and whispers to mobs are not supported.
+
+These people know their immediate lives, not everything about the world. They
+may not understand unfamiliar names or subjects. Conversational promises do
+not transfer possessions, grant quest credit, or change reputation; authored
+quest interactions still control those outcomes.
+
 ## Moderation And Retention
 
 Successful communications, including **private tells and whispers**, are saved

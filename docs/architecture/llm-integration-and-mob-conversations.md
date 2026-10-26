@@ -1,10 +1,11 @@
 # Shared LLM Integration and Mob Conversations
 
-Status: Phase 1A implemented October 26, 2026; the conversation, knowledge,
-manifest, and later-phase contracts below remain proposals. The shared service
-is in `backend/inference/`. See the [administrator integration guide](../guides/administrators/llm-integration.md)
-for its supported configuration and commands. TALK/SAY routing is not connected
-yet, and the integration starts disabled.
+Status: Phases 1A and 1B implemented October 26, 2026. The shared service is in
+`backend/inference/`; the first opt-in TALK/SAY pilot is in
+`backend/spawns/conversations/`. See the [administrator integration guide](../guides/administrators/llm-integration.md)
+for supported configuration and commands. The integration starts disabled.
+The reusable knowledge, manifest, relationship, and later-phase contracts below
+remain proposals; Phase 1B's implemented subset is described in its plan section.
 
 ## Objective and Scope
 
@@ -43,8 +44,8 @@ disabling the integration. Ordinary authored gameplay must keep working.
 
 ## Existing Core Foundations
 
-The following are existing implementation points, checked while preparing this
-proposal. Their presence does not imply the proposed AI behavior exists.
+The following are the foundations used by the implementation. Later contracts
+in this document extend them and are not all implemented.
 
 | Foundation | Current location and relevance |
 | --- | --- |
@@ -703,6 +704,59 @@ requests remain accounted for; provider failures cannot block game workers.
 
 ### Phase 1B: First playable TALK/SAY conversation
 
+Implemented as a small operator-configured pilot. `MobConversationPolicy`
+selects 1–20 talkable humanoid definition slugs per authored base world. A short
+shared setting and optional per-mob `knowledge`, `greeting`, and existing-DSL
+`when` overrides are sufficient; `{}` supplies all mob defaults. The checked-in
+Phalanx policy selects the potter, armorer, and orientation watchman. These are
+operational policies, not new canonical manifest fields; that portability and
+the richer knowledge model remain Phase 1C.
+
+Quest progress and TALK resolution now return explicit `handled` ownership,
+including silent matching trackers. Authored SAY reactions own their matched
+mob even when a gate prevents output. Only voluntary player TALK/SAY enters
+the fallback. `talk stop` closes focus. Generated speech uses ordinary room
+delivery and communication archives, with private provenance that prevents
+recursive quest/Trigger reactions. It never authorizes game effects.
+
+`MobConversationFocus` bounds each player to one runtime mob and each mob to
+one speaker. Six admitted turns exhaust the focus/attention window; attention
+recovers after 30 minutes. `MobConversationAllowance` adds 12 admitted turns per
+linked owner/definition/UTC day across characters and copies. These gameplay
+counters include failed and cancelled attempts and are separate from financial
+refunds. Idle expiry is 90 seconds; hard lifetime is five minutes. Repeated
+notices are throttled to 15 seconds. No next request is admitted while either
+inference or its durable reply publication is pending; extra SAY is not queued.
+
+The bounded packet includes reviewed shared/per-mob facts, visible current mob
+and room text, and at most six transcript messages. Old transcript messages are
+dropped to fit the gateway's conservative byte bound. No raw world description,
+world facts, zone lore, neighboring rooms, builder notes, hidden details,
+inventory, quest state, player identity, or durable personal memory is loaded.
+The system policy requires local ignorance, distrust of claims, and no item or
+quest promises. JSON text is limited to 280 characters and rejects markup and
+control characters without a repair call. Semantic roleplay quality still needs
+review against the actual provider/model before expanding access.
+
+Admission, dispatch, settlement consumption, and outbox delivery check fresh
+game state and configuration generations. Focus captures world session,
+location/movement sequence, disconnection timestamp, and policy revision;
+lifecycle hooks invalidate it on movement, logout, death, and combat. Accounting
+claims acquire gameplay locks before the inference control lock, release them
+before network work, and refuse unbound mob requests. Delayed output is
+suppressed after expiry, restart, disablement, or loss of authored eligibility.
+
+The regular worker polls at most 32 ready/expired focuses per second, never
+idle mobs or every historical relationship. Cleanup drains indexed expired rows
+in bounded batches each minute. Focus/allowance history lasts three days;
+conversation input receipts last ten minutes (past the maximum focus lifetime).
+Conversation preflight measured 14 queries both with a small room and 1,000
+unrelated mobs; this isolates the new gate, not the existing SAY Trigger scan.
+Transaction tests cover competing speakers, simultaneous SAY admission, and
+stopping a conversation during a paid call without holding game locks over I/O.
+
+Original scope and acceptance criteria:
+
 Implement explicit authored-interaction ownership, conversation focus, authored
 greetings/refusals, patience/account quotas, turn sequencing, and ordinary mob
 speech. Use a small approved Phalanx context and conservative deterministic
@@ -780,9 +834,10 @@ must not become a reason to defer or overbuild phase 1.
 
 ## Verification Plan for Implementation
 
-No runtime tests are claimed by this architecture document. Implementation
-should add meaningful coverage under `backend/tests/`, run focused tests in
-Docker with testing settings, and complete the repository's required checks.
+Phases 1A/1B have mocked-provider runtime coverage under `backend/tests/`, including
+admission races and stale-result suppression. No live provider quality or
+production behavior is claimed here. Later implementation should add meaningful
+coverage, run focused tests in Docker with testing settings, and complete the repository's required checks.
 UI changes must reuse the style guide, update relevant frontend tests, and have
 desktop/mobile verification and PR screenshots.
 

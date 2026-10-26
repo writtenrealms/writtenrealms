@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
@@ -486,15 +487,21 @@ def build_inspect_guidance_events(player, event_data: dict[str, Any] | None) -> 
     return _presented_opportunity_events(player, opportunities)
 
 
-def build_talk_guidance_events(player, event_data: dict[str, Any] | None) -> list[GameEvent]:
+@dataclass
+class TalkInteraction:
+    handled: bool
+    events: list[GameEvent]
+
+
+def resolve_talk_interaction(player, event_data: dict[str, Any] | None) -> TalkInteraction:
     target_payload = event_data.get("target") if isinstance(event_data, dict) else None
     mob_definition_id = _event_target_definition_id(event_data)
     if not mob_definition_id:
-        return []
+        return TalkInteraction(False, [])
 
     opportunities = available_npc_dialogue_opportunities_for_mob_definition(player, mob_definition_id)
     if opportunities:
-        return _presented_opportunity_events(player, opportunities)
+        return TalkInteraction(True, _presented_opportunity_events(player, opportunities))
 
     hint_text = _active_item_turn_in_hint(
         player,
@@ -502,13 +509,36 @@ def build_talk_guidance_events(player, event_data: dict[str, Any] | None) -> lis
         target_payload=target_payload,
     )
     if not hint_text:
-        return []
+        # An active tracker owns TALK even if this utterance cannot increment
+        # it (for example, an already-seen unique_count value).
+        for instance in active_instances_qs(player):
+            step = get_step(instance.template, instance.current_step_id) or {}
+            if str(step.get('kind') or '').lower() == 'dialogue':
+                from quests.services.discovery import _npc_dialogue_source_mob_definition_id
+                sources = (instance.template.discovery_policy or {}).get('sources', [])
+                if any(isinstance(source, dict) and
+                       _npc_dialogue_source_mob_definition_id(instance.template, source) == mob_definition_id
+                       for source in sources):
+                    return TalkInteraction(True, [])
+            states = {state.objective_id: state for state in instance.objective_states.all()}
+            for objective in _objective_specs(step):
+                tracker = objective.get('tracker') or {}
+                if str(tracker.get('event', '')).lower() == 'cmd.talk.success' and evaluate_condition(
+                    tracker.get('where'), player=player, template=instance.template,
+                    quest_instance=instance, event_data=event_data, objective_state_map=states,
+                ):
+                    return TalkInteraction(True, [])
+        return TalkInteraction(False, [])
 
-    return [
+    return TalkInteraction(True, [
         GameEvent(
             type="quest.interaction.hint",
             recipients=[player.key],
             data={"target": target_payload or {}, "hint": hint_text},
             text=hint_text,
         )
-    ]
+    ])
+
+
+def build_talk_guidance_events(player, event_data: dict[str, Any] | None) -> list[GameEvent]:
+    return resolve_talk_interaction(player, event_data).events

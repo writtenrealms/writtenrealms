@@ -3,6 +3,7 @@ import io
 import json
 import tempfile
 import uuid
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
@@ -133,6 +134,10 @@ class TestInferenceProviders(SimpleTestCase):
 @override_settings(LLM_API_KEY='test-only', LLM_WORKER=True, LLM_NETWORK_ENABLED=True)
 class TestInferenceAccounting(TransactionTestCase):
     def setUp(self):
+        # Gateway tests isolate the consumer; playable conversations exercise
+        # the real game admission guard in test_mob_conversations.
+        self.enterContext(patch('spawns.conversations.service.dispatch_guard',
+                                return_value=nullcontext(True)))
         self.user = User.objects.create_user('inference@example.com', 'p')
         self.world = World.objects.create(name='A village', author=self.user)
         self.config = copy.deepcopy(CONFIG)

@@ -36,6 +36,16 @@ def _spawn_plan_interval_seconds() -> float:
 
 
 app.conf.beat_schedule = {
+    'prune-mob-conversations': {
+        'task': 'spawns.conversations.tasks.prune_conversations',
+        'schedule': 60.0,
+        'options': {'expires': 60},
+    },
+    'finish-mob-conversations': {
+        'task': 'spawns.conversations.tasks.finish_conversations',
+        'schedule': 1.0,
+        'options': {'expires': 1},
+    },
     'dispatch-inference': {
         'task': 'inference.tasks.dispatch_requests',
         'schedule': 2.0,

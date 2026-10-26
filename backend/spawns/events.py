@@ -647,8 +647,17 @@ def publish_events(
         return
 
     follow_movement_data: list[dict] = []
+    conversation_delivery_checks = {}
+    from spawns.conversations.inputs import DELIVERY_KEY, INPUT_KEY, AUTHORED_KEY
     for event in event_list:
         event_type = str(event.type or "").strip().lower()
+        if DELIVERY_KEY in event.data:
+            from spawns.conversations.service import delivery_allowed
+            key = tuple(sorted(event.data[DELIVERY_KEY].items()))
+            if key not in conversation_delivery_checks:
+                conversation_delivery_checks[key] = delivery_allowed(event.data[DELIVERY_KEY])
+            if not conversation_delivery_checks[key]:
+                continue
         if event_type == 'private.instance.mob_defeated':
             from worlds.instance_goals import process_instance_mob_defeat
             process_instance_mob_defeat(event.data)
@@ -667,7 +676,10 @@ def publish_events(
             message = {**message, 'data': {k: v for k, v in message['data'].items()
                                          if k != '_instance_reactions_done'}}
         if (
-            SCRIPT_COMMAND_DEPTH_KEY in event.data
+            INPUT_KEY in event.data
+            or DELIVERY_KEY in event.data
+            or AUTHORED_KEY in event.data
+            or SCRIPT_COMMAND_DEPTH_KEY in event.data
             or FINAL_TRANSFER_ENTER_KEY in event.data
             or TRANSFER_LOCATION_SEQUENCE_KEY in event.data
             or TRANSFER_RUNTIME_WORLD_KEY in event.data
@@ -681,6 +693,9 @@ def publish_events(
             # Script depth and provenance are durable server metadata used for
             # routing and auditing, not player-facing command payload.
             public_data = deepcopy(event.data)
+            public_data.pop(INPUT_KEY, None)
+            public_data.pop(DELIVERY_KEY, None)
+            public_data.pop(AUTHORED_KEY, None)
             public_data.pop('_instance_reactions_done', None)
             public_data.pop(SCRIPT_COMMAND_DEPTH_KEY, None)
             public_data.pop(SCRIPT_COMMAND_PROVENANCE_KEY, None)
@@ -745,6 +760,7 @@ def publish_events(
         )
         dispatch_trigger_event = (
             not is_private_control_event
+            and DELIVERY_KEY not in event.data
             and not uses_canonical_player_entry
             and (
                 not is_trigger_step_event
@@ -756,6 +772,7 @@ def publish_events(
         )
         dispatch_quest_event = (
             not is_private_control_event
+            and DELIVERY_KEY not in event.data
             and event_type != PLAYER_ROOM_ENTER_EVENT_TYPE
             and (
                 not is_trigger_step_event

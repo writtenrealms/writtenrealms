@@ -1976,3 +1976,6 @@ def run_item_upkeep(world_id):
     if not live_worlds(World.objects.filter(pk=world_id, lifecycle='running'), world_field='id').exists():
         return
     return process_due_items(world_id, budget=game_settings.ITEM_UPKEEP_ROW_BUDGET)
+
+# Register the bounded conversation publisher with normal Celery autodiscovery.
+from spawns.conversations.tasks import finish_conversations, prune_conversations  # noqa: E402,F401

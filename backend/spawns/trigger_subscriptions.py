@@ -118,7 +118,7 @@ def _on_cmd_say_success(
         return
 
     message_text = event_data.get("text")
-    execute_mob_event_triggers(
+    handled = execute_mob_event_triggers(
         event=adv_consts.MOB_REACTION_EVENT_SAYING,
         actor=player,
         room=player.room_id,
@@ -126,6 +126,7 @@ def _on_cmd_say_success(
         connection_id=connection_id,
         source_event_data=event_data,
     )
+    event_data['_conversation_authored_speakers'] = sorted(handled or [])
 
 
 def _on_transfer_enter(
@@ -631,5 +632,6 @@ def dispatch_trigger_subscriptions_for_event(
             subscriber="triggers",
         )
         if not created:
+            data['_conversation_authored_speakers'] = 'replayed'
             return
         handler(data, actor_key, connection_id)

@@ -10,7 +10,7 @@ from django.db import transaction
 
 from spawns.models import EventSubscriptionReceipt, Player
 from quests.services.discovery import refresh_player_quests
-from quests.services.interactions import build_inspect_guidance_events, build_talk_guidance_events
+from quests.services.interactions import build_inspect_guidance_events, resolve_talk_interaction
 from quests.services.progress import progress_player_quests_for_event
 
 
@@ -138,6 +138,9 @@ def _on_cmd_say_success(event_data: dict, actor_key: str | None, connection_id: 
         [*(refresh_result.events if refresh_result else []), *(progress_result.events if progress_result else [])],
         connection_id=connection_id,
     )
+    if player and progress_result is not None and event_data.get('_conversation_input'):
+        from spawns.conversations.service import hear
+        hear(player.pk, event_data, authored=progress_result.handled)
 
 
 def _on_cmd_talk_success(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:
@@ -147,8 +150,11 @@ def _on_cmd_talk_success(event_data: dict, actor_key: str | None, connection_id:
         actor_key=actor_key,
     )
     extra_events = []
+    handled = bool(progress_result and progress_result.handled)
     if player and progress_result and not progress_result.events:
-        extra_events = build_talk_guidance_events(player, event_data)
+        interaction = resolve_talk_interaction(player, event_data)
+        extra_events = interaction.events
+        handled = handled or interaction.handled
     _publish_player_events(
         player,
         [
@@ -158,6 +164,9 @@ def _on_cmd_talk_success(event_data: dict, actor_key: str | None, connection_id:
         ],
         connection_id=connection_id,
     )
+    if player and progress_result is not None and event_data.get('_conversation_input'):
+        from spawns.conversations.service import greet
+        greet(player.pk, event_data, authored=handled)
 
 
 def _on_cmd_inspect_success(event_data: dict, actor_key: str | None, connection_id: str | None) -> None:

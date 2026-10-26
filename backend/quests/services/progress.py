@@ -20,6 +20,7 @@ def progress_player_quests_for_event(
     player = Player.objects.select_for_update().get(pk=player.pk)
     all_events = []
     last_instance = None
+    handled = False
     for quest_instance in active_instances_qs(player):
         result = progress_active_instance_for_event(
             quest_instance,
@@ -29,7 +30,9 @@ def progress_player_quests_for_event(
         )
         last_instance = result.quest_instance
         all_events.extend(result.events)
+        handled = handled or result.handled
     return QuestTransitionResult(
         quest_instance=last_instance,
         events=all_events,
+        handled=handled,
     )

@@ -104,6 +104,42 @@ def submit(*, request_id, user_id, world_id, purpose, instructions, messages, pr
         return Admission(reason='accounting_unavailable')
 
 
+def capacity(*, user_id, world_id, purpose, profile='fast'):
+    """Free-greeting preflight using an authored base-world ID; submit is authoritative."""
+    try:
+        control = InferenceControl.objects.get(pk=1)
+        now = timezone.now()
+        configuration = _available(control, now)
+        if purpose not in PURPOSES or profile not in configuration['profiles']:
+            raise Unavailable('unsupported_purpose_or_profile')
+        user = User.objects.only('id', 'link_id').get(pk=user_id)
+        owner = f'link:{user.link_id}' if user.link_id else f'user:{user.pk}'
+        limits = configuration['limits']
+        if InferenceRequest.objects.filter(owner=owner, status__in=ACTIVE).exists():
+            raise Unavailable('owner_busy')
+        if InferenceRequest.objects.filter(status__in=ACTIVE).count() >= limits['pending_requests']:
+            raise Unavailable('queue_full')
+        selected = configuration['profiles'][profile]
+        cost = maximum_cost(selected)
+        specs = _bucket_specs(limits, purpose, owner, world_id, now)
+        query = Q()
+        for scope, period, _, _ in specs:
+            query |= Q(scope=scope, period=period)
+        buckets = {(row.scope, row.period): row for row in BudgetBucket.objects.filter(query)}
+        for scope, period, cap, count_cap in specs:
+            bucket = buckets.get((scope, period))
+            occupied = bucket.spent_micro + bucket.reserved_micro if bucket else 0
+            if cap is not None and occupied + cost > cap:
+                raise Unavailable('budget_exhausted')
+            if count_cap is not None and bucket and bucket.requests >= count_cap:
+                raise Unavailable('owner_quota')
+        return {'generation': control.generation, 'profile': selected, 'owner': owner}
+    except InferenceControl.DoesNotExist:
+        raise Unavailable('disabled') from None
+    except DatabaseError:
+        raise Unavailable('accounting_unavailable') from None
+
+
 @transaction.atomic
 def _submit(*, request_id, user_id, world_id, purpose, instructions, messages, profile):
     if (type(user_id) is not int or user_id <= 0 or type(world_id) is not int or world_id <= 0
@@ -208,8 +244,22 @@ def cancel(request_id):
         request.save(update_fields=['expires_at', 'result'])
 
 
-@transaction.atomic
 def claim(request_id):
+    if not settings.LLM_WORKER or not settings.LLM_NETWORK_ENABLED:
+        return None
+    purpose = InferenceRequest.objects.filter(pk=request_id).values_list('purpose', flat=True).first()
+    if purpose == 'mob_conversation':
+        from spawns.conversations.service import dispatch_guard
+        with dispatch_guard(request_id) as allowed:
+            if not allowed:
+                cancel(request_id)
+                return None
+            return _claim(request_id)
+    return _claim(request_id)
+
+
+@transaction.atomic
+def _claim(request_id):
     if not settings.LLM_WORKER or not settings.LLM_NETWORK_ENABLED:
         return None
     now = timezone.now()

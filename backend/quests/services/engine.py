@@ -54,6 +54,7 @@ def _serialize_dt(value):
 class QuestTransitionResult:
     quest_instance: QuestInstance | None
     events: list[GameEvent]
+    handled: bool = False
 
 
 def template_world_for_player(player):
@@ -921,6 +922,7 @@ def progress_active_instance_for_event(
         return QuestTransitionResult(quest_instance=quest_instance, events=[])
 
     updated = False
+    handled = False
     updated_objective_payload: dict[str, Any] | None = None
     objective_states = list(
         QuestObjectiveState.objects.select_for_update()
@@ -952,6 +954,7 @@ def progress_active_instance_for_event(
             continue
 
         progress_spec = objective_spec.get("progress") or {}
+        handled = True
         progress_mode = str(progress_spec.get("mode") or "boolean").strip().lower()
         progress_target = _objective_target(objective_spec)
         now = timezone.now()
@@ -1012,7 +1015,7 @@ def progress_active_instance_for_event(
         )
 
     if not updated:
-        return QuestTransitionResult(quest_instance=quest_instance, events=[])
+        return QuestTransitionResult(quest_instance=quest_instance, events=[], handled=handled)
 
     refreshed_instance = QuestInstance.objects.select_related("template", "template__arc", "template__world", "world", "player").prefetch_related("objective_states", "journal_entries").get(pk=quest_instance.pk)
     objective_state_map = {
@@ -1026,11 +1029,13 @@ def progress_active_instance_for_event(
         objective_state_map=objective_state_map,
     )
     if transition_result.events:
+        transition_result.handled = True
         return transition_result
 
     payload, info_text = _info_for_instance(refreshed_instance, player=player)
     return QuestTransitionResult(
         quest_instance=refreshed_instance,
+        handled=True,
         events=[
             _build_player_event(
                 player,

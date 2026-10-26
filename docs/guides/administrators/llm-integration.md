@@ -1,10 +1,11 @@
 # LLM integration
 
-Core has a shared, disabled-by-default inference service for future mob
-conversations. Phase 1A supplies provider configuration, budgets, accounting,
-and worker isolation. It does **not** yet change `talk` or `say`, provide AI
-help/moderation, or add builder AI controls. Only explicit operator checks can
-currently submit requests without writing a new consumer.
+Core has a shared, disabled-by-default inference service and an opt-in mob
+conversation pilot. Phase 1A supplies provider configuration, budgets, accounting,
+and worker isolation. Phase 1B connects selected humanoids to public `talk` / `say`
+conversations. Authored quests take priority; greetings, refusals, and eligibility
+checks are deterministic and free. AI help, moderation, world management, and
+the broader builder knowledge editor remain future work.
 
 ## One provider connection
 
@@ -70,8 +71,8 @@ million tokens. Placeholder prices deliberately fail validation.
 For Anthropic set `provider` to `anthropic` and use its model and prices. Add a
 `deliberate` object with the same fields only when needed. Choose models that
 support native JSON-schema output: OpenAI Responses `text.format`, or Anthropic
-Messages `output_config.format`. Smoke-test the exact model before opening any
-player-facing behavior in a later phase.
+Messages `output_config.format`. Smoke-test the exact model and review its
+conversation quality before opening player-facing behavior.
 
 Use the official [OpenAI prices](https://developers.openai.com/api/docs/pricing)
 or [Anthropic prices](https://platform.claude.com/docs/en/about-claude/pricing).
@@ -123,8 +124,8 @@ There is no automatic use of the headroom. Daily limits are hard pacing caps;
 unused daily capacity does not accumulate. Preparation and smoke/evaluation
 share one allocation. All base-world limits also include its instance templates
 and runtime copies. An owner uses `User.link_id` when present, otherwise the
-user ID, so linked accounts share the same allowance. Gameplay patience and
-per-NPC quotas are Phase 1B work.
+user ID, so linked accounts share the same allowance. The conversation pilot
+adds the per-NPC patience and quotas described below.
 
 Optional `limits` overrides belong alongside `provider` and `profiles`:
 
@@ -184,6 +185,80 @@ The provider call has bounded timeouts, a 256 KiB response limit, a 35-second
 Celery soft limit and 40-second hard limit. A persisted dispatch lease expires
 after 60 seconds. Missing workers, broker downtime, duplicate delivery, and
 expired queued work do not cause unbounded provider fan-out.
+
+## Enable a world conversation pilot
+
+Apply the migrations and run the API, regular worker, inference worker, and
+scheduler from the same revision. The regular worker checks at most 32 ready or
+expired conversations each second; it publishes replies through the existing
+game event outbox. Network inference stays on the dedicated worker. Restart
+workers after updating Python code, even with source bind mounts.
+
+Configure a reviewed policy for the **authored base world**. It also applies to
+runtime copies using those definitions. The checked-in Phalanx policy selects
+`athens-potter`, `athens-armorer`, and `orientation-watchman`:
+
+```bash
+docker compose exec backend python manage.py mob_conversations configure --world-id 12 --input-file spawns/conversations/pilots/phalanx.json --enable
+docker compose exec backend python manage.py mob_conversations status --world-id 12
+```
+
+World 12 is this project's Phalanx ID; use the matching authored ID in another
+installation. The command checks that each slug exists and is a talkable
+humanoid. See the [mob builder guide](../builders/mob-definition-builder-guide.md#optional-conversation-pilot)
+for the small JSON contract. Omit `--enable` to save a disabled policy. Every
+configuration update changes its revision, invalidating older conversations.
+Pilot configuration does not enable the shared provider or make a model call.
+Both the world policy and the shared integration must be enabled and funded.
+
+To disable only this world's pilot:
+
+```bash
+docker compose exec backend python manage.py mob_conversations disable --world-id 12
+```
+
+Players start with `talk <mob>` (or bare `talk` for an unambiguous target), then
+use `say`. `talk stop` releases their focus. Mobs outside the allowlist retain
+their existing behavior. The watchman's applicable authored quest interaction
+always wins over conversation, including a silent matching tracker. A matching
+authored SAY reaction also takes ownership before the model path.
+
+| Gameplay limit | Pilot default |
+| --- | --- |
+| Active targets per player / active speakers per runtime mob | 1 / 1 |
+| Outstanding inference or undelivered reply per focus | 1 |
+| Turns per focus / attention window | 6 / 6 |
+| Patience recovery | 30 minutes since the last admitted turn |
+| Owner + mob-definition daily allowance | 12 admitted turns per UTC day |
+| Idle expiry / maximum focus lifetime | 90 seconds / 5 minutes |
+| Repeated refusal or pending-reply notices | At most once per 15 seconds per relevant allowance/focus |
+| Player input / generated speech | 280 characters each |
+| Transcript context | At most 6 recent messages, shortened further to fit the provider input cap |
+
+These are server constants for this pilot. Account-owner quotas span characters,
+linked users, respawns, and runtime copies of the same definition. Gameplay
+allowances count **admitted attempts**, including cancelled or failed attempts;
+the shared financial ledger separately refunds requests cancelled before
+dispatch. Closing/reopening a conversation does not reset patience or allowances.
+Refusal does not change faction reputation or consume an authored quest attempt.
+
+Extra SAY messages while a reply is pending remain public but are not queued for
+later answers. No provider work occurs for greetings, refusals, bystanders,
+forced/scripted player speech, or idle mobs. Each admitted turn is checked again
+before dispatch and before publication. Movement, combat, death, logout, world
+restart, policy changes, or global disablement suppress stale answers. Already
+dispatched calls can still incur a charge. Generated replies cannot invoke game
+commands or trigger quest/Trigger reactions. Invalid text is discarded without
+a repair call.
+
+The packet contains only reviewed shared/per-mob knowledge, bounded current mob
+and room descriptions, and recent conversation. No global history lookup or
+automatic lore ingestion occurs. The default prompts require ignorance of
+unfamiliar subjects and treat the listener as a stranger. Review the chosen
+model against modern names, historical dates, false identity claims, requests
+for possessions, and attempts to override its role; mocked tests cannot establish
+actual model quality. Use the budgeted evaluation path below before broadening
+the pilot.
 
 ## Budgeted smoke and evaluation checks
 
@@ -271,7 +346,14 @@ Old per-owner daily buckets are removed once their receipts are gone. Queued inp
 until dispatch/cancellation, so an installation with stopped workers/scheduler
 must resume cleanup to expire it. Backups have their own retention policy.
 
-## Consumer contract for Phase 1B
+Conversation transcripts are cleared when focus closes. Inactive focus and
+allowance rows expire after three days. Conversation input receipts expire after
+ten minutes, longer than a focus can live. A minute task drains at most 5,000
+expired input receipts and 500 rows of each other kind per run; cleanup can lag
+if workers stop or an exceptional backlog exceeds that drain rate. Public mob
+speech also uses the normal three-day communication archive.
+
+## Shared consumer contract
 
 The internal entry point is `inference.service.submit`, with a stable UUID,
 server-resolved user/world, purpose, profile, instructions, and text messages.
@@ -286,4 +368,8 @@ through publication. Consumers must not publish by reading `result` directly,
 call adapters directly, or interpret model text as an authorized game action.
 Use `service.cancel` when consumer eligibility ends: it refunds queued work or
 suppresses a dispatched result while retaining the charge.
-No result is automatically broadcast in Phase 1A.
+The implemented consumer is `spawns.conversations.service`. Mob-purpose dispatch
+requires a valid bound focus; an unbound `mob_conversation` request is cancelled
+before calling a provider. Operator smoke/evaluation commands use their separate
+purpose and allocation. The free greeting preflight is advisory; atomic
+reservation at each SAY remains authoritative.

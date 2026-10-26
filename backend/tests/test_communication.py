@@ -295,7 +295,7 @@ class TestTalkCommands(WorldTestCase):
         )
         for command in ("talk dummy", f"talk {dummy.key}", "talk"):
             with self.subTest(command=command), capture_game_messages() as messages, patch(
-                "quests.subscriptions.build_talk_guidance_events",
+                "quests.subscriptions.resolve_talk_interaction",
             ) as guidance:
                 dispatch_text_command(self.player.id, command)
 

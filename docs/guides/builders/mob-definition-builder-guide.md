@@ -103,6 +103,62 @@ button for an opposing faction. Omit the field from a partial edit to keep its
 current value; set it to `true` to restore talking. Definition edits update
 existing spawned copies and future spawns, and exports always include the value.
 
+### Optional conversation pilot
+
+With the shared LLM integration enabled, an operator can select up to 20
+talkable humanoid definitions for public `talk` / `say` conversations. Other mobs
+keep their existing authored behavior. `talkable: true` alone does not opt a mob
+into paid inference, and no additional AI fields are required in mob YAML.
+
+The first pilot uses one small JSON policy per authored base world:
+
+```json
+{
+  "setting": "People here know village work, local customs, and offerings to the gods.",
+  "mobs": {
+    "village-potter": {
+      "knowledge": "You make clay cups and jars at this workshop.",
+      "greeting": "Mind the wet clay."
+    },
+    "village-guard": {}
+  }
+}
+```
+
+The keys under `mobs` are existing definition slugs. An empty object supplies
+all defaults: a stranger greeting, limited patience, and ignorance beyond the
+approved setting and visible surroundings. The optional overrides are:
+
+| Field | Purpose |
+| --- | --- |
+| `knowledge` | At most 400 characters of facts this person should know. |
+| `greeting` | At most 120 characters of plain speech; default: “What do you need?” |
+| `when` | An existing [condition DSL](condition-builder-guide.md) condition; false means a free refusal. Default: no extra restriction. |
+
+`setting` is shared knowledge, limited to 800 characters. Review it from an
+ordinary resident's perspective. Avoid exact historical dates, distant news,
+divine secrets, or travel knowledge unless these people should actually know
+them. A `when` condition can use existing faction reputation; economic refusals
+never change reputation.
+
+The packet also includes bounded excerpts of the runtime mob's name and
+description and the current room's name and public description. Those fields
+must contain visible information suitable for the mob to observe. No world
+description, world facts, zone description, builder notes, hidden room details,
+neighboring rooms, inventory, quest state, or player identity is copied in.
+The last few turns provide temporary context, not durable memory or verified
+facts about the player.
+
+Authored quest interactions own `talk` even when a matching tracker produces
+no text. Matching authored SAY reactions also take priority, including reactions
+whose gate or condition currently prevents output. Generated speech cannot
+trigger further quest or Trigger actions or grant items and reputation.
+
+See [LLM integration](../administrators/llm-integration.md#enable-a-world-conversation-pilot)
+for installation and pilot commands. This policy is operational configuration;
+it is not part of canonical world manifests yet. Reusable knowledge attachments,
+inheritance, builder previews, and manifest support follow in Phase 1C.
+
 ## RIP Messages
 
 Set `spec.rip_message` to replace the message shown to the room when the mob

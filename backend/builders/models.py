@@ -551,6 +551,15 @@ class ItemSalvageYield(AdventBaseModel):
         ]
 
 
+class MobConversationPolicy(models.Model):
+    """Explicit, small world pilot; reusable knowledge authoring follows later."""
+    world = models.OneToOneField('worlds.World', on_delete=models.CASCADE, primary_key=True)
+    enabled = models.BooleanField(default=False)
+    revision = models.UUIDField(default=uuid.uuid4)
+    setting = models.TextField(blank=True)
+    mobs = models.JSONField(default=dict)
+
+
 class MobDefinition(AdventBaseModel):
     world = models.ForeignKey(
         'worlds.World',
