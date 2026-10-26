@@ -72,6 +72,10 @@ class TestMobConversations(WorldTestCase):
         return [item['message']['data']['text'] for item in messages
                 if item['player_key'] == player.key and item['message']['type'] == 'notification.cmd.say.success']
 
+    def notices(self, messages, player):
+        return [item['message']['text'] for item in messages
+                if item['player_key'] == player.key and item['message']['type'] == 'notification.mob.conversation']
+
     def test_public_greeting_and_complete_say_exchange(self):
         messages = self.command('talk')
         self.assertEqual(self.spoken(messages, self.player), ['Mind the wet clay.'])
@@ -321,9 +325,79 @@ class TestMobConversations(WorldTestCase):
     def test_expired_focus_does_not_submit(self):
         self.command('talk potter')
         MobConversationFocus.objects.update(expires_at=timezone.now() - timedelta(seconds=1))
-        self.command('say Hello.')
+        messages = self.command('say Hello.')
+        self.assertEqual(self.notices(messages, self.player), ['A potter turns away, no longer listening to you.'])
+        self.assertEqual(self.notices(messages, self.watcher), [])
         self.assertFalse(InferenceRequest.objects.exists())
         self.assertIsNone(MobConversationFocus.objects.get().mob_id)
+        self.assertEqual(self.notices(self.command('say Still there?'), self.player), [])
+
+    def test_poll_notifies_once_for_idle_and_maximum_lifetime_expiry(self):
+        for expiry in ('idle', 'hard'):
+            with self.subTest(expiry=expiry):
+                MobConversationAllowance.objects.update(last_notice_at=None)
+                self.command('talk potter')
+                past = timezone.now() - timedelta(seconds=1)
+                changes = {'expires_at': past}
+                if expiry == 'hard':
+                    changes['hard_expires_at'] = past
+                MobConversationFocus.objects.update(**changes)
+                with capture_game_messages() as messages:
+                    service.poll()
+                    service.poll()
+                    flush_game_event_outbox()
+                self.assertEqual(self.notices(messages, self.player), ['A potter turns away, no longer listening to you.'])
+                self.assertEqual(self.notices(messages, self.watcher), [])
+                focus = MobConversationFocus.objects.get()
+                self.assertIsNone(focus.mob_id)
+                self.assertEqual(focus.transcript, [])
+        self.assertFalse(InferenceRequest.objects.exists())
+        self.assertEqual(MobConversationAllowance.objects.get().used, 0)
+
+    def test_timeout_after_other_invalidation_is_silent(self):
+        original_room = self.player.room_id
+        other_room = self.room.create_at('east')
+        for change in ('move', 'logout', 'death', 'mob_move', 'policy'):
+            with self.subTest(change=change):
+                self.player.room_id, self.player.in_game, self.player.health = original_room, True, 20
+                self.player.save(update_fields=['room', 'in_game', 'health'])
+                Mob.objects.filter(pk=self.mob.pk).update(follow_move_sequence=0)
+                MobConversationPolicy.objects.filter(pk=self.policy.pk).update(enabled=True)
+                MobConversationAllowance.objects.update(last_notice_at=None)
+                self.command('talk potter')
+                MobConversationFocus.objects.update(expires_at=timezone.now() - timedelta(seconds=1))
+                # Bypass signals to exercise expiry's own eligibility check.
+                if change == 'move':
+                    Player.objects.filter(pk=self.player.pk).update(room=other_room)
+                elif change == 'logout':
+                    Player.objects.filter(pk=self.player.pk).update(in_game=False)
+                elif change == 'death':
+                    Player.objects.filter(pk=self.player.pk).update(health=0)
+                elif change == 'mob_move':
+                    Mob.objects.filter(pk=self.mob.pk).update(follow_move_sequence=1)
+                else:
+                    MobConversationPolicy.objects.filter(pk=self.policy.pk).update(enabled=False)
+                with capture_game_messages() as messages:
+                    service.poll()
+                    flush_game_event_outbox()
+                self.assertEqual(self.notices(messages, self.player), [])
+                self.assertIsNone(MobConversationFocus.objects.get().mob_id)
+
+    def test_dispatch_expiry_notifies_and_cancels_without_provider_work(self):
+        self.command('talk potter')
+        self.command('say Hello.')
+        request = InferenceRequest.objects.get()
+        MobConversationFocus.objects.update(expires_at=timezone.now() - timedelta(seconds=1))
+        with capture_game_messages() as messages, patch('inference.providers.perform') as provider:
+            execute_request(str(request.pk))
+            service.poll()
+            flush_game_event_outbox()
+        provider.assert_not_called()
+        request.refresh_from_db()
+        self.assertEqual(request.status, 'cancelled')
+        self.assertEqual(request.charged_micro, 0)
+        self.assertEqual(self.notices(messages, self.player), ['A potter turns away, no longer listening to you.'])
+        self.assertEqual(self.notices(messages, self.watcher), [])
 
     def test_late_outbox_delivery_is_suppressed_after_movement(self):
         self.command('talk potter')
@@ -513,6 +587,20 @@ class TestConversationConcurrency(TransactionTestCase):
         self.race([lambda data=data: service.hear(player.pk, data) for data in inputs])
         self.assertEqual(InferenceRequest.objects.count(), 1)
         self.assertEqual(MobConversationAllowance.objects.get().used, 1)
+
+    def test_concurrent_expiry_sends_one_notice(self):
+        player = self.players[0]
+        self.greet(player)
+        MobConversationFocus.objects.update(expires_at=timezone.now() - timedelta(seconds=1))
+        self.race([lambda: service.finish(player.pk), lambda: service.finish(player.pk)])
+        with capture_game_messages() as messages:
+            flush_game_event_outbox()
+        notices = [item for item in messages if item['message']['type'] == 'notification.mob.conversation']
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(notices[0]['player_key'], player.key)
+        self.assertEqual(notices[0]['message']['text'], 'Potter turns away, no longer listening to you.')
+        self.assertIsNone(MobConversationFocus.objects.get(player=player).mob_id)
+        self.assertFalse(InferenceRequest.objects.exists())
 
     def test_provider_runs_without_game_transaction_and_stop_discards_paid_result(self):
         player = self.players[0]

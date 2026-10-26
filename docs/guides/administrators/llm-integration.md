@@ -242,6 +242,11 @@ the shared financial ledger separately refunds requests cancelled before
 dispatch. Closing/reopening a conversation does not reset patience or allowances.
 Refusal does not change faction reputation or consume an authored quest attempt.
 
+Idle and maximum-lifetime expiry send one in-world notice to the listening player
+if the participants are still eligible and together. The existing bounded poll
+handles this notice; an input or queued dispatch that encounters expiry first
+also closes and notifies once. Timeout notices do not call the provider.
+
 Extra SAY messages while a reply is pending remain public but are not queued for
 later answers. No provider work occurs for greetings, refusals, bystanders,
 forced/scripted player speech, or idle mobs. Each admitted turn is checked again

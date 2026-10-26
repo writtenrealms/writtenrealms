@@ -125,7 +125,9 @@ apply across your characters.
 
 Conversation ends when either participant leaves, dies, enters combat, or when
 you log out. It also expires after 90 seconds without an accepted turn or reply,
-or after five minutes overall. Start again with `talk` when appropriate.
+or after five minutes overall. If you are still together when it expires, you
+see a message such as “Menon turns away, no longer listening to you.” Start again
+with `talk` when appropriate.
 Tells and whispers to mobs are not supported.
 
 These people know their immediate lives, not everything about the world. They

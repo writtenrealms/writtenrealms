@@ -78,7 +78,7 @@ def _consume(data):
         event_id=event_id, subscriber='mob_conversations')[1]
 
 
-def _eligible(player, mob, policy, *, focus=None, speech=None, check_quests=True):
+def _eligible(player, mob, policy, *, focus=None, speech=None, check_quests=True, check_expiry=True):
     if (not player or not mob or not policy or not player.in_game or player.health <= 0
             or player.is_muted or player.user.is_muted or player.state != 'standing'
             or mob.health <= 0 or mob.is_pending_deletion or not mob.talkable
@@ -103,7 +103,7 @@ def _eligible(player, mob, policy, *, focus=None, speech=None, check_quests=True
             or focus.mob_move_sequence != mob.follow_move_sequence
             or focus.player_disconnection_ts != player.last_disconnection_ts
             or focus.world_session != _current_session(player.world_id)
-            or focus.expires_at <= timezone.now() or focus.hard_expires_at <= timezone.now()):
+            or (check_expiry and (focus.expires_at <= timezone.now() or focus.hard_expires_at <= timezone.now()))):
         return False
     if check_quests and resolve_talk_interaction(player, {'target': {
         'id': mob.pk, 'key': mob.key, 'definition_id': mob.definition_id,
@@ -171,6 +171,18 @@ def _close(focus, *, invalidate=True):
     if invalidate:
         focus.generation = uuid.uuid4()
     focus.save(update_fields=['mob', 'pending_request', 'transcript', 'generation', 'publication_batch'])
+
+
+def _expire(player, mob, policy, focus, *, speech=None):
+    """Close once under the focus lock; only a still-present listener gets a notice."""
+    now = timezone.now()
+    if focus.expires_at > now and focus.hard_expires_at > now:
+        return False
+    if _eligible(player, mob, policy, focus=focus, speech=speech, check_expiry=False):
+        _emit([GameEvent(type='notification.mob.conversation', recipients=[player.key], data={},
+                         text=f'{mob.name} turns away, no longer listening to you.')])
+    _close(focus)
+    return True
 
 
 @contextmanager
@@ -257,7 +269,12 @@ def hear(player_id, event_data, *, authored=False):
         mob, policy = _mob(focus.mob_id), _policy(player)
         authored_mobs = event_data.get(AUTHORED_KEY, [])
         speech = str(event_data.get('text') or '')[:280]
-        if authored or authored_mobs == 'replayed' or focus.mob_id in authored_mobs or not _eligible(player, mob, policy, focus=focus, speech=speech):
+        if authored or authored_mobs == 'replayed' or focus.mob_id in authored_mobs:
+            _close(focus)
+            return
+        if _expire(player, mob, policy, focus, speech=speech):
+            return
+        if not _eligible(player, mob, policy, focus=focus, speech=speech):
             _close(focus)
             return
         now = timezone.now()
@@ -323,6 +340,9 @@ def dispatch_guard(request_id):
             return
         mob, policy = _mob(focus.mob_id), _policy(player)
         speech = (focus.transcript[-1].get('content') if focus.transcript else '')
+        if _expire(player, mob, policy, focus, speech=speech):
+            yield False
+            return
         allowed = _eligible(player, mob, policy, focus=focus, speech=speech)
         if not allowed:
             _close(focus)
@@ -345,6 +365,8 @@ def finish(player_id):
             return
         mob, policy = _mob(focus.mob_id), _policy(player) if player else None
         speech = next((m['content'] for m in reversed(focus.transcript) if m['role'] == 'user'), '')
+        if _expire(player, mob, policy, focus, speech=speech):
+            return
         if not player or not _eligible(player, mob, policy, focus=focus, speech=speech):
             _close(focus)
             return
