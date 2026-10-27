@@ -552,12 +552,10 @@ class ItemSalvageYield(AdventBaseModel):
 
 
 class MobConversationPolicy(models.Model):
-    """Explicit, small world pilot; reusable knowledge authoring follows later."""
+    """Operational world dialogue enablement; authored knowledge belongs to definitions."""
     world = models.OneToOneField('worlds.World', on_delete=models.CASCADE, primary_key=True)
     enabled = models.BooleanField(default=False)
     revision = models.UUIDField(default=uuid.uuid4)
-    setting = models.TextField(blank=True)
-    mobs = models.JSONField(default=dict)
 
 
 class MobDefinition(AdventBaseModel):
@@ -589,6 +587,7 @@ class MobDefinition(AdventBaseModel):
 
     attackable = models.BooleanField(default=True)
     talkable = models.BooleanField(default=True)
+    conversation = models.JSONField(default=None, null=True, blank=True)
     merchant_profile = models.ForeignKey(
         'builders.MerchantProfile',
         on_delete=models.SET_NULL,
@@ -627,10 +626,14 @@ class MobDefinition(AdventBaseModel):
     def clean(self):
         super().clean()
         from core.condition_dsl import validate_candidate_condition_payload
+        from builders.conversations import validate_conversation
+        try:
+            validate_conversation(self.conversation)
+        except ValueError as exc:
+            raise ValidationError({'conversation': str(exc)}) from exc
         try:
             validate_candidate_condition_payload(self.combat_engage_when or {}, field_name='combat_engage_when')
         except ValueError as exc:
-            from django.core.exceptions import ValidationError
             raise ValidationError({'combat_engage_when': str(exc)}) from exc
 
     def save(self, *args, **kwargs):
@@ -648,10 +651,10 @@ class MobDefinition(AdventBaseModel):
                 "modified_ts",
             ]))
         super().save(*args, **kwargs)
-        initial_state_only = bool(requested_update_fields) and (
-            requested_update_fields <= {"initial_state", "modified_ts"}
+        definition_only = bool(requested_update_fields) and (
+            requested_update_fields <= {"initial_state", "conversation", "modified_ts"}
         )
-        if not is_create and sync_spawned and not initial_state_only:
+        if not is_create and sync_spawned and not definition_only:
             from builders.mob_definitions import sync_spawned_mobs_from_definition
 
             sync_spawned_mobs_from_definition(self)

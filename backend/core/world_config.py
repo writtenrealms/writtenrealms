@@ -55,6 +55,7 @@ INSTANCE_LOCAL_CONFIG_FIELDS = {
 }
 
 INSTANCE_INHERITED_MANIFEST_FIELDS = {
+    "conversation",
     "ability_progression",
     "allow_combat",
     "announce_duel_results",

@@ -3,6 +3,7 @@ from django.urls import path, re_path, include
 from rest_framework.urlpatterns import format_suffix_patterns
 
 from builders import views as builder_views
+from builders.mob_inspection import RuntimeMobView, RuntimeMobDebugView
 from lobby import characters as lobby_characters
 from lobby import views as lobby_views
 from quests import views as quest_views
@@ -170,6 +171,9 @@ api_v1_urls = [
     path('builder/worlds/<world_pk>/admin/instance/<pk>/', builder_views.world_admin_instance, name='builder-world-admin-instance'),
     path('builder/worlds/<world_pk>/admin/instance/<pk>/reset/', builder_views.world_admin_instance_reset, name='builder-world-admin-instance-reset'),
     path('builder/worlds/<world_pk>/admin/instance/<pk>/recover/', builder_views.world_admin_instance_recover, name='builder-world-admin-instance-recover'),
+    path('builder/worlds/<world_pk>/admin/instance/<pk>/mobs/', RuntimeMobView.as_view(), name='builder-runtime-mobs'),
+    path('builder/worlds/<world_pk>/admin/instance/<pk>/mobs/<int:mob_id>/', RuntimeMobView.as_view(), name='builder-runtime-mob'),
+    path('builder/worlds/<world_pk>/admin/instance/<pk>/mobs/<int:mob_id>/debug/', RuntimeMobDebugView.as_view(), name='builder-runtime-mob-debug'),
 
 
     # Zones

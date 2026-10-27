@@ -194,32 +194,67 @@ expired conversations each second; it publishes replies through the existing
 game event outbox. Network inference stays on the dedicated worker. Restart
 workers after updating Python code, even with source bind mounts.
 
-Configure a reviewed policy for the **authored base world**. It also applies to
-runtime copies using those definitions. The checked-in Phalanx policy selects
-`athens-potter`, `athens-armorer`, and `orientation-watchman`:
+Author `spec.conversation` on each selected mob definition using the normal YAML
+editor/importer. For example, this fictional village potter knows only their craft
+and immediate surroundings:
 
-```bash
-docker compose exec backend python manage.py mob_conversations configure --world-id 12 --input-file spawns/conversations/pilots/phalanx.json --enable
-docker compose exec backend python manage.py mob_conversations status --world-id 12
+```yaml
+apiVersion: writtenrealms.com/v1alpha3
+kind: mobdefinition
+metadata:
+  slug: village-potter
+  name: The village potter
+spec:
+  type: humanoid
+  talkable: true
+  conversation:
+    knowledge: You make clay cups and jars for this village. You know your craft and the local market, but have no reliable news from elsewhere.
+    greeting: Are you looking for a cup, or just a conversation?
 ```
 
-World 12 is this project's Phalanx ID; use the matching authored ID in another
-installation. The command checks that each slug exists and is a talkable
-humanoid. See the [mob builder guide](../builders/mob-definition-builder-guide.md#optional-conversation-pilot)
-for the small JSON contract. Omit `--enable` to save a disabled policy. Every
-configuration update changes its revision, invalidating older conversations.
-Pilot configuration does not enable the shared provider or make a model call.
+Dialogue travels with the definition into runtime copies. Keep actual world
+content in your own authoring files, separate from the engine source.
+
+Author shared knowledge on the **authored base world** using **World > Config**
+or the normal world YAML importer. It is limited to 800 characters:
+
+```yaml
+kind: world
+spec:
+  conversation:
+    knowledge: This village lives by its river, farms, and weekly market. Residents know local trades and customs, not distant events.
+```
+
+This knowledge travels with world YAML export/import. Runtime worlds and instance
+templates use the base world's current knowledge. See the
+[world builder guide](../builders/world-config-builder-guide.md#shared-conversation-knowledge)
+for omission and clearing semantics. Importing knowledge does not enable dialogue.
+
+Enablement is an installation decision, separate from authored content. Set
+`DIALOGUE_WORLD_ID` to your authored base world's numeric ID:
+
+```bash
+DIALOGUE_WORLD_ID=REPLACE_WITH_AUTHORED_WORLD_ID
+docker compose exec backend python manage.py mob_conversations enable --world-id "$DIALOGUE_WORLD_ID"
+docker compose exec backend python manage.py mob_conversations status --world-id "$DIALOGUE_WORLD_ID"
+```
+
+See the [mob builder guide](../builders/mob-definition-builder-guide.md#optional-conversation-pilot)
+for the mob YAML contract. World knowledge or enablement changes invalidate older conversations;
+editing a mob's dialogue invalidates conversations with that definition only.
+`status` lists definitions that carry conversation data.
+Enabling a world does not enable the shared provider or make a model call.
 Both the world policy and the shared integration must be enabled and funded.
 
 To disable only this world's pilot:
 
 ```bash
-docker compose exec backend python manage.py mob_conversations disable --world-id 12
+docker compose exec backend python manage.py mob_conversations disable --world-id "$DIALOGUE_WORLD_ID"
 ```
 
 Players start with `talk <mob>` (or bare `talk` for an unambiguous target), then
-use `say`. `talk stop` releases their focus. Mobs outside the allowlist retain
-their existing behavior. The watchman's applicable authored quest interaction
+use `say`. `talk stop` releases their focus. Mobs without `spec.conversation` retain
+their existing behavior. An applicable authored quest interaction
 always wins over conversation, including a silent matching tracker. A matching
 authored SAY reaction also takes ownership before the model path.
 
@@ -265,6 +300,57 @@ for possessions, and attempts to override its role; mocked tests cannot establis
 actual model quality. Use the budgeted evaluation path below before broadening
 the pilot.
 
+## Inspect a conversation payload
+
+Open **World > Admin > runtime world > Mobs loaded**, select a mob, and choose
+**Debug**. This screen requires staff access, including for world owners, because
+the current conversation transcript can contain player speech.
+
+Enter a sample player SAY message (up to 280 characters) and choose **Build
+payload preview**. It uses the same bounded prompt builder and provider request
+serializer as live dialogue. The result shows the provider/model, system
+instructions, local knowledge packet, transcript context, output schema, and
+output limit. Credentials and authentication headers are never included.
+
+The preview reads greeting, knowledge, and conditions from the mob definition;
+shared knowledge comes from the authored base world. It can show authored data even before
+a world policy exists. The preview uses the current conversation when a valid focus is available and
+the checkbox is selected. Otherwise it starts with the authored greeting.
+The selected context is displayed with the result. A pending reply is flagged.
+Live gameplay still checks authored interactions, player eligibility, cooldowns,
+and budget, so a preview does not guarantee that an actual SAY would be admitted.
+Disabled integrations can still be previewed when a provider/model is configured.
+
+Previewing is read-only: it makes no provider call, reserves no budget, stores no
+request, and does not advance or open a conversation. It reconstructs a possible
+request from **current** data; it cannot recover an earlier payload after the
+room, policy, transcript, or model configuration changes. No additional capture,
+request history, or retention is introduced. Raw current records are expandable
+below the preview. Refresh explicitly to load new data; the screen does not poll.
+
+## Upgrade from separate conversation-policy knowledge
+
+Migration `builders.0270_mob_definition_conversation` copies existing policy
+entries onto matching mob definitions, preserving their exact greeting, knowledge,
+and conditions, including entries in disabled worlds, and removes the obsolete
+`MobConversationPolicy.mobs` column. Migration `worlds.0142_world_conversation_knowledge`
+adds the world definition field; `builders.0271_world_definition_conversation` copies
+the old shared `setting` into it and removes that policy column. The policy retains
+only world enablement and its revision. Existing text and disabled policies are preserved.
+Old conversations are invalidated; budgets and installation configuration remain
+unchanged. Entries whose definitions were already deleted are no longer retained.
+
+Apply these migrations with the API, gateway, game workers, inference worker, and scheduler
+stopped, then start all of them on the same revision. The schema change is not
+compatible with old workers still reading the removed columns. The migrations are
+reversible; rollback also requires a coordinated stop and schema/code rollback.
+
+The former `mob_conversations configure --input-file ...` command is replaced by
+world/mob YAML imports and the separate `enable`/`disable` commands. Remove old
+world-setting JSON and per-mob fragments after verifying migrated definitions and
+canonical YAML exports. Installation provider/model and budget configuration
+remain separate. No request capture or retention is added.
+
 ## Budgeted smoke and evaluation checks
 
 Commands are **dry runs unless `--execute` is present**. Dry runs validate the
@@ -275,8 +361,10 @@ Use existing user/world IDs. Both smoke checks and evaluations charge the
 preparation/evaluation allocation and the same global/world/owner limits.
 
 ```bash
-docker compose exec backend python manage.py llm smoke --world-id 12 --user-id 1
-docker compose exec backend python manage.py llm smoke --world-id 12 --user-id 1 --execute
+DIALOGUE_WORLD_ID=REPLACE_WITH_AUTHORED_WORLD_ID
+DIALOGUE_USER_ID=REPLACE_WITH_USER_ID
+docker compose exec backend python manage.py llm smoke --world-id "$DIALOGUE_WORLD_ID" --user-id "$DIALOGUE_USER_ID"
+docker compose exec backend python manage.py llm smoke --world-id "$DIALOGUE_WORLD_ID" --user-id "$DIALOGUE_USER_ID" --execute
 docker compose exec backend python manage.py llm request REQUEST_UUID --result
 ```
 
@@ -291,14 +379,14 @@ For a conversation evaluation, create a JSON input file containing only:
 
 ```json
 {
-  "instructions": "You are a potter in a small Greek village. You know your craft and immediate surroundings. Admit when you do not know something. Reply briefly in the required JSON format.",
+  "instructions": "You are a potter in a small riverside village. You know your craft and immediate surroundings. Admit when you do not know something. Reply briefly in the required JSON format.",
   "messages": [{"role": "user", "content": "Who rules the far side of the world?"}]
 }
 ```
 
 ```bash
-docker compose exec backend python manage.py llm evaluate --world-id 12 --user-id 1 --input-file /tmp/potter-case.json
-docker compose exec backend python manage.py llm evaluate --world-id 12 --user-id 1 --input-file /tmp/potter-case.json --execute
+docker compose exec backend python manage.py llm evaluate --world-id "$DIALOGUE_WORLD_ID" --user-id "$DIALOGUE_USER_ID" --input-file /tmp/potter-case.json
+docker compose exec backend python manage.py llm evaluate --world-id "$DIALOGUE_WORLD_ID" --user-id "$DIALOGUE_USER_ID" --input-file /tmp/potter-case.json --execute
 ```
 
 Evaluate one case at a time, inspecting quality, usage, and latency before the

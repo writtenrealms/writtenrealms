@@ -390,6 +390,7 @@ _MOB_DEFINITION_SPEC_FIELDS = (
     "type",
     "assists",
     "talkable",
+    "conversation",
     "attributes",
     "randomization",
     "initial_state",
@@ -1242,6 +1243,8 @@ def world_config_to_manifest(
     })
 
     # Less frequent runtime maintenance and authored state defaults.
+    if not is_instance_world:
+        spec["conversation"] = {"knowledge": world.conversation_knowledge}
     spec.update({
         "never_reload": bool(config.never_reload),
         "upkeep": authored_upkeep(world),
@@ -1392,6 +1395,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
             "name": world.name or "",
             "short_description": world.short_description or "",
             "description": world.description or "",
+            "conversation_knowledge": world.conversation_knowledge,
             "motd": world.motd or "",
             "is_public": bool(world.is_public),
             "instance_of_id": world.instance_of_id,
@@ -1686,6 +1690,7 @@ def _mob_definition_spec_from_instance(mob_definition: MobDefinition) -> dict[st
         "type": mob_definition.mob_type or adv_consts.MOB_TYPE_BEAST,
         "assists": bool(mob_definition.assists),
         "talkable": bool(mob_definition.talkable),
+        "conversation": mob_definition.conversation,
     }
     for field_name, value in (mob_definition.base_properties or {}).items():
         if field_name == "traits":
@@ -1797,6 +1802,7 @@ def serialize_mob_definition_payload(
         "type": mob_definition.mob_type,
         "assists": bool(mob_definition.assists),
         "talkable": bool(mob_definition.talkable),
+        "conversation": mob_definition.conversation,
         "aggression": _mob_definition_aggression(mob_definition),
         "base_properties": mob_definition.base_properties or {},
         "attributes": mob_definition.attributes or {},
@@ -5049,6 +5055,12 @@ def _coerce_mob_combat_abilities(
 
 
 def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], existing: MobDefinition | None) -> dict[str, Any]:
+    from builders.conversations import validate_conversation
+    conversation = spec_patch.get('conversation', existing.conversation if existing else None)
+    try:
+        validate_conversation(conversation, field_name='spec.conversation')
+    except ValueError as exc:
+        raise serializers.ValidationError(str(exc)) from exc
     mob_type = spec_patch.get(
         "type",
         existing.mob_type if existing else adv_consts.MOB_TYPE_BEAST,
@@ -5285,6 +5297,7 @@ def _coerce_mob_definition_fields(*, world: World, spec_patch: dict[str, Any], e
         "loot": loot,
         "combat_abilities": combat_abilities,
         "combat_assist": combat_assist,
+        "conversation": conversation,
         "combat_engage_when": combat_engage_when,
         "attackable": attackable,
         "merchant_profile": merchant_profile,
@@ -7694,6 +7707,7 @@ def parse_world_config_manifest(
     allowed_fields.add("instance_goal")
     allowed_fields.add("leaderboards")
     allowed_fields.add("information")
+    allowed_fields.add("conversation")
     allowed_fields.add("entry_message_conditions")
     allowed_fields.update({
         "default_currency",
@@ -7750,6 +7764,12 @@ def parse_world_config_manifest(
             )
 
     world_updates: dict[str, Any] = {}
+    if "conversation" in spec:
+        from builders.conversations import world_conversation_knowledge
+        try:
+            world_updates["conversation_knowledge"] = world_conversation_knowledge(spec["conversation"])
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
     information = None
     if "information" in spec:
         information_input = WorldInformationInputSerializer(data={"information": spec["information"]})
@@ -8301,7 +8321,7 @@ def apply_mob_definition_manifest(parsed: ParsedMobDefinitionManifest) -> MobDef
         else:
             mob_definition = parsed.mob_definition
             sync_spawned = any(
-                field_name != "initial_state"
+                field_name not in {"initial_state", "conversation"}
                 and getattr(mob_definition, field_name) != value
                 for field_name, value in parsed.fields.items()
             )

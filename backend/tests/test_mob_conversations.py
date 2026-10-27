@@ -21,7 +21,7 @@ from quests.models import QuestTemplate
 from quests.services.engine import QuestTransitionResult
 from spawns.conversations import service
 from spawns.conversations.inputs import INPUT_KEY, AUTHORED_KEY, DELIVERY_KEY
-from spawns.conversations.policy import configure, knowledge_packet
+from spawns.conversations.policy import set_enabled, knowledge_packet
 from spawns.events import flush_game_event_outbox, publish_events, GameEvent
 from spawns.models import Mob, Player, MobConversationAllowance, MobConversationFocus, CommunicationMessage, EventSubscriptionReceipt
 from spawns.communications import reset_communication_session
@@ -43,11 +43,13 @@ class TestMobConversations(WorldTestCase):
         self.watcher.in_game = True
         self.watcher.save(update_fields=['in_game'])
         self.definition = MobDefinition.objects.create(world=self.world, slug='potter', name='A potter',
-            keywords='potter', mob_type='humanoid', description='Clay covers his hands.', talkable=True)
+            keywords='potter', mob_type='humanoid', description='Clay covers his hands.', talkable=True,
+            conversation={'knowledge': 'You make clay cups.', 'greeting': 'Mind the wet clay.'})
         self.mob = Mob.objects.create(world=self.spawn_world, room=self.room, definition=self.definition,
             name='A potter', keywords='potter', description=self.definition.description, health=20)
-        self.policy = configure(self.world.pk, {'setting': 'Life here concerns work and offerings to the gods.',
-            'mobs': {'potter': {'knowledge': 'You make clay cups.', 'greeting': 'Mind the wet clay.'}}}, enabled=True)
+        self.world.conversation_knowledge = 'Life here concerns work and offerings to the gods.'
+        self.world.save(update_fields=['conversation_knowledge'])
+        self.policy = set_enabled(self.world.pk, True)
         inference.configure(copy.deepcopy(CONFIG))
         inference.set_enabled(True)
         reset_communication_session(self.spawn_world.pk)
@@ -273,12 +275,46 @@ class TestMobConversations(WorldTestCase):
         self.assertIsNone(MobConversationFocus.objects.get().mob_id)
 
     def test_condition_dsl_can_refuse_indefinitely_without_spend(self):
-        configure(self.world.pk, {'setting': '', 'mobs': {'potter': {'when': {'always': False}}}}, enabled=True)
+        self.definition.conversation = {'when': {'always': False}}
+        self.definition.save(update_fields=['conversation'])
         for _ in range(4):
             self.command('talk potter')
         self.assertFalse(InferenceRequest.objects.exists())
         self.assertFalse(MobConversationFocus.objects.filter(mob__isnull=False).exists())
         self.assertEqual(CommunicationMessage.objects.filter(sender_type='mob', channel='emote').count(), 1)
+
+    def test_definition_dialogue_edit_cancels_queued_reply(self):
+        self.command('talk potter')
+        self.command('say Hello.')
+        request = InferenceRequest.objects.get()
+        self.definition.conversation = {'greeting': 'A different greeting.'}
+        self.definition.save(update_fields=['conversation'])
+        with patch('inference.providers.perform') as provider:
+            execute_request(str(request.pk))
+        provider.assert_not_called()
+        request.refresh_from_db()
+        self.assertEqual(request.status, 'cancelled')
+        self.assertEqual(request.charged_micro, 0)
+
+    def test_clearing_dialogue_restores_authored_only_talk(self):
+        self.definition.conversation = None
+        self.definition.save(update_fields=['conversation'])
+        messages = self.command('talk potter')
+        self.assertEqual(self.spoken(messages, self.player), [])
+        self.assertFalse(MobConversationFocus.objects.filter(mob__isnull=False).exists())
+        self.assertFalse(InferenceRequest.objects.exists())
+
+    def test_world_knowledge_edit_cancels_queued_reply(self):
+        self.command('talk potter')
+        self.command('say Hello.')
+        request = InferenceRequest.objects.get()
+        World.objects.filter(pk=self.world.pk).update(conversation_knowledge='New shared knowledge')
+        with patch('inference.providers.perform') as provider:
+            execute_request(str(request.pk))
+        provider.assert_not_called()
+        request.refresh_from_db()
+        self.assertEqual(request.status, 'cancelled')
+        self.assertEqual(request.charged_micro, 0)
 
     def test_packet_excludes_secrets_and_identity(self):
         self.world.description = 'SECRET_DATE_499BC'
@@ -412,6 +448,31 @@ class TestMobConversations(WorldTestCase):
             flush_game_event_outbox()
         self.assertEqual(self.spoken(messages, self.player), [])
 
+    def test_late_outbox_delivery_is_suppressed_after_dialogue_edit(self):
+        self.command('talk potter')
+        self.command('say Hello.')
+        focus = MobConversationFocus.objects.get()
+        claim = inference.claim(focus.pending_request_id)
+        inference.settle(claim.pk, claim.dispatch_token, Outcome(usage=USAGE, result={'text': 'Outdated.'}))
+        service.poll()
+        self.definition.conversation = {'knowledge': 'A newly reviewed account.'}
+        self.definition.save(update_fields=['conversation'])
+        with capture_game_messages() as messages:
+            flush_game_event_outbox()
+        self.assertEqual(self.spoken(messages, self.player), [])
+
+    def test_late_outbox_delivery_is_suppressed_after_world_knowledge_edit(self):
+        self.command('talk potter')
+        self.command('say Hello.')
+        focus = MobConversationFocus.objects.get()
+        claim = inference.claim(focus.pending_request_id)
+        inference.settle(claim.pk, claim.dispatch_token, Outcome(usage=USAGE, result={'text': 'Outdated.'}))
+        service.poll()
+        World.objects.filter(pk=self.world.pk).update(conversation_knowledge='New shared knowledge')
+        with capture_game_messages() as messages:
+            flush_game_event_outbox()
+        self.assertEqual(self.spoken(messages, self.player), [])
+
     def test_outbox_backpressure_prevents_another_paid_turn(self):
         self.command('talk potter')
         self.command('say Hello.')
@@ -537,10 +598,12 @@ class TestConversationConcurrency(TransactionTestCase):
         self.players = [Player.objects.create(user=self.user, world=self.runtime, room=self.room,
             name=f'Visitor {i}', in_game=True) for i in range(2)]
         self.definition = MobDefinition.objects.create(world=self.world, slug='potter', name='Potter',
-            mob_type='humanoid', talkable=True)
+            mob_type='humanoid', talkable=True, conversation={})
         self.mob = Mob.objects.create(world=self.runtime, room=self.room, definition=self.definition,
             name='Potter', keywords='potter', health=20)
-        configure(self.world.pk, {'setting': 'A small village.', 'mobs': {'potter': {}}}, enabled=True)
+        self.world.conversation_knowledge = 'A small village.'
+        self.world.save(update_fields=['conversation_knowledge'])
+        set_enabled(self.world.pk, True)
         inference.configure(copy.deepcopy(CONFIG))
         inference.set_enabled(True)
         reset_communication_session(self.runtime.pk)

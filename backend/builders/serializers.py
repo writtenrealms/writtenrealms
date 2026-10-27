@@ -260,13 +260,13 @@ class WorldSerializer(serializers.ModelSerializer):
             'key', 'id', 'name', 'description', 'motd', 'author', 'created_ts',
             'last_viewed_room', 'short_description', 'state', 'is_multiplayer',
             'is_public', 'factions', 'facts', 'is_classless', 'class_options',
-            'initial_state',
+            'initial_state', 'conversation_knowledge',
             'maintenance_mode', 'maintenance_msg', 'instance_of',
             'builder_info', 'currencies', 'default_currency',
             'initial_currency_code', 'initial_currency_name',
             'initial_currency_plural_name',
         )
-        read_only_fields = ('initial_state',)
+        read_only_fields = ('initial_state', 'conversation_knowledge')
 
     def validate(self, *args, **kwargs):
         request = self.context['request']
@@ -2307,13 +2307,14 @@ class MobDefinitionSerializer(serializers.ModelSerializer):
     randomized = serializers.SerializerMethodField()
     trainer = serializers.SerializerMethodField()
     trainer_profile = serializers.SerializerMethodField()
+    conversation = serializers.JSONField(read_only=True)
 
     class Meta:
         model = MobDefinition
         fields = [
             'id', 'key', 'slug', 'name', 'model_type', 'modified_ts',
             'description', 'room_description', 'rip_message', 'notes', 'keywords',
-            'type', 'assists', 'talkable', 'base_properties', 'attributes',
+            'type', 'assists', 'talkable', 'conversation', 'base_properties', 'attributes',
             'randomization', 'randomized', 'initial_state', 'traits', 'loot',
             'combat_abilities',
             'trainer', 'trainer_profile', 'trainer_availability',

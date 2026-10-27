@@ -834,3 +834,11 @@ svg.lucide {
 
   &.inline-notice-error { border-left-color: $color-red; }
 }
+.metric-card-link {
+  display: block;
+  color: $color-text;
+  text-decoration: none;
+  &:hover { border-color: $color-secondary; }
+  &:focus-visible { outline: 2px solid $color-secondary; outline-offset: 3px; }
+  > small:last-child { color: $color-secondary; margin-top: 0.5rem; }
+}

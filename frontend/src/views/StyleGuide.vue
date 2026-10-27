@@ -223,6 +223,8 @@
       <h2>Metrics and notices</h2>
       <p class="sg-note">Use <span class="sg-code">.metric-grid</span> and <span class="sg-code">.metric-card</span> for bounded summary counts. Put the label, value, and context in span, strong, and small elements.</p>
       <div class="metric-grid"><div class="metric-card"><span>Characters online</span><strong>24</strong><small>Across 3 running worlds</small></div><div class="metric-card"><span>New accounts · 24h</span><strong>8</strong><small>112 total accounts</small></div></div>
+      <p class="sg-note">Use <span class="sg-code">.metric-card-link</span> on a link when a metric opens a detail screen.</p>
+      <router-link to="/styleguide#dashboards" class="metric-card metric-card-link"><span>Mobs loaded</span><strong>27</strong><small>0 pending deletion</small><small>View loaded mobs →</small></router-link>
       <p class="inline-notice">.inline-notice — Settings saved. Access changes take effect shortly.</p>
       <p class="inline-notice inline-notice-error">.inline-notice.inline-notice-error — Could not refresh. Previously loaded values may be out of date.</p>
       <p class="sg-note">ConsoleNotice frames the Message of the Day, Time Control, and instance completion.
@@ -263,6 +265,9 @@
           </div>
           <p class="dashboard-note">.dashboard-note — Supporting context stays muted and readable.</p>
           <p class="dashboard-empty">.dashboard-empty — No world state is currently set.</p>
+          <InspectionFacts :values="{ supports_conversation: true, approved_knowledge: 'You are a stonecutter.', attributes: { strength: 10 } }" />
+          <JsonInspector title="Example raw record" :value="{ name: 'Menon', state: { met_visitors: 2 } }" />
+          <p class="dashboard-note">InspectionFacts presents readable field values. JsonInspector keeps raw JSON in an expandable, keyboard-accessible panel with a copy action.</p>
         </div>
       </div>
       <p class="sg-note mt-4">Use <span class="sg-code">.dashboard-facts</span> on a dl with div-wrapped dt/dd pairs;
@@ -450,6 +455,8 @@
 
 <script lang="ts" setup>
 import MarkdownContent from '@/components/MarkdownContent.vue';
+import InspectionFacts from '@/components/builder/InspectionFacts.vue';
+import JsonInspector from '@/components/builder/JsonInspector.vue';
 
 const markdownExample = '## Welcome to Phalanx\n\nExplore **ancient Greece** and choose your path. Read the [player guides](/docs/players/).\n\n- Meet the locals.\n- Find your first quest.\n\n> A world shaped by its players.\n\nType `look` to begin.\n\n```text\nA long passage can wrap naturally inside a code block, keeping the whole message readable even on a narrow screen.\n    Indentation and explicit line breaks are preserved.\n```\n\n| Place | Activity |\n| --- | --- |\n| Agora | Trade and conversation |';
 import { useStore } from "vuex";

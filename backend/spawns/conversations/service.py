@@ -14,14 +14,13 @@ from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
-from builders.models import MobConversationPolicy
 from core.condition_dsl import ConditionContext, evaluate_condition
 from inference import service as inference
-from inference.configuration import Unavailable, validate_payload
+from inference.configuration import Unavailable
 from inference.models import InferenceControl, InferenceRequest
 from quests.services.interactions import resolve_talk_interaction
 from spawns.conversations.inputs import AUTHORED_KEY, DELIVERY_KEY, INPUT_KEY
-from spawns.conversations.policy import GREETING, prompt
+from spawns.conversations.policy import GREETING, bounded_prompt, policy_queryset, revision_for
 from spawns.events import GameEvent, _enqueue_game_event_batch, flush_game_event_outbox_batch
 from spawns.instance_clock import clock_guard, current_simulation
 from spawns.models import (
@@ -54,7 +53,7 @@ def _mob(mob_id):
 
 
 def _policy(player):
-    return MobConversationPolicy.objects.filter(world_id=_base_world(player), enabled=True).first()
+    return policy_queryset().filter(world_id=_base_world(player), enabled=True).first()
 
 
 def _current_session(world_id):
@@ -85,7 +84,7 @@ def _eligible(player, mob, policy, *, focus=None, speech=None, check_quests=True
             or not mob.definition or not mob.definition.talkable or mob.definition.mob_type != 'humanoid'
             or player.world_id != mob.world_id or player.room_id != mob.room_id):
         return False
-    spec = policy.mobs.get(mob.definition.slug)
+    spec = mob.definition.conversation
     if spec is None:
         return False
     combat = CombatParticipant.objects.filter(Q(player_id=player.pk) | Q(mob_id=mob.pk))
@@ -98,7 +97,7 @@ def _eligible(player, mob, policy, *, focus=None, speech=None, check_quests=True
         actor=player, player=player, room=player.room, zone=player.room.zone, world=player.world,
     )):
         return False
-    if focus and (focus.policy_revision != policy.revision or focus.world_id != player.world_id
+    if focus and (focus.policy_revision != revision_for(mob, policy) or focus.world_id != player.world_id
             or focus.room_id != player.room_id or focus.player_location_sequence != player.location_sequence
             or focus.mob_move_sequence != mob.follow_move_sequence
             or focus.player_disconnection_ts != player.last_disconnection_ts
@@ -216,8 +215,8 @@ def greet(player_id, event_data, *, authored=False):
             _close(focus)
             return
         policy = _policy(player)
-        # Non-pilot definitions keep their existing authored-only TALK behavior.
-        if not policy or not mob.definition or mob.definition.slug not in policy.mobs:
+        # Definitions without authored dialogue keep their existing TALK behavior.
+        if not policy or not mob.definition or mob.definition.conversation is None:
             _close(focus)
             return
         now = timezone.now()
@@ -240,10 +239,10 @@ def greet(player_id, event_data, *, authored=False):
             return
         if not _consume(event_data):
             return
-        greeting = policy.mobs[mob.definition.slug].get('greeting') or GREETING
+        greeting = mob.definition.conversation.get('greeting') or GREETING
         focus, _ = MobConversationFocus.objects.update_or_create(player=player, defaults={
             'mob': mob, 'generation': uuid.uuid4(), 'world_id': player.world_id, 'room_id': player.room_id,
-            'world_session': _current_session(player.world_id), 'policy_revision': policy.revision,
+            'world_session': _current_session(player.world_id), 'policy_revision': revision_for(mob, policy),
             'inference_generation': capacity['generation'], 'player_location_sequence': player.location_sequence,
             'mob_move_sequence': mob.follow_move_sequence, 'player_disconnection_ts': player.last_disconnection_ts,
             'started_at': now, 'expires_at': now + IDLE, 'hard_expires_at': now + HARD_LIMIT,
@@ -295,17 +294,7 @@ def hear(player_id, event_data, *, authored=False):
             capacity = inference.capacity(user_id=player.user_id, world_id=_base_world(player), purpose='mob_conversation')
             if capacity['generation'] != focus.inference_generation:
                 raise Unavailable('changed_configuration')
-            payload = prompt(player, mob, policy, focus.transcript, speech)
-            # Keep the current input and approved packet; drop oldest transcript
-            # pairs until the gateway's conservative bound fits the chosen model.
-            while True:
-                try:
-                    validate_payload(payload['instructions'], payload['messages'], capacity['profile'])
-                    break
-                except Unavailable as error:
-                    if str(error) != 'input_too_large' or len(payload['messages']) <= 2:
-                        raise
-                    del payload['messages'][1:min(3, len(payload['messages']) - 1)]
+            payload = bounded_prompt(player, mob, policy, focus.transcript, speech, capacity['profile'])
             identity = uuid.UUID(event_data[INPUT_KEY]['id'])
             admission = inference.submit(request_id=identity, user_id=player.user_id,
                 world_id=player.world_id, purpose='mob_conversation', **payload)
@@ -438,8 +427,9 @@ def delivery_allowed(data):
         return False
     mob = Mob.objects.select_related('definition').filter(pk=data['mob_id']).first()
     focus = MobConversationFocus.objects.filter(player_id=player.pk, generation=data['focus']).first()
-    policy = MobConversationPolicy.objects.filter(world_id=data['policy_world'], enabled=True,
-                                                  revision=data['policy_revision']).first()
+    policy = policy_queryset().filter(world_id=data['policy_world'], enabled=True).first()
+    if not mob or str(revision_for(mob, policy)) != data['policy_revision']:
+        return False
     control = InferenceControl.objects.filter(pk=1, enabled=True, generation=data['inference_generation']).filter(
         Q(circuit_until__isnull=True) | Q(circuit_until__lte=timezone.now())).exists()
     return bool(focus and control and _eligible(player, mob, policy, focus=focus))

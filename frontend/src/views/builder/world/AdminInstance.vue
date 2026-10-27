@@ -48,11 +48,12 @@
       </div>
 
       <div class="metric-grid">
-        <div v-for="card in summaryCards" :key="card.label" class="metric-card">
+        <component :is="card.to ? 'router-link' : 'div'" v-for="card in summaryCards" :key="card.label" :to="card.to" class="metric-card" :class="{ 'metric-card-link': card.to }">
           <span>{{ card.label }}</span>
           <strong :class="{ 'metric-value-text': card.textValue }">{{ card.value }}</strong>
           <small v-if="card.note">{{ card.note }}</small>
-        </div>
+          <small v-if="card.to">View loaded mobs →</small>
+        </component>
       </div>
 
       <div class="dashboard-grid">
@@ -286,6 +287,7 @@ const summaryCards = computed(() => {
   return [
     {
       label: 'Mobs loaded',
+      to: `/build/worlds/${route.params.world_id}/admin/${route.params.instance_id}/mobs`,
       value: formatNumber(instance.value.counts.mobs_loaded),
       note: `${formatNumber(instance.value.counts.mobs_pending_deletion)} pending deletion`,
     },

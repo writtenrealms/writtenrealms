@@ -541,7 +541,7 @@ const isWorldConfigRoute = computed(() => {
   ];
   return routes.includes(route.name as string);
 });
-const isWorldAdminRoute = computed(() => { return route.name === 'builder_world_admin_instance'; });
+const isWorldAdminRoute = computed(() => String(route.name).startsWith('builder_world_admin_'));
 const isWorldBuilderRoute = computed(() => {
   const routes = [
     'builder_world_builder_list',

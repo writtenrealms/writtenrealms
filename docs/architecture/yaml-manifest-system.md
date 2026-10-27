@@ -188,6 +188,13 @@ Current required mappings:
   preserves existing values.
 - WR1 `MobTemplate` rows export as `kind: mobdefinition`; WR2 no longer has a
   `MobTemplate` model, manifest kind, API endpoint, or runtime mob FK.
+- WR2 mob `spec.conversation` holds optional `greeting`, `knowledge`, and existing-DSL
+  `when`. Omission preserves an existing section; null removes it; `{}` selects
+  default dialogue. Canonical exports always emit the mapping or null. World
+  shared knowledge/enablement and installation provider/budgets are separate.
+  The optional WR1 exporter must not invent LLM dialogue from mob descriptions,
+  builder notes, or authored TALK/SAY scripts; preserve those authored behaviors
+  and leave conversation unconfigured unless explicitly authored for WR2.
 - WR1 mob `mana_max` and `mana_regen` become `energy_max` and `energy_regen`,
   `spell_power` becomes `ability_power`, and positive legacy Gold rewards become
   `spec.rewards.currencies.gold`. Split the whitespace-delimited WR1 `traits`
@@ -2421,6 +2428,14 @@ this `spec`:
 
 For a full field reference, see
 [world-config-builder-guide.md](../guides/builders/world-config-builder-guide.md).
+
+Base-world `spec.conversation.knowledge` is reviewed shared NPC knowledge, at most
+800 characters. It round-trips through the same world YAML editor and exports.
+Omission preserves it; null, an empty mapping, or empty knowledge clears it.
+Instance templates inherit the base value. Enablement and provider/budget controls
+are installation data and are never carried by this section. The optional WR1
+converter must omit it unless knowledge was explicitly reviewed and authored;
+do not turn WR1 descriptions, builder notes, or hidden lore into shared NPC knowledge.
 
 ```yaml
 kind: world

@@ -4,12 +4,13 @@ Status: Phases 1A and 1B implemented October 26, 2026. The shared service is in
 `backend/inference/`; the first opt-in TALK/SAY pilot is in
 `backend/spawns/conversations/`. See the [administrator integration guide](../guides/administrators/llm-integration.md)
 for supported configuration and commands. The integration starts disabled.
-The reusable knowledge, manifest, relationship, and later-phase contracts below
-remain proposals; Phase 1B's implemented subset is described in its plan section.
+Mob-specific `spec.conversation` YAML and its canonical import/export are also
+implemented. Reusable knowledge, inheritance, relationship, and richer later-phase
+contracts below remain proposals; the implemented subset is described in Phase 1B.
 
 ## Objective and Scope
 
-The immediate objective is convincing, affordable conversations with Phalanx
+The immediate objective is convincing, affordable conversations with authored
 mobs through `talk` and ordinary public `say` messages. Build the shared provider,
 permission, spending, and asynchronous execution plumbing required for that
 experience. Let the working conversation feature establish the foundation for
@@ -379,8 +380,8 @@ Builder notes are excluded from both automatic prompt assembly and default
 knowledge preparation. `World.facts` is not a lore catalog. Existing initial
 state and runtime scoped state keep their current gameplay roles.
 
-Phalanx's current world description includes an era, a geopolitical overview,
-and divine information unavailable to mortals. It is useful authoring source
+For example, a world's description may include an era, a geopolitical overview,
+and secrets unavailable to its inhabitants. It is useful authoring source
 material, but must not become universal NPC knowledge. Likewise, keys mentioned
 in a watchman's description are appearance details; only actual game inventory
 and an allowed outcome can make a key lendable.
@@ -704,13 +705,26 @@ requests remain accounted for; provider failures cannot block game workers.
 
 ### Phase 1B: First playable TALK/SAY conversation
 
-Implemented as a small operator-configured pilot. `MobConversationPolicy`
-selects 1–20 talkable humanoid definition slugs per authored base world. A short
-shared setting and optional per-mob `knowledge`, `greeting`, and existing-DSL
-`when` overrides are sufficient; `{}` supplies all mob defaults. The checked-in
-Phalanx policy selects the potter, armorer, and orientation watchman. These are
-operational policies, not new canonical manifest fields; that portability and
-the richer knowledge model remain Phase 1C.
+Implemented as a bounded TALK/SAY pilot. `MobDefinition.conversation` owns the
+optional `knowledge`, `greeting`, and existing-DSL `when` fields. Null opts out;
+`{}` supplies defaults. These fields round-trip through `spec.conversation` in
+canonical mob/world manifests. `World.conversation_knowledge` is authored as
+`spec.conversation.knowledge` on base-world YAML and round-trips with that world.
+Runtime copies and instance templates use the base value. `MobConversationPolicy`
+owns only per-world enablement and its revision. The
+[administrator guide](../guides/administrators/llm-integration.md#enable-a-world-conversation-pilot)
+uses fictional examples of world and mob-definition YAML.
+Deployment-specific authored content stays outside engine source control.
+
+A focus's policy revision combines the enablement revision, authored world knowledge,
+and the mob definition's bounded dialogue content and ID. The existing policy query
+joins only the base world's knowledge column, avoiding extra runtime queries and
+large world descriptions/maps. This catches
+mob-only edits before dispatch/publication/outbox delivery, and does not invalidate
+unrelated mobs. Dialogue-only edits skip spawned-stat resynchronization. The
+migrations preserve existing policy knowledge and remove the old knowledge columns.
+Provider credentials, model profiles, budgets, and global enablement remain in
+the shared installation layer. Richer knowledge inheritance remains Phase 1C.
 
 Quest progress and TALK resolution now return explicit `handled` ownership,
 including silent matching trackers. Authored SAY reactions own their matched
@@ -759,7 +773,7 @@ Original scope and acceptance criteria:
 
 Implement explicit authored-interaction ownership, conversation focus, authored
 greetings/refusals, patience/account quotas, turn sequencing, and ordinary mob
-speech. Use a small approved Phalanx context and conservative deterministic
+speech. Use a small approved world context and conservative deterministic
 knowledge assembly. No item transfers or model-driven quest/reputation changes.
 
 Pilot a few existing humanoids with contrasting roles. Update the player
@@ -774,6 +788,9 @@ This is the first usable deliverable. A sophisticated preparation UI, durable
 personal-memory system, and persuasion engine must not block it.
 
 ### Phase 1C: Reusable knowledge and builder defaults
+
+Per-mob dialogue YAML and the read-only runtime payload preview are already
+available. This phase extends them to reusable, inherited knowledge.
 
 Implement the knowledge-entry/attachment contract, conversation profiles,
 sparse overrides, home/locality rules, canonical manifest support, source-version
@@ -794,7 +811,7 @@ NPC's effective knowledge through the preview.
 ### Phase 1D: Relationships and one bounded persuasion quest
 
 Add the minimum personal-memory and allowed-outcome support needed for one
-Phalanx lending/persuasion interaction. Define narrative NPC identity before
+authored lending/persuasion interaction. Define narrative NPC identity before
 making recognition persist across respawns. Reuse faction reputation and the
 quest effect/condition systems. Supply an authored unavailable-mode route for
 any required progression.
@@ -804,7 +821,7 @@ cannot duplicate transfers/rewards; denied effects cannot publish success;
 economic limits do not damage reputation or consume quest attempts; the model's
 subjective role is understandable and constrained.
 
-### Phase 1E: Broader Phalanx pilot and operational hardening
+### Phase 1E: Broader conversation pilot and operational hardening
 
 Expand the NPC sample, measure real token/latency distributions, tune patience
 and allocations, and verify degradation with the provider disabled or budget

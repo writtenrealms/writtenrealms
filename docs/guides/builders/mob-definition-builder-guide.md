@@ -103,31 +103,54 @@ button for an opposing faction. Omit the field from a partial edit to keep its
 current value; set it to `true` to restore talking. Definition edits update
 existing spawned copies and future spawns, and exports always include the value.
 
+### Inspect a loaded mob
+
+Open **World > Admin**, select a runtime world, then choose **Mobs loaded**.
+Search by name, runtime ID, definition slug, keywords, or room. The list shows
+up to 50 mobs per page; select one to inspect its current location, vitals,
+attributes, behavior, inventory, equipment, spawn placement, and character state.
+Conversation data includes the authored greeting, approved knowledge, conditions,
+and whether the world policy is enabled. This screen is read-only and available
+to the world's author, assigned builders, and staff.
+
+Use **Refresh** for a new snapshot. Stopped worlds can have no loaded mobs;
+enter the world to load its population. Runtime IDs disappear when mobs despawn
+or a world resets. Carried items are paged in groups of 100; unusually large
+equipment, effects, and faction lists explicitly show when they are truncated.
+
+Staff can open the separate **Debug** screen for raw records and a hypothetical
+[LLM payload preview](../administrators/llm-integration.md#inspect-a-conversation-payload).
+The mob definition and the runtime mob remain separate records: inspecting a
+loaded mob does not edit either one.
+
 ### Optional conversation pilot
 
-With the shared LLM integration enabled, an operator can select up to 20
-talkable humanoid definitions for public `talk` / `say` conversations. Other mobs
-keep their existing authored behavior. `talkable: true` alone does not opt a mob
-into paid inference, and no additional AI fields are required in mob YAML.
+Author each mob's dialogue under `spec.conversation` in its definition YAML. It
+travels through ordinary mob/world export and import, and is editable in the
+existing mob YAML editor. Only talkable humanoids can participate; authored
+quests and speech reactions retain priority.
 
-The first pilot uses one small JSON policy per authored base world:
-
-```json
-{
-  "setting": "People here know village work, local customs, and offerings to the gods.",
-  "mobs": {
-    "village-potter": {
-      "knowledge": "You make clay cups and jars at this workshop.",
-      "greeting": "Mind the wet clay."
-    },
-    "village-guard": {}
-  }
-}
+```yaml
+kind: mobdefinition
+metadata:
+  slug: village-potter
+spec:
+  type: humanoid
+  talkable: true
+  conversation:
+    knowledge: You make clay cups and jars at this workshop.
+    greeting: Mind the wet clay.
+    when: {always: true}
 ```
 
-The keys under `mobs` are existing definition slugs. An empty object supplies
-all defaults: a stranger greeting, limited patience, and ignorance beyond the
-approved setting and visible surroundings. The optional overrides are:
+Omitting `conversation` in a partial update preserves its current value. A new
+definition without it has no LLM dialogue. Set `conversation: null` to remove it,
+or `conversation: {}` to opt into default dialogue: a stranger greeting and no
+extra knowledge or conditions. A supplied mapping replaces the whole conversation
+section. Canonical exports include either the mapping or explicit null, so a
+round trip preserves removal as well as configuration.
+
+The supported fields are:
 
 | Field | Purpose |
 | --- | --- |
@@ -135,7 +158,8 @@ approved setting and visible surroundings. The optional overrides are:
 | `greeting` | At most 120 characters of plain speech; default: “What do you need?” |
 | `when` | An existing [condition DSL](condition-builder-guide.md) condition; false means a free refusal. Default: no extra restriction. |
 
-`setting` is shared knowledge, limited to 800 characters. Review it from an
+The base world's `spec.conversation.knowledge` supplies shared knowledge limited
+to 800 characters. Review it from an
 ordinary resident's perspective. Avoid exact historical dates, distant news,
 divine secrets, or travel knowledge unless these people should actually know
 them. A `when` condition can use existing faction reputation; economic refusals
@@ -155,9 +179,16 @@ whose gate or condition currently prevents output. Generated speech cannot
 trigger further quest or Trigger actions or grant items and reputation.
 
 See [LLM integration](../administrators/llm-integration.md#enable-a-world-conversation-pilot)
-for installation and pilot commands. This policy is operational configuration;
-it is not part of canonical world manifests yet. Reusable knowledge attachments,
-inheritance, builder previews, and manifest support follow in Phase 1C.
+for world enablement and installation commands. Shared knowledge belongs to the
+world definition; each mob owns its own knowledge. World enablement, provider/model,
+credentials, and budgets stay outside authored YAML. Importing dialogue does not enable either switch or
+make a provider call. Keeping conversation data while `talkable` is false is
+allowed, but it cannot be used until the mob is eligible again.
+
+Changing a mob's dialogue invalidates its active conversations and suppresses
+older queued or delayed replies. It does not reset spending or patience, reapply
+spawned combat stats, or require respawning the mob. Reusable knowledge attachments
+and inheritance remain future work.
 
 ## RIP Messages
 

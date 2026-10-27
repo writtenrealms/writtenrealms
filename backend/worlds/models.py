@@ -10,7 +10,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import GinIndex
 from core.leaderboards import default_leaderboards
 from django.core.exceptions import ValidationError
-from django.core.validators import MaxValueValidator, MinValueValidator
+from django.core.validators import MaxLengthValidator, MaxValueValidator, MinValueValidator
 from django.db import models, router, transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -66,6 +66,7 @@ class World(AdventBaseModel):
     name = models.TextField()
     short_description = models.TextField(blank=True)
     description = models.TextField(blank=True)
+    conversation_knowledge = models.TextField(blank=True, default='', validators=[MaxLengthValidator(800)])
     motd = models.TextField(**optional) # message of the day
 
     lifecycle = models.TextField(choices=list_to_choice(

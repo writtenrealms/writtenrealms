@@ -52,6 +52,35 @@ spec:
     - Find your first quest.
 ```
 
+## Shared conversation knowledge
+
+Use `spec.conversation.knowledge` for facts ordinary inhabitants should share.
+This is reviewed NPC knowledge, separate from the public lobby description and
+information page. It does not automatically include either of those texts.
+
+```yaml
+kind: world
+spec:
+  conversation:
+    knowledge: This village lives by its river, farms, and weekly market. Residents know local trades and customs, not distant events.
+```
+
+Knowledge is text limited to 800 characters. Omitting `conversation` preserves
+the current value. `conversation: null`, `conversation: {}`, or
+`conversation: {knowledge: ""}` clears it. A supplied section replaces the whole
+section; only `knowledge` is supported. Canonical exports explicitly include
+`conversation: {knowledge: ""}` when empty so round trips preserve clearing.
+
+The authored base world owns this knowledge. Instance templates and running
+copies use its current value and cannot override it. Updates apply without
+respawning; active conversations and queued/delayed replies using older knowledge
+are invalidated. Mob-specific knowledge remains on each mob definition.
+
+Import/export includes the knowledge, but not dialogue enablement, API keys,
+provider/model selection, or spending limits. Administrators enable dialogue
+separately through the [LLM integration controls](../administrators/llm-integration.md#enable-a-world-conversation-pilot).
+Importing this section makes no provider call.
+
 ## Editing world configuration
 
 Loading or saving reloads the YAML in the [standard field order](#yaml-field-order),

@@ -28,9 +28,9 @@ def stamp(ctx, events):
         focus_generation = str(focus['generation'])
     else:
         definition_id = (events[0].data.get('target') or {}).get('definition_id')
-        pilot = MobConversationPolicy.objects.filter(enabled=True,
-            world__mob_definitions__id=definition_id).values('mobs', 'world__mob_definitions__slug').first()
-        if not (pilot and pilot['world__mob_definitions__slug'] in pilot['mobs']):
+        configured = MobConversationPolicy.objects.filter(enabled=True,
+            world__mob_definitions__id=definition_id, world__mob_definitions__conversation__isnull=False).exists()
+        if not configured:
             if not MobConversationFocus.objects.filter(player_id=ctx.actor_id, mob__isnull=False).exists():
                 return events
         session = CommunicationSession.objects.get_or_create(world_id=ctx.actor.world_id)[0].generation
