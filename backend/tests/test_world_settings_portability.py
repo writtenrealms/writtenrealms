@@ -74,11 +74,13 @@ class WorldSettingsPortabilityTests(APITestCase):
             values = {
                 'never_reload': never_reload, 'flee_to_unknown_rooms': flee_to_unknown_rooms,
                 'cross_race_cooldown': cooldown,
+                'idle_timeout_seconds': 900 if never_reload else 300,
             }
             self._set_config(self.source, **values)
             if instance:
                 self._set_config(
                     instance, never_reload=not never_reload, cross_race_cooldown=cooldown + 3,
+                    idle_timeout_seconds=45 if never_reload else 300,
                 )
             documents = serialize_world_export_payload(self.source)['documents']
             for document in documents:
@@ -89,6 +91,7 @@ class WorldSettingsPortabilityTests(APITestCase):
                     self.assertNotIn(field, spec)
                 self.assertIn('never_reload', spec)
                 self.assertIn('cross_race_cooldown', spec)
+                self.assertIn('idle_timeout_seconds', spec)
                 if document.get('metadata', {}).get('world_ref', 'world@base') != 'world@base':
                     self.assertNotIn('flee_to_unknown_rooms', spec)
                 else:
@@ -110,6 +113,7 @@ class WorldSettingsPortabilityTests(APITestCase):
                     )
                     self.assertEqual(imported.config.never_reload, not never_reload)
                     self.assertEqual(imported.config.cross_race_cooldown, cooldown + 3)
+                    self.assertEqual(imported.config.idle_timeout_seconds, 45 if never_reload else 300)
                     self.assertEqual(
                         inherited_system_config(imported).flee_to_unknown_rooms, flee_to_unknown_rooms,
                     )

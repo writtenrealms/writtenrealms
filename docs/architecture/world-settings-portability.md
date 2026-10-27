@@ -45,6 +45,7 @@ typed references are resolved within the imported family.
 | `leaderboards` | Base-world authored leaderboard configuration. |
 | `clan_registration_cost`, `clan_registration_currency` | Base-world shared economy policy. |
 | `never_reload`, `cross_race_cooldown` | Local gameplay rules, now explicitly portable. |
+| `idle_timeout_seconds` | Local empty-runtime retention, default 300 seconds. Copied on instance-template creation; independently editable and portable thereafter. |
 | `flee_to_unknown_rooms` | Base-world combat rule, now explicitly portable and inherited. |
 | `combat_resolution_interval`, `default_roam_chance` | Base-world combat/roaming rules. |
 | `combat_system`, `equipment_system`, `stat_system` | Base manifest fields `combat`, `equipment`, and `stats`; always exported through the current schema normalizers, including effective defaults. |

@@ -285,7 +285,10 @@ base-world catalog.
 Instance world config manifests only accept local fields: identity text,
 visibility, starting/death rooms, initial state, death mode, deterministic
 death routing and its source, death currency and penalty, PvP policy, builder
-credit, background art, single-player admission, and player time control.
+credit, background art, single-player admission, player time control, and
+`idle_timeout_seconds` (default 300). The idle timeout is local to the template;
+see [idle shutdown behavior](world-config-builder-guide.md#combat-roaming-and-runtime-rules)
+for timing and retention exceptions.
 Player-creation and global policy fields such as default currency, starting
 balances, title rules, naming rules, globals, class selection, starting
 equipment, leveling, stats, equipment, combat, and abilities belong to the

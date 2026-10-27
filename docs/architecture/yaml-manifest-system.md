@@ -120,6 +120,11 @@ Current required mappings:
   `match`, or `allow_pvp: true` with `disabled`) rather than preserving both
   fields. WR1 conversion should omit `spec.announce_duel_results`; there is no
   legacy equivalent, and the WR2 default is `false`.
+- WR2 world manifests accept local `spec.idle_timeout_seconds` on base worlds
+  and instance templates (positive integer seconds, default 300). Partial
+  imports preserve an omitted value. The WR1 exporter should omit this setting
+  unless an explicit authored timeout is available; do not infer it from live
+  world activity, lifecycle timestamps, or hosting tier.
 - Trigger mob reactions target `kind: trigger` with a canonical scalar
   `spec.target` such as `mobdefinition.<slug>`, not `mobtemplate` or a database
   id.

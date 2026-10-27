@@ -282,6 +282,7 @@ _WORLD_CONFIG_CONFIG_INT_FIELDS = (
     "default_roam_chance",
     "clan_registration_cost",
     "cross_race_cooldown",
+    "idle_timeout_seconds",
 )
 _WORLD_CONFIG_CONFIG_FLOAT_FIELDS = (
     "combat_resolution_interval",
@@ -1247,6 +1248,7 @@ def world_config_to_manifest(
         spec["conversation"] = {"knowledge": world.conversation_knowledge}
     spec.update({
         "never_reload": bool(config.never_reload),
+        "idle_timeout_seconds": config.idle_timeout_seconds,
         "upkeep": authored_upkeep(world),
         "cross_race_cooldown": int(config.cross_race_cooldown),
         "initial_state": dict(world.initial_state or {}),
@@ -1328,6 +1330,7 @@ def serialize_world_config_payload(*, world: World) -> dict[str, Any]:
         "large_background": config.large_background or "",
         "pvp_mode": config.pvp_mode,
         "never_reload": bool(config.never_reload),
+        "idle_timeout_seconds": config.idle_timeout_seconds,
         "upkeep": authored_upkeep(world),
         "cross_race_cooldown": int(config.cross_race_cooldown),
         "built_by": config.built_by or "",
@@ -7901,7 +7904,7 @@ def parse_world_config_manifest(
     for field_name in _WORLD_CONFIG_CONFIG_INT_FIELDS:
         if field_name in spec:
             value = _coerce_int(spec.get(field_name), f"spec.{field_name}")
-            min_value = 1 if field_name in {"starting_level", "max_level"} else 0
+            min_value = 1 if field_name in {"starting_level", "max_level", "idle_timeout_seconds"} else 0
             if value < min_value:
                 raise serializers.ValidationError(
                     f"spec.{field_name} must be >= {min_value}."
@@ -7910,9 +7913,9 @@ def parse_world_config_manifest(
                 raise serializers.ValidationError(
                     "spec.default_roam_chance must be <= 100."
                 )
-            if field_name == "cross_race_cooldown" and value > 2147483647:
+            if field_name in {"cross_race_cooldown", "idle_timeout_seconds"} and value > 2147483647:
                 raise serializers.ValidationError(
-                    "spec.cross_race_cooldown must be <= 2147483647."
+                    f"spec.{field_name} must be <= 2147483647."
                 )
             if (
                 field_name == "clan_registration_cost"

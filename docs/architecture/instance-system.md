@@ -1022,14 +1022,24 @@ safe.
 Cleanup should be policy-driven and status-aware.
 
 Current implementation: active spawned instance worlds with no in-game players
-use the later of `InstanceRun.last_active_at` and the latest participant
-`exited_at` as their idle reference. They are stopped/deleted after roughly
-five minutes of inactivity, plus monitor cadence. Both `leave` and a death
-that returns a player to the base world start a fresh five-minute grace period.
+use the latest of `InstanceRun.last_active_at`, the latest participant
+`exited_at`, and the latest resident player's `last_disconnection_ts` as their
+idle reference. They are stopped/deleted after their config's
+`idle_timeout_seconds` (default 300), plus the one-minute monitor cadence.
+Both `leave` and a death that returns a player to the base world start a fresh
+grace period, as does a multiplayer-instance logout after a long session.
 The latest exit is read in the existing run query through the participant
 `(run, exited_at)` index. Death processing retains its player/participant
 locks without adding a shared run-row write or reversing entry's lock order.
-This is intentionally hardcoded until the fuller policy below is implemented.
+The timeout is a positive integer, local to each authored world/template, and
+editable through World Config YAML. Changes apply to existing runs. Base
+worlds include their child runtimes' disconnect times because online players
+in those instances also keep the base running. The monitor performs an indexed
+top-one disconnect lookup per runtime in one aggregate query for each empty
+world; player count does not add queries or shared world/run-row writes to
+logout or combat. The partial `(world, last_disconnection_ts DESC)` player index
+supports this lookup. Newly started base worlds use their start time as a lower
+bound for the grace period, even when `last_played_ts` is missing or stale.
 
 Single-player runs are exempt from automatic cleanup for three hours after
 their owner disconnects, as long as that character remains in the runtime.

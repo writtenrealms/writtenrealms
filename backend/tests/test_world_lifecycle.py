@@ -370,7 +370,7 @@ class TestMonitorWorldsIdlePlayers(WorldTestCase):
         self.player.last_action_ts = timezone.now()
         self.player.save(update_fields=["in_game", "last_action_ts"])
 
-    def test_monitor_worlds_disconnects_timed_out_players_before_stopping_world(self):
+    def test_monitor_worlds_idle_logout_starts_full_world_grace(self):
         self.spawn_world.last_played_ts = timezone.now() - timezone.timedelta(minutes=6)
         self.spawn_world.save(update_fields=["last_played_ts"])
         self.player.last_action_ts = timezone.now() - timezone.timedelta(
@@ -378,20 +378,15 @@ class TestMonitorWorldsIdlePlayers(WorldTestCase):
         )
         self.player.save(update_fields=["last_action_ts"])
 
-        disconnected_player_ids = []
-
-        def disconnect_player(player, spawn_world):
-            disconnected_player_ids.append(player.id)
-            player.in_game = False
-            player.save(update_fields=["in_game"])
-
-        with patch("worlds.tasks._disconnect_idle_player", side_effect=disconnect_player), patch(
+        with patch("worlds.tasks.notify_exit_world"), patch(
             "worlds.tasks.WorldSmith.stop"
         ) as mock_stop:
             monitor_worlds()
 
-        self.assertEqual(disconnected_player_ids, [self.player.id])
-        mock_stop.assert_called_once()
+        self.player.refresh_from_db()
+        self.assertFalse(self.player.in_game)
+        self.assertIsNotNone(self.player.last_disconnection_ts)
+        mock_stop.assert_not_called()
 
     def test_monitor_worlds_respects_multiplayer_idle_logout_opt_out(self):
         self.spawn_world.last_played_ts = timezone.now() - timezone.timedelta(minutes=6)

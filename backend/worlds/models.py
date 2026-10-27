@@ -1405,6 +1405,10 @@ class WorldConfig(BaseModel):
     can_create_chars = models.BooleanField(default=True)
     upkeep = models.JSONField(default=dict, blank=True)
     never_reload = models.BooleanField(default=False)
+    idle_timeout_seconds = models.PositiveIntegerField(
+        default=300,
+        validators=[MinValueValidator(1), MaxValueValidator(2147483647)],
+    )
     autoflee = models.IntegerField(default=0)
     flee_to_unknown_rooms = models.BooleanField(default=True)
 
@@ -1517,6 +1521,10 @@ class WorldConfig(BaseModel):
 
     class Meta(BaseModel.Meta):
         constraints = [
+            models.CheckConstraint(
+                condition=Q(idle_timeout_seconds__gte=1),
+                name='worlds_config_idle_timeout_positive',
+            ),
             models.CheckConstraint(
                 condition=(
                     Q(instance_time_control=False)

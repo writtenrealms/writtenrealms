@@ -121,6 +121,7 @@ spec:
   pvp_mode: free_for_all
   combat_resolution_interval: 0
   default_roam_chance: 10
+  idle_timeout_seconds: 300
   death_room: room@1
   death_mode: lose_none
   death_currency: crowns
@@ -555,6 +556,7 @@ for the complete typed YAML, instance inheritance, and zone/storage policies.
 | `combat_resolution_interval` | number | `0` | `0` resolves combat immediately; `> 0` auto-advances rounds on that cadence; `-1` requires explicit advancement. |
 | `default_roam_chance` | integer 0-100 | `10` | Final fallback percent per heartbeat for mobs with zone/path roaming targets. |
 | `never_reload` | boolean | `false` | Skips scheduled spawn-plan reconciliation; set independently for a base world or instance template. |
+| `idle_timeout_seconds` | integer 1-2147483647 | `300` | Seconds an empty runtime remains running after the last player disconnects or leaves. Local to each base world or instance template. |
 | `flee_to_unknown_rooms` | boolean | `true` | Base-world rule allowing flight into rooms the player has not explored; instances inherit it. |
 | `cross_race_cooldown` | integer 0-2147483647 | `0` | Minutes before a non-builder may log in as a different core faction in the same multiplayer runtime; `0` disables the delay. Local to each base world or instance template. |
 | `is_narrative` | boolean | `false` | Narrative worlds disable combat through the manifest apply path. |
@@ -572,6 +574,30 @@ reload, flee, and cross-faction cooldown rules, including default values.
 Reimporting preserves them; a partial edit leaves omitted rules unchanged.
 `never_reload` affects scheduled reconciliation, including replenishment after
 gameplay, rather than preventing the initial population load.
+
+The idle monitor checks once a minute, so automatic shutdown occurs on the first
+check after the full `idle_timeout_seconds` has elapsed. Reconnecting and
+disconnecting starts a fresh interval; repeated logout requests while already
+offline do not. A base world stays running while players are online in its
+instances, and their final disconnect starts the base world's own interval.
+A newly started empty runtime also gets a full interval. Tier 3 multiplayer
+worlds remain exempt, and single-player instance owners retain their existing
+three-hour disconnect grace while their character remains inside. Ordinary
+single-player worlds still save and stop when their player exits.
+
+For example, apply this in **World > Config** to keep an empty runtime running
+for fifteen minutes:
+
+```yaml
+kind: world
+spec:
+  idle_timeout_seconds: 900
+```
+
+The setting applies to existing runtimes on their next monitor check. It travels
+with world/family exports, and omitted values are preserved during partial
+edits. New instance templates initially copy the base world's value, then own
+their setting independently. `0` and `null` are invalid; neither disables cleanup.
 
 Roaming resolves the first applicable value in this order: a positive
 mob-definition `roam_chance`, a non-null spawn-plan `default_roam_chance`, a

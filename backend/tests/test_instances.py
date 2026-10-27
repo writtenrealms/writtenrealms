@@ -1518,7 +1518,7 @@ class TestInstanceRuntimeFoundation(WorldTestCase):
         self.player.save(update_fields=["in_game"])
         old = timezone.now() - timezone.timedelta(minutes=6)
         self.spawn_world.lifecycle = adv_consts.WORLD_LIFECYCLE_RUNNING
-        self.spawn_world.lifecycle_change_ts = timezone.now()
+        self.spawn_world.lifecycle_change_ts = old
         self.spawn_world.last_played_ts = old
         self.spawn_world.save(update_fields=[
             "lifecycle",

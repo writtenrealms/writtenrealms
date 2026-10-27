@@ -475,6 +475,7 @@ class WorldConfigSerializer(serializers.ModelSerializer):
             'player_creation',
             'instance_single_player',
             'instance_time_control',
+            'idle_timeout_seconds',
             'instance_goal',
             'leaderboards',
             'starting_equipment',

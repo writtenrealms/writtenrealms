@@ -1,7 +1,7 @@
 import logging
 
 from django.db import transaction
-from django.db.models import Exists, F, OuterRef, Q, Subquery
+from django.db.models import Exists, F, Max, OuterRef, Q, Subquery
 from django.utils import timezone
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
@@ -22,7 +22,6 @@ from worlds.services import WorldSmith
 
 logger = logging.getLogger('lifecycle')
 SPAWN_PLANS_TASK_LOCK_KEY = 'run_world_spawn_plans_lock'
-MAX_WORLD_IDLE_SECONDS = 5 * 60
 SINGLE_PLAYER_INSTANCE_OFFLINE_GRACE_SECONDS = 3 * 60 * 60
 
 
@@ -127,11 +126,30 @@ def _instance_idle_reference_ts(spawn_world):
 def _world_idle_seconds(spawn_world, *, now):
     idle_reference_ts = _instance_idle_reference_ts(spawn_world)
     if idle_reference_ts is None:
-        idle_reference_ts = spawn_world.last_played_ts
+        # A newly started/restarted base world gets its own grace period too.
+        idle_reference_ts = max(ts for ts in (
+            spawn_world.last_played_ts, spawn_world.lifecycle_change_ts,
+        ) if ts is not None)
 
-    if idle_reference_ts:
-        return (now - idle_reference_ts).total_seconds()
-    return MAX_WORLD_IDLE_SECONDS + 100
+    # Logout already records the exact disconnect time on the player, in the
+    # same transaction that clears in_game. Read it after checking occupancy so
+    # even an idle logout in this monitor pass gets the complete grace period.
+    # Include child runtimes for a base world: their online players keep it
+    # alive, so their last disconnect must start its timer as well.
+    scope = Q(pk=spawn_world.pk)
+    if not spawn_world.context.instance_of_id:
+        scope |= Q(context__instance_of_id=spawn_world.context_id)
+    latest_disconnect = Player.objects.filter(
+        world_id=OuterRef('pk'), last_disconnection_ts__isnull=False,
+    ).order_by('-last_disconnection_ts').values('last_disconnection_ts')[:1]
+    disconnected_at = World.objects.filter(scope).annotate(
+        latest_disconnect=Subquery(latest_disconnect),
+    ).aggregate(latest=Max('latest_disconnect'))['latest']
+    # One indexed top-one lookup per runtime, without scanning its players or
+    # adding shared World/InstanceRun writes to logout and combat lock paths.
+    if disconnected_at and disconnected_at > idle_reference_ts:
+        idle_reference_ts = disconnected_at
+    return (now - idle_reference_ts).total_seconds()
 
 
 @shared_task
@@ -264,7 +282,7 @@ def monitor_worlds():
         context__isnull=False,
         lifecycle=constants.WORLD_LIFECYCLE_RUNNING,
         lifecycle_change_ts__isnull=False,
-    ).exclude(has_offline_owner_grace)
+    ).exclude(has_offline_owner_grace).select_related('context', 'config')
 
     running_worlds = running_worlds.exclude(Exists(InstanceRun.objects.filter(
         spawned_world_id=OuterRef('pk'), time_control=True, time_paused=True,
@@ -299,7 +317,7 @@ def monitor_worlds():
             continue
 
         delta = _world_idle_seconds(spawn_world, now=timezone.now())
-        if delta > MAX_WORLD_IDLE_SECONDS:
+        if delta > spawn_world.config.idle_timeout_seconds:
             # An idle logout or concurrent disconnect after the initial query
             # starts the same grace period. Recheck only cleanup candidates.
             if (spawn_world.context.instance_of_id
