@@ -25,11 +25,12 @@
             <span v-if="list.data.value.world.lifecycle === 'stopped'">This world is stopped; enter it to load its mobs.</span>
           </p>
           <div v-else class="mob-zone-groups">
-            <section v-for="(group, index) in zoneGroups" :key="group.key" class="mob-zone" :aria-labelledby="`mob-zone-${index}`">
-              <div class="dashboard-section-heading">
+            <details v-for="(group, index) in zoneGroups" :key="group.key" class="mob-zone dashboard-disclosure" :open="!collapsedZones.has(group.key)">
+              <summary @click.prevent="toggleZone(group.key)">
+                <ChevronRight :size="14" aria-hidden="true" />
                 <h2 :id="`mob-zone-${index}`">{{ group.name }}</h2>
                 <span class="tag" :aria-label="`${group.mobs.length} mobs on this page`">{{ group.mobs.length }}</span>
-              </div>
+              </summary>
               <ul class="mob-list">
                 <li v-for="mob in group.mobs" :key="mob.id">
                   <router-link :to="`${listPath}/${mob.id}`" :aria-current="String(mob.id) === selectedId ? 'page' : undefined">
@@ -39,7 +40,7 @@
                   </router-link>
                 </li>
               </ul>
-            </section>
+            </details>
           </div>
           <div class="dashboard-actions">
             <button v-if="cursors.length" class="btn-small button-gray" @click="previousPage">PREVIOUS</button>
@@ -63,7 +64,7 @@
 import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useStore } from 'vuex';
-import { RefreshCw } from '@lucide/vue';
+import { ChevronRight, RefreshCw } from '@lucide/vue';
 import RuntimeMobDetails from '@/components/builder/RuntimeMobDetails.vue';
 import { useInspectionRequest } from '@/composables/useInspectionRequest';
 const route = useRoute();
@@ -76,6 +77,11 @@ const isStaff = computed(() => !!store.state.auth?.user?.is_staff);
 const list = useInspectionRequest();
 const detail = useInspectionRequest();
 type ListedMob = { id: number; name: string; pending_deletion: boolean; room: { name: string; zone: string; zone_id?: number } };
+const collapsedZones = ref(new Set<string | number>());
+function toggleZone(key: string | number) {
+  if (collapsedZones.value.has(key)) collapsedZones.value.delete(key);
+  else collapsedZones.value.add(key);
+}
 const zoneGroups = computed(() => {
   const groups = new Map<string | number, { key: string | number; name: string; mobs: ListedMob[] }>();
   for (const mob of (list.data.value?.results || []) as ListedMob[]) {
@@ -95,12 +101,12 @@ function loadDetail(inventoryAfter = 0) {
   if (!selectedId.value) { detail.clear(); return; }
   return detail.load(`${api.value}${selectedId.value}/`, { params: { inventory_after: inventoryAfter } });
 }
-function search() { after.value = 0; cursors.value = []; appliedQuery.value = query.value; void loadList(); }
+function search() { collapsedZones.value.clear(); after.value = 0; cursors.value = []; appliedQuery.value = query.value; void loadList(); }
 function nextPage() { const next = list.data.value?.next_after; if (next) { cursors.value.push(after.value); after.value = next; void loadList(); } }
 function previousPage() { after.value = cursors.value.pop() || 0; void loadList(); }
 function refresh() { void loadList(); void loadDetail(); }
 function timestamp(value: string) { return new Date(value).toLocaleTimeString(); }
-watch(api, () => { query.value = ''; appliedQuery.value = ''; after.value = 0; cursors.value = []; void loadList(); }, { immediate: true });
+watch(api, () => { collapsedZones.value.clear(); query.value = ''; appliedQuery.value = ''; after.value = 0; cursors.value = []; void loadList(); }, { immediate: true });
 watch(() => `${api.value}${selectedId.value}`, () => { void loadDetail(); }, { immediate: true });
 </script>
 
@@ -110,12 +116,7 @@ watch(() => `${api.value}${selectedId.value}`, () => { void loadDetail(); }, { i
 .mob-browser { display: grid; grid-template-columns: minmax(210px, 1fr) minmax(0, 2fr); gap: 1.25rem; align-items: start; }
 .mob-browser-list { min-width: 0; }
 .mob-search { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; .form-group { width: 100%; min-width: 0; margin: 0; } }
-.mob-zone {
-  margin-top: 1.5rem;
-  .dashboard-section-heading { align-items: center; margin-bottom: 0.25rem; }
-  h2 { font-size: 14px; overflow-wrap: anywhere; min-width: 0; }
-  .tag { flex-shrink: 0; }
-}
+.mob-zone { margin-top: 0.75rem; }
 .mob-list {
   margin: 0 0 1rem;
   padding: 0;

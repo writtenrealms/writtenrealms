@@ -278,12 +278,19 @@
         <span class="sg-code">.data-table</span> for compact rows, with <span class="sg-code">.data-table-scroll</span>
         around wide tables. At mobile widths, dashboard metrics use two columns and headings stack.
         Page-specific column counts belong in the page's layout styles.</p>
-      <p class="sg-note">Group loaded mobs by zone with a sentence-case heading and a count tag, using
-        <span class="sg-code">.dashboard-section-heading</span>. Sort zone headings alphabetically; counts reflect
-        the current page or search results. Keep groups expanded so entries are immediately visible.
+      <p class="sg-note">Group loaded mobs by zone with a sentence-case heading and a count tag.
+        Sort zone headings alphabetically; counts reflect
+        the current page or search results. Use <span class="sg-code">.dashboard-disclosure</span> on native details/summary elements
+        with a ChevronRight icon, h2, and count tag. The whole heading toggles the group, with a visible keyboard
+        focus outline and a 44px minimum tap target. Start expanded; preserve collapsed groups while browsing
+        or refreshing, and expand results when starting a new search.
         Loaded mob list entries show the name followed by one muted
         <span class="sg-code">ID - Room Name</span> line. Long location lines truncate with an ellipsis.
         Hover and selection highlight the entry without underlining its contents; keyboard focus keeps its outline.</p>
+      <details class="dashboard-disclosure" open>
+        <summary><ChevronRight :size="14" aria-hidden="true" /><h2>Athens - Agora</h2><span class="tag">3</span></summary>
+        <p class="dashboard-note">Zone entries appear here. Collapse this group to focus on another zone.</p>
+      </details>
     </section>
 
     <!-- Icons -->
@@ -470,7 +477,7 @@ import JsonInspector from '@/components/builder/JsonInspector.vue';
 const markdownExample = '## Welcome to Phalanx\n\nExplore **ancient Greece** and choose your path. Read the [player guides](/docs/players/).\n\n- Meet the locals.\n- Find your first quest.\n\n> A world shaped by its players.\n\nType `look` to begin.\n\n```text\nA long passage can wrap naturally inside a code block, keeping the whole message readable even on a narrow screen.\n    Indentation and explicit line breaks are preserved.\n```\n\n| Place | Activity |\n| --- | --- |\n| Agora | Trade and conversation |';
 import { useStore } from "vuex";
 import {
-  ArrowRight, Backpack, Check, ChevronDown, Coins, Copy, Ellipsis, ExternalLink, Heart, Info,
+  ChevronRight, ArrowRight, Backpack, Check, ChevronDown, Coins, Copy, Ellipsis, ExternalLink, Heart, Info,
   Map as MapIcon, Pencil, Plus, Scroll, Search, Settings, Share, Shield, Skull,
   Sparkles, Swords, Trash, TriangleAlert, User, Users, X,
 } from "@lucide/vue";

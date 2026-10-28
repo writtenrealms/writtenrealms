@@ -56,7 +56,10 @@ The **Mobs loaded** card opens the runtime mob list. An arrow beside its label
 marks the whole card as clickable, including on touchscreens. Hovering highlights
 the gold border without underlining its contents.
 Loaded mobs are grouped under alphabetical zone headings, with a count for each
-zone on the current page. Search results use the same grouping. Pages remain
+zone on the current page. Click or tap a zone heading to collapse or expand its
+mobs; the count stays visible. Groups start expanded and keep your choices while
+browsing or refreshing. A new search expands the matching groups.
+Search results use the same grouping. Pages remain
 limited to 50 mobs; a zone can appear on more than one page.
 Each loaded mob list entry shows its name, then its runtime ID and room name on
 one line. Select an entry for its level and full details.

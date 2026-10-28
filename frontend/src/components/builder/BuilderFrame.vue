@@ -175,9 +175,13 @@ const route = useRoute();
 // Other builder views can react to query changes without being remounted.
 const queryRemountRoutes = new Set(['builder_world_edit']);
 
-const builderViewKey = computed(() => (
-  queryRemountRoutes.has(String(route.name)) ? route.fullPath : route.path
-));
+const builderViewKey = computed(() => {
+  // Mob selection updates the detail pane; retain the list's search, page, and collapsed zones.
+  if (route.name === 'builder_world_admin_mobs') {
+    return `runtime-mobs:${route.params.world_id}:${route.params.instance_id}`;
+  }
+  return queryRemountRoutes.has(String(route.name)) ? route.fullPath : route.path;
+});
 
 const world = computed(() => store.state.builder.world);
 const worldId = computed(() => route.params.world_id);

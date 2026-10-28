@@ -848,3 +848,25 @@ svg.lucide {
   > span { display: flex; align-items: center; gap: 0.4rem; }
   > span .lucide { color: $color-secondary; }
 }
+
+// A whole-row disclosure for compact dashboard groups, with a persistent count.
+.dashboard-disclosure {
+  > summary {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 44px;
+    padding: 0.5rem;
+    list-style: none;
+    cursor: pointer;
+    color: $color-secondary;
+    &::-webkit-details-marker { display: none; }
+    &:hover { background: $color-background-very-light; }
+    &:focus-visible { outline: 2px solid $color-secondary; outline-offset: -2px; }
+    > svg { flex-shrink: 0; }
+    > h2 { flex: 1; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+    > .tag { flex-shrink: 0; }
+  }
+  &[open] > summary > svg { transform: rotate(90deg); }
+}
