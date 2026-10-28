@@ -27,8 +27,9 @@
           <ul v-else class="mob-list">
             <li v-for="mob in list.data.value.results" :key="mob.id">
               <router-link :to="`${listPath}/${mob.id}`" :aria-current="String(mob.id) === selectedId ? 'page' : undefined">
-                <strong>{{ mob.name }}</strong><span>{{ mob.key }} · Level {{ mob.level }}</span>
-                <span>{{ mob.room.name }}</span><span v-if="mob.pending_deletion">Pending deletion</span>
+                <strong>{{ mob.name }}</strong>
+                <span class="mob-list-summary" :title="`${mob.id} - ${mob.room.name}`">{{ mob.id }} - {{ mob.room.name }}</span>
+                <span v-if="mob.pending_deletion">Pending deletion</span>
               </router-link>
             </li>
           </ul>
@@ -90,7 +91,36 @@ watch(() => `${api.value}${selectedId.value}`, () => { void loadDetail(); }, { i
 .mob-browser { display: grid; grid-template-columns: minmax(210px, 1fr) minmax(0, 2fr); gap: 1.25rem; align-items: start; }
 .mob-browser-list { min-width: 0; }
 .mob-search { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; .form-group { width: 100%; min-width: 0; margin: 0; } }
-.mob-list { margin: 0 0 1rem; padding: 0; list-style: none; a { display: flex; flex-direction: column; gap: 0.2rem; padding: 0.85rem 0.5rem; border-bottom: 1px solid $color-background-border; overflow-wrap: anywhere; color: $color-text; } span { color: $color-text-hex-60; font-size: 11px; } a[aria-current="page"] { background: $color-background-very-light; border-left: 2px solid $color-secondary; } a:hover, a:focus-visible { background: $color-background-very-light; } }
+.mob-list {
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+
+  a {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.85rem 0.5rem;
+    border-bottom: 1px solid $color-background-border;
+    overflow-wrap: anywhere;
+    color: $color-text;
+    text-decoration: none;
+
+    &:hover, &:active, &:focus-visible {
+      background: $color-background-very-light;
+      color: $color-text;
+      text-decoration: none;
+    }
+
+    &[aria-current="page"] {
+      background: $color-background-very-light;
+      border-left: 2px solid $color-secondary;
+    }
+  }
+
+  span { color: $color-text-hex-60; font-size: 11px; }
+  .mob-list-summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
 .mob-back { display: none; }
 @media ($mobile-site) {
   .mob-browser { display: block; }

@@ -49,10 +49,9 @@
 
       <div class="metric-grid">
         <component :is="card.to ? 'router-link' : 'div'" v-for="card in summaryCards" :key="card.label" :to="card.to" class="metric-card" :class="{ 'metric-card-link': card.to }">
-          <span>{{ card.label }}</span>
+          <span>{{ card.label }} <ArrowRight v-if="card.to" :size="14" aria-hidden="true" /></span>
           <strong :class="{ 'metric-value-text': card.textValue }">{{ card.value }}</strong>
           <small v-if="card.note">{{ card.note }}</small>
-          <small v-if="card.to">View loaded mobs →</small>
         </component>
       </div>
 
@@ -217,7 +216,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useStore } from 'vuex';
 import { useRoute } from 'vue-router';
-import { RefreshCw, Shield } from '@lucide/vue';
+import { ArrowRight, RefreshCw, Shield } from '@lucide/vue';
 
 const store = useStore();
 const route = useRoute();

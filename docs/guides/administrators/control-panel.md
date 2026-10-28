@@ -52,6 +52,11 @@ distribution, linked player records, and the current spawn world's state.
 On small screens, cards and sections rearrange vertically; wide player tables
 scroll within their panel. **Refresh** updates the current snapshot. Reset and
 recovery controls appear only when available for that world's lifecycle state.
+The **Mobs loaded** card opens the runtime mob list. An arrow beside its label
+marks the whole card as clickable, including on touchscreens. Hovering highlights
+the gold border without underlining its contents.
+Each loaded mob list entry shows its name, then its runtime ID and room name on
+one line. Select an entry for its level and full details.
 
 Snapshots are cached for 15 seconds. Lists show at most 50 running worlds and 100 online characters; totals cover the full population. Refreshing does not discard unsaved access edits.
 

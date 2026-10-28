@@ -61,6 +61,11 @@ async function run() {
   await frame();
   (document.querySelector('.metric-card-link') as HTMLElement).click(); await frame(); await frame();
   check(text().includes('Loaded mobs') && text().includes('Menon'), 'Mobs metric did not open list');
+  const entry = document.querySelector('.mob-list a')!;
+  const summary = entry.querySelector<HTMLElement>('.mob-list-summary')!;
+  check(summary.textContent === `${mob.id} - ${mob.room.name}`, 'Mob list ID and room summary is incorrect');
+  check(entry.querySelectorAll('span').length === 1 && !entry.textContent!.includes('Level'), 'Mob list repeats metadata');
+  check(getComputedStyle(summary).whiteSpace === 'nowrap', 'Mob summary must stay on one line');
   (document.querySelector('.mob-list a') as HTMLElement).click(); await frame();
   check(text().includes('Approved knowledge'), 'Mob selection did not show details'); layout();
   (document.querySelector(`a[href="${mobPath}/debug"]`) as HTMLElement).click(); await frame();
@@ -83,3 +88,24 @@ async function run() {
   document.querySelector('#results')!.textContent = `PASS: ${checks} mob inspector checks at ${innerWidth} × ${innerHeight}`;
 }
 if (params.has('test')) void run().catch(error => { document.querySelector('#results')!.textContent = `FAIL: ${error.message}`; console.error(error); });
+
+// Open ?hover=1, then hover the selected mob to check the actual link cascade.
+if (params.has('hover')) {
+  await frame(); await frame();
+  const entry = document.querySelector<HTMLElement>('.mob-list a')!;
+  const elements = [entry, ...entry.querySelectorAll('*')];
+  const colors = elements.map(el => getComputedStyle(el).color);
+  entry.addEventListener('pointerenter', async () => {
+    await frame();
+    try {
+      check(entry.matches(':hover'), 'Mob entry is not hovered');
+      elements.forEach((el, index) => {
+        check(getComputedStyle(el).textDecorationLine === 'none', 'Mob entry is underlined');
+        check(getComputedStyle(el).color === colors[index], 'Mob entry changes text color on hover');
+      });
+      document.querySelector('#results')!.textContent = `PASS: ${checks} mob list hover checks`;
+    } catch (error) {
+      document.querySelector('#results')!.textContent = `FAIL: ${error.message}`;
+    }
+  }, { once: true });
+}

@@ -838,7 +838,13 @@ svg.lucide {
   display: block;
   color: $color-text;
   text-decoration: none;
-  &:hover { border-color: $color-secondary; }
+  &:hover,
+  &:active {
+    border-color: $color-secondary;
+    color: $color-text;
+    text-decoration: none;
+  }
   &:focus-visible { outline: 2px solid $color-secondary; outline-offset: 3px; }
-  > small:last-child { color: $color-secondary; margin-top: 0.5rem; }
+  > span { display: flex; align-items: center; gap: 0.4rem; }
+  > span .lucide { color: $color-secondary; }
 }

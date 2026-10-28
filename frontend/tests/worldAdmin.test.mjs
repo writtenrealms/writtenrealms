@@ -38,6 +38,9 @@ test('runtime dashboard retains metrics, details, player navigation and escaped 
   for (const label of ['Phalanx world #13', 'Mobs loaded', 'Items on ground', 'Items total', 'Players logged in', 'Last spawn-plan run', 'Assignments', 'Runtime timeline', 'World details', 'Item distribution']) assert.ok(html.includes(label), label);
   assert.match(html, /href="\/build\/worlds\/12\/players\/1"/);
   assert.match(html, /href="\/build\/worlds\/12\/admin\/13\/mobs"/);
+  assert.match(html, /<span[^>]*>Mobs loaded <svg[^>]*lucide-arrow-right[^>]*aria-hidden="true"/);
+  assert.equal((html.match(/lucide-arrow-right/g) || []).length, 1);
+  assert.doesNotMatch(html, /View loaded mobs/);
   assert.match(html, /The agora/);
   assert.match(html, /&lt;script&gt;unsafe&lt;\/script&gt;/);
   for (const value of ['false', 'null', '&quot;hello&quot;:&quot;world&quot;']) assert.ok(html.includes(value), value);

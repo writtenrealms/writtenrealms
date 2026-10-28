@@ -88,5 +88,28 @@ async function run() {
   store.state.builder.worlds.admin.admin_instance.lifecycle_details.current = 'running';
   store.state.builder.worlds.admin.admin_instance.recovery_actions.recover_to_stopped = false; await frame();
   document.querySelector('#results')!.textContent = `PASS: ${checks} world admin checks at ${innerWidth} × ${innerHeight}`;
+  // Use ?test=1&hover=1, then move the pointer onto the loaded-mobs card.
+  // Check the actual cascade, including the global a:hover rule and inherited color.
+  if (params.has('hover')) {
+    const card = document.querySelector<HTMLElement>('.metric-card-link')!;
+    const elements = [card, ...card.querySelectorAll('*')];
+    const colors = elements.map(el => getComputedStyle(el).color);
+    const border = getComputedStyle(card).borderColor;
+    card.addEventListener('pointerenter', async () => {
+      await frame();
+      try {
+        check(card.matches(':hover'), 'Card is not actually hovered');
+        check(getComputedStyle(card).borderColor !== border, 'Hover border did not change');
+        check(getComputedStyle(card).borderColor === getComputedStyle(card.querySelector('.lucide-arrow-right')!).color, 'Hover border is not gold');
+        elements.forEach((el, index) => {
+          check(getComputedStyle(el).textDecorationLine === 'none', 'Hovered card text is underlined');
+          check(getComputedStyle(el).color === colors[index], 'Hovered card text changed color');
+        });
+        document.querySelector('#results')!.textContent = `PASS: ${checks} world admin checks, including card hover`;
+      } catch (error) {
+        document.querySelector('#results')!.textContent = `FAIL: ${error.message}`;
+      }
+    }, { once: true });
+  }
 }
 if (params.has('test')) void run().catch(error => { document.querySelector('#results')!.textContent = `FAIL: ${error.message}`; console.error(error); });

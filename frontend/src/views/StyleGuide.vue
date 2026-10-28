@@ -223,8 +223,11 @@
       <h2>Metrics and notices</h2>
       <p class="sg-note">Use <span class="sg-code">.metric-grid</span> and <span class="sg-code">.metric-card</span> for bounded summary counts. Put the label, value, and context in span, strong, and small elements.</p>
       <div class="metric-grid"><div class="metric-card"><span>Characters online</span><strong>24</strong><small>Across 3 running worlds</small></div><div class="metric-card"><span>New accounts · 24h</span><strong>8</strong><small>112 total accounts</small></div></div>
-      <p class="sg-note">Use <span class="sg-code">.metric-card-link</span> on a link when a metric opens a detail screen.</p>
-      <router-link to="/styleguide#dashboards" class="metric-card metric-card-link"><span>Mobs loaded</span><strong>27</strong><small>0 pending deletion</small><small>View loaded mobs →</small></router-link>
+      <p class="sg-note">Use <span class="sg-code">.metric-card-link</span> on a link when a metric opens a detail screen.
+        Place a small, always-visible ArrowRight icon beside the label to indicate that the whole card can be tapped.
+        Hovering or pressing the card highlights only its gold border; text keeps its normal colors and has no underline.
+        Keyboard focus retains a visible gold outline.</p>
+      <router-link to="/styleguide#dashboards" class="metric-card metric-card-link"><span>Mobs loaded <ArrowRight :size="14" aria-hidden="true" /></span><strong>27</strong><small>0 pending deletion</small></router-link>
       <p class="inline-notice">.inline-notice — Settings saved. Access changes take effect shortly.</p>
       <p class="inline-notice inline-notice-error">.inline-notice.inline-notice-error — Could not refresh. Previously loaded values may be out of date.</p>
       <p class="sg-note">ConsoleNotice frames the Message of the Day, Time Control, and instance completion.
@@ -275,6 +278,9 @@
         <span class="sg-code">.data-table</span> for compact rows, with <span class="sg-code">.data-table-scroll</span>
         around wide tables. At mobile widths, dashboard metrics use two columns and headings stack.
         Page-specific column counts belong in the page's layout styles.</p>
+      <p class="sg-note">Loaded mob list entries show the name followed by one muted
+        <span class="sg-code">ID - Room Name</span> line. Long location lines truncate with an ellipsis.
+        Hover and selection highlight the entry without underlining its contents; keyboard focus keeps its outline.</p>
     </section>
 
     <!-- Icons -->
@@ -461,7 +467,7 @@ import JsonInspector from '@/components/builder/JsonInspector.vue';
 const markdownExample = '## Welcome to Phalanx\n\nExplore **ancient Greece** and choose your path. Read the [player guides](/docs/players/).\n\n- Meet the locals.\n- Find your first quest.\n\n> A world shaped by its players.\n\nType `look` to begin.\n\n```text\nA long passage can wrap naturally inside a code block, keeping the whole message readable even on a narrow screen.\n    Indentation and explicit line breaks are preserved.\n```\n\n| Place | Activity |\n| --- | --- |\n| Agora | Trade and conversation |';
 import { useStore } from "vuex";
 import {
-  Backpack, Check, ChevronDown, Coins, Copy, Ellipsis, ExternalLink, Heart, Info,
+  ArrowRight, Backpack, Check, ChevronDown, Coins, Copy, Ellipsis, ExternalLink, Heart, Info,
   Map as MapIcon, Pencil, Plus, Scroll, Search, Settings, Share, Shield, Skull,
   Sparkles, Swords, Trash, TriangleAlert, User, Users, X,
 } from "@lucide/vue";
