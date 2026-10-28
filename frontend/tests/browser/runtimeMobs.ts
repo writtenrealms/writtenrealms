@@ -19,10 +19,29 @@ let missing = false;
 let empty = params.has('empty');
 const mobPath = '/build/worlds/12/admin/13/mobs/123';
 const api = '/builder/worlds/12/admin/instance/13/mobs/';
+const listedMob = (id: number, name: string, roomName: string, zone: string, zoneId: number) => ({
+  ...mob, id, name, room: { ...mob.room, name: roomName, zone, zone_id: zoneId },
+});
+const firstPage = [
+  mob,
+  listedMob(124, 'a practice dummy', 'Exercise Room', 'Athens - Gymnasium', 2),
+  listedMob(125, 'Priestess Callista', 'Altar of Demeter', 'Athens - Agora', 1),
+  listedMob(126, 'a sparabara', 'North Holding Cell', 'Persian Outpost', 3),
+  listedMob(127, 'a linen seller', 'Agora Southeast Stoa', 'Athens - Agora', 1),
+  listedMob(128, 'Demeas the Hoplomachos', 'Wrestling Area', 'Athens - Gymnasium', 2),
+];
+// Distinct zone IDs must not merge even when builders give them identical names.
+const secondPage = [
+  listedMob(129, 'a guard', 'Gate', 'Borderlands', 4),
+  listedMob(130, 'a sentry', 'Watchtower', 'Borderlands', 5),
+];
 axios.defaults.adapter = async config => {
   calls.push({ url: config.url, method: config.method, data: config.data });
+  const query = String(config.params?.q || '').toLowerCase();
+  const page = config.params?.after ? secondPage : firstPage;
+  const results = empty ? [] : page.filter(entry => `${entry.name} ${entry.id} ${entry.room.name}`.toLowerCase().includes(query));
   const responses: Record<string, any> = { '/builder/worlds/12/': rootWorld, '/builder/worlds/12/map/': { rooms: {} }, '/lobby/config/': { main_world_id: 12, building_enabled: true },
-    [api]: { world: { ...runtime, lifecycle: empty ? 'stopped' : 'running' }, results: empty ? [] : [mob], next_after: null },
+    [api]: { world: { ...runtime, lifecycle: empty ? 'stopped' : 'running' }, results, next_after: !empty && !query && !config.params?.after && params.has('test') ? 128 : null },
     [`${api}123/`]: { world: runtime, mob }, [`${api}123/debug/`]: { mob, world_conversation: { knowledge: 'The Agora is a marketplace.' }, policy: { enabled: true, world_id: 12 }, focus: null, combat: [], inspected_at: runtime.inspected_at } };
   if (missing && config.url?.startsWith(api)) throw Object.assign(new Error('Missing'), { response: { status: 404 } });
   if (!(config.url! in responses)) throw new Error(`Unexpected fixture request: ${config.url}`);
@@ -66,6 +85,25 @@ async function run() {
   check(summary.textContent === `${mob.id} - ${mob.room.name}`, 'Mob list ID and room summary is incorrect');
   check(entry.querySelectorAll('span').length === 1 && !entry.textContent!.includes('Level'), 'Mob list repeats metadata');
   check(getComputedStyle(summary).whiteSpace === 'nowrap', 'Mob summary must stay on one line');
+  const groups = () => Array.from(document.querySelectorAll('.mob-zone'));
+  check(groups().map(group => group.querySelector('h2')!.textContent).join('|') === 'Athens - Agora|Athens - Gymnasium|Persian Outpost', 'Zone groups are not alphabetized');
+  check(groups().map(group => group.querySelector('.tag')!.textContent).join('|') === '3|2|1', 'Zone counts are incorrect');
+  check(groups()[0].querySelectorAll('li').length === 3, 'Nonadjacent mobs in the same zone were not grouped');
+  layout();
+  button('NEXT 50').click(); await frame();
+  check(groups().length === 2 && groups().every(group => group.querySelector('h2')!.textContent === 'Borderlands'), 'Distinct zones with the same name were merged');
+  check(!text().includes('Priestess Callista') && text().includes('2 shown on this page'), 'Pagination retained stale groups or misleading counts');
+  button('PREVIOUS').click(); await frame();
+  check(groups().length === 3, 'Previous page did not restore zone groups');
+  const search = document.querySelector<HTMLInputElement>('#mob-search')!;
+  search.value = 'Menon'; search.dispatchEvent(new Event('input', { bubbles: true })); await frame();
+  button('SEARCH').click(); await frame();
+  check(groups().length === 1 && groups()[0].querySelector('.tag')!.textContent === '1', 'Search groups/counts did not update');
+  search.value = 'does not exist'; search.dispatchEvent(new Event('input', { bubbles: true })); await frame();
+  button('SEARCH').click(); await frame();
+  check(groups().length === 0 && text().includes('No mobs match this search.'), 'Empty search left stale zone headings');
+  search.value = ''; search.dispatchEvent(new Event('input', { bubbles: true })); await frame();
+  button('SEARCH').click(); await frame();
   (document.querySelector('.mob-list a') as HTMLElement).click(); await frame();
   check(text().includes('Approved knowledge'), 'Mob selection did not show details'); layout();
   (document.querySelector(`a[href="${mobPath}/debug"]`) as HTMLElement).click(); await frame();

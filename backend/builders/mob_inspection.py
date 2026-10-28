@@ -38,7 +38,7 @@ def record(instance):
 
 def room_summary(room):
     return {'id': room.pk, 'name': room.name, 'relative_id': room.relative_id,
-            'world_id': room.world_id, 'zone': room.zone.name}
+            'world_id': room.world_id, 'zone': room.zone.name, 'zone_id': room.zone_id}
 
 
 def mob_summary(mob):

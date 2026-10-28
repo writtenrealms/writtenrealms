@@ -1,6 +1,6 @@
 export const mob = {
   id: 123, key: 'mob.123', name: 'Menon', level: 1, type: 'humanoid', health: 100, health_max: 100, pending_deletion: false,
-  room: { id: 70, name: 'Agora Northeast Stoa', relative_id: 56, world_id: 13, zone: 'Athens' },
+  room: { id: 70, name: 'Agora Northeast Stoa', relative_id: 56, world_id: 13, zone: 'Athens - Agora', zone_id: 1 },
   definition: { id: 35, name: 'Menon', slug: 'athens-menon', world_id: 12 },
   runtime: { id: 123, name: 'Menon', level: 1, description: 'A weathered philosopher turns a small pebble over in his palm.',
     room_description: 'Menon, a weathered philosopher, sits by a column with a pebble in his palm.', keywords: 'menon philosopher',

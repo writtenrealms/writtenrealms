@@ -65,6 +65,7 @@ class TestRuntimeMobInspection(WorldTestCase):
             page = self.client.get(self.url())
         self.assertEqual(page.status_code, 200)
         self.assertEqual(len(page.data['results']), 50)
+        self.assertTrue(all(m['room']['zone_id'] == self.room.zone_id for m in page.data['results']))
         tail = self.client.get(self.url(), {'after': page.data['next_after']})
         self.assertEqual(len(tail.data['results']), 11)
         self.assertIsNone(tail.data['next_after'])

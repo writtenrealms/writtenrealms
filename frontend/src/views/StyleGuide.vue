@@ -278,7 +278,10 @@
         <span class="sg-code">.data-table</span> for compact rows, with <span class="sg-code">.data-table-scroll</span>
         around wide tables. At mobile widths, dashboard metrics use two columns and headings stack.
         Page-specific column counts belong in the page's layout styles.</p>
-      <p class="sg-note">Loaded mob list entries show the name followed by one muted
+      <p class="sg-note">Group loaded mobs by zone with a sentence-case heading and a count tag, using
+        <span class="sg-code">.dashboard-section-heading</span>. Sort zone headings alphabetically; counts reflect
+        the current page or search results. Keep groups expanded so entries are immediately visible.
+        Loaded mob list entries show the name followed by one muted
         <span class="sg-code">ID - Room Name</span> line. Long location lines truncate with an ellipsis.
         Hover and selection highlight the entry without underlining its contents; keyboard focus keeps its outline.</p>
     </section>

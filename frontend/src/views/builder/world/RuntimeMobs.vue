@@ -24,20 +24,28 @@
             {{ appliedQuery ? 'No mobs match this search.' : 'No mobs are loaded in this world.' }}
             <span v-if="list.data.value.world.lifecycle === 'stopped'">This world is stopped; enter it to load its mobs.</span>
           </p>
-          <ul v-else class="mob-list">
-            <li v-for="mob in list.data.value.results" :key="mob.id">
-              <router-link :to="`${listPath}/${mob.id}`" :aria-current="String(mob.id) === selectedId ? 'page' : undefined">
-                <strong>{{ mob.name }}</strong>
-                <span class="mob-list-summary" :title="`${mob.id} - ${mob.room.name}`">{{ mob.id }} - {{ mob.room.name }}</span>
-                <span v-if="mob.pending_deletion">Pending deletion</span>
-              </router-link>
-            </li>
-          </ul>
+          <div v-else class="mob-zone-groups">
+            <section v-for="(group, index) in zoneGroups" :key="group.key" class="mob-zone" :aria-labelledby="`mob-zone-${index}`">
+              <div class="dashboard-section-heading">
+                <h2 :id="`mob-zone-${index}`">{{ group.name }}</h2>
+                <span class="tag" :aria-label="`${group.mobs.length} mobs on this page`">{{ group.mobs.length }}</span>
+              </div>
+              <ul class="mob-list">
+                <li v-for="mob in group.mobs" :key="mob.id">
+                  <router-link :to="`${listPath}/${mob.id}`" :aria-current="String(mob.id) === selectedId ? 'page' : undefined">
+                    <strong>{{ mob.name }}</strong>
+                    <span class="mob-list-summary" :title="`${mob.id} - ${mob.room.name}`">{{ mob.id }} - {{ mob.room.name }}</span>
+                    <span v-if="mob.pending_deletion">Pending deletion</span>
+                  </router-link>
+                </li>
+              </ul>
+            </section>
+          </div>
           <div class="dashboard-actions">
             <button v-if="cursors.length" class="btn-small button-gray" @click="previousPage">PREVIOUS</button>
             <button v-if="list.data.value.next_after" class="btn-small button-gray" @click="nextPage">NEXT 50</button>
           </div>
-          <p class="dashboard-note">{{ list.data.value.results.length }} shown · {{ timestamp(list.data.value.world.inspected_at) }}</p>
+          <p class="dashboard-note">{{ list.data.value.results.length }} shown{{ cursors.length || list.data.value.next_after ? ' on this page' : '' }} · {{ timestamp(list.data.value.world.inspected_at) }}</p>
         </template>
       </section>
       <div class="mob-browser-detail dashboard-stack">
@@ -67,6 +75,17 @@ const selectedId = computed(() => String(route.params.mob_id || ''));
 const isStaff = computed(() => !!store.state.auth?.user?.is_staff);
 const list = useInspectionRequest();
 const detail = useInspectionRequest();
+type ListedMob = { id: number; name: string; pending_deletion: boolean; room: { name: string; zone: string; zone_id?: number } };
+const zoneGroups = computed(() => {
+  const groups = new Map<string | number, { key: string | number; name: string; mobs: ListedMob[] }>();
+  for (const mob of (list.data.value?.results || []) as ListedMob[]) {
+    const name = mob.room.zone || 'Unknown zone';
+    const key = mob.room.zone_id ?? name;
+    if (!groups.has(key)) groups.set(key, { key, name, mobs: [] });
+    groups.get(key)!.mobs.push(mob);
+  }
+  return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
+});
 const query = ref('');
 const appliedQuery = ref('');
 const after = ref(0);
@@ -91,6 +110,12 @@ watch(() => `${api.value}${selectedId.value}`, () => { void loadDetail(); }, { i
 .mob-browser { display: grid; grid-template-columns: minmax(210px, 1fr) minmax(0, 2fr); gap: 1.25rem; align-items: start; }
 .mob-browser-list { min-width: 0; }
 .mob-search { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; .form-group { width: 100%; min-width: 0; margin: 0; } }
+.mob-zone {
+  margin-top: 1.5rem;
+  .dashboard-section-heading { align-items: center; margin-bottom: 0.25rem; }
+  h2 { font-size: 14px; overflow-wrap: anywhere; min-width: 0; }
+  .tag { flex-shrink: 0; }
+}
 .mob-list {
   margin: 0 0 1rem;
   padding: 0;
