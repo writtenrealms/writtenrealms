@@ -113,6 +113,11 @@ Conversation data includes the authored greeting, approved knowledge, conditions
 and whether the world policy is enabled. This screen is read-only and available
 to the world's author, assigned builders, and staff.
 
+Select the **Definition** link in a loaded mob's details to open its authored
+mob definition in the builder. The link uses the definition's owning world,
+including when inspecting a spawned instance. Mobs without a definition show
+**None** instead.
+
 Use **Refresh** for a new snapshot. Stopped worlds can have no loaded mobs;
 enter the world to load its population. Runtime IDs disappear when mobs despawn
 or a world resets. Carried items are paged in groups of 100; unusually large

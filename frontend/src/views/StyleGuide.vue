@@ -268,9 +268,11 @@
           </div>
           <p class="dashboard-note">.dashboard-note — Supporting context stays muted and readable.</p>
           <p class="dashboard-empty">.dashboard-empty — No world state is currently set.</p>
-          <InspectionFacts :values="{ supports_conversation: true, approved_knowledge: 'You are a stonecutter.', attributes: { strength: 10 } }" />
+          <InspectionFacts :values="{ definition: 'athens-menon', supports_conversation: true, approved_knowledge: 'You are a stonecutter.', attributes: { strength: 10 } }">
+            <template #value-definition="{ value }"><router-link to="/styleguide#dashboards">{{ value }}</router-link></template>
+          </InspectionFacts>
           <JsonInspector title="Example raw record" :value="{ name: 'Menon', state: { met_visitors: 2 } }" />
-          <p class="dashboard-note">InspectionFacts presents readable field values. JsonInspector keeps raw JSON in an expandable, keyboard-accessible panel with a copy action.</p>
+          <p class="dashboard-note">InspectionFacts presents readable field values; use a value-field_name slot for linked values with the standard link styling. JsonInspector keeps raw JSON in an expandable, keyboard-accessible panel with a copy action.</p>
         </div>
       </div>
       <p class="sg-note mt-4">Use <span class="sg-code">.dashboard-facts</span> on a dl with div-wrapped dt/dd pairs;

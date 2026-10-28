@@ -1,7 +1,7 @@
 <template>
   <dl class="dashboard-facts inspection-facts">
     <div v-for="(value, key) in values" :key="key">
-      <dt>{{ label(String(key)) }}</dt><dd>{{ display(value) }}</dd>
+      <dt>{{ label(String(key)) }}</dt><dd><slot :name="`value-${key}`" :value="value">{{ display(value) }}</slot></dd>
     </div>
   </dl>
 </template>

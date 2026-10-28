@@ -9,7 +9,11 @@
       <p class="mob-description">{{ mob.runtime.description || 'No description.' }}</p>
       <InspectionFacts :values="{ room: `${mob.room.name} · room@${mob.room.relative_id}`, zone: mob.room.zone,
         definition: mob.definition?.slug, room_description: mob.runtime.room_description,
-        keywords: mob.runtime.keywords, state: mob.state.data }" />
+        keywords: mob.runtime.keywords, state: mob.state.data }">
+        <template v-if="mob.definition" #value-definition>
+          <router-link :to="{ name: 'builder_mob_definition_details', params: { world_id: mob.definition.world_id, mob_definition_id: mob.definition.id } }">{{ mob.definition.slug || mob.definition.name || `#${mob.definition.id}` }}</router-link>
+        </template>
+      </InspectionFacts>
     </section>
     <section class="panel dashboard-section">
       <div class="dashboard-section-heading"><h2>Conversation</h2><span class="tag" :class="mob.conversation.configured ? 'tag-secondary' : ''">{{ mob.conversation.configured ? 'Configured' : 'Not configured' }}</span></div>

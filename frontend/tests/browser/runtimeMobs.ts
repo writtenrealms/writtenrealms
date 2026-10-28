@@ -54,9 +54,10 @@ const store = createStore({
   mutations: { 'builder/reset_state': () => {}, 'builder/world_set': (s, w) => { s.builder.world = w; }, 'builder/map_set': (s, m) => { s.builder.map = m; }, 'ui/notification_set': () => {} },
   actions: { 'builder/worlds/admin/world_admin_instance_fetch': () => {} },
 });
-const destination = { template: '<p>Preview destination</p>' };
+const destination = { render: () => h('p', 'Preview destination') };
 const router = createRouter({ history: createMemoryHistory(), routes: [
   { path: '/build/worlds/:world_id', component: BuilderFrame, children: [
+    { path: 'mobs/:mob_definition_id', name: 'builder_mob_definition_details', component: destination },
     { path: 'admin/:instance_id', name: 'builder_world_admin_instance', component: AdminInstance },
     { path: 'admin/:instance_id/mobs/:mob_id/debug', name: 'builder_world_admin_mob_debug', component: RuntimeMobDebug },
     { path: 'admin/:instance_id/mobs/:mob_id?', name: 'builder_world_admin_mobs', component: RuntimeMobs },
@@ -123,6 +124,12 @@ async function run() {
   check(!zoneOpen(1), 'Mob selection discarded collapsed zones');
   check(calls.filter(call => call.url === api).length === listCalls, 'Mob selection unnecessarily reloaded the list');
   check(text().includes('Approved knowledge'), 'Mob selection did not show details'); layout();
+  const definitionLink = document.querySelector<HTMLAnchorElement>('.inspection-facts a')!;
+  check(definitionLink.textContent === mob.definition.slug, 'Definition link label is incorrect');
+  check(definitionLink.getAttribute('href') === '/build/worlds/12/mobs/35', 'Definition link points to the runtime world or mob');
+  definitionLink.click(); await frame();
+  check(router.currentRoute.value.name === 'builder_mob_definition_details' && text().includes('Preview destination'), 'Definition navigation failed');
+  await router.push(mobPath); await frame();
   (document.querySelector(`a[href="${mobPath}/debug"]`) as HTMLElement).click(); await frame();
   check(text().includes('LLM payload preview'), 'Debug navigation failed');
   const input = document.querySelector('textarea')!;
