@@ -140,8 +140,9 @@ make docs-build
 at `http://localhost:5174/docs/`. Override the port with
 `DOCS_PORT=5180 make docs`. Use `make docs-install` to force a clean reinstall.
 
-Core releases build and serve the guides from the same source revision as the
-game. Pushes to `main` that change `docs/` update
+Core releases build and serve the standard guides from the same source revision
+as the game. Optional [world guide extensions](docs/dev/world-guide-extensions.md)
+add externally owned player guides to the same navigation and search. Pushes to `main` that change `docs/` update
 [GitHub Pages redirects](https://writtenrealms.github.io/writtenrealms/)
 through [the documentation workflow](.github/workflows/docs.yml).
 `docs.writtenrealms.com` continues to serve the separate WR1/Alpha manual.

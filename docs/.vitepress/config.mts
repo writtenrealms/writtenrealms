@@ -1,5 +1,13 @@
 import { defineConfig, type DefaultTheme } from "vitepress";
 import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { existingSidebar, prepareWorldGuides } from "../scripts/world-guides.mjs";
+
+const docsRoot = fileURLToPath(new URL("..", import.meta.url));
+const worldGuides = prepareWorldGuides(docsRoot);
+const coreSidebar = (items: DefaultTheme.SidebarItem[]) => worldGuides.extended
+  ? existingSidebar(items, `${docsRoot}/${worldGuides.srcDir}`)
+  : items;
 import { guideUrl } from "../scripts/redirects.mjs";
 
 const builderSidebar: DefaultTheme.SidebarItem[] = [
@@ -110,14 +118,14 @@ const adminSidebar: DefaultTheme.SidebarItem[] = [
 
 export default defineConfig({
   base: "/docs/",
-  srcDir: "guides",
+  srcDir: worldGuides.srcDir,
   lang: "en-US",
   title: "Written Realms Core",
   titleTemplate: ":title | Written Realms Core",
   description: "Player, builder, and administrator guides for Written Realms Core.",
   cleanUrls: true,
   // Production releases use git archive, which does not include Git metadata.
-  lastUpdated: existsSync(new URL("../../.git", import.meta.url)),
+  lastUpdated: !worldGuides.extended && existsSync(new URL("../../.git", import.meta.url)),
   appearance: "dark",
   ignoreDeadLinks: false,
   head: [
@@ -127,6 +135,12 @@ export default defineConfig({
     if (pageData.relativePath === "404.md") return [];
     const route = pageData.relativePath.replace(/(^|\/)index\.md$/, "$1").replace(/\.md$/, "");
     return [["link", { rel: "canonical", href: guideUrl(route) }]];
+  },
+  transformPageData(pageData) {
+    if (pageData.relativePath.startsWith("worlds/")) {
+      pageData.frontmatter.editLink = false;
+      pageData.frontmatter.lastUpdated = false;
+    }
   },
   markdown: {
     lineNumbers: true,
@@ -143,15 +157,17 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: "Home", link: "/" },
+      ...worldGuides.nav,
       { text: "Builders", link: "/builders/" },
       { text: "Players", link: "/players/" },
       { text: "Admins", link: "/administrators/" },
     ],
     coreLink: { text: "Written Realms Core", link: "https://core.writtenrealms.com" },
     sidebar: {
-      "/builders/": builderSidebar,
-      "/players/": playerSidebar,
-      "/administrators/": adminSidebar,
+      "/builders/": coreSidebar(builderSidebar),
+      "/players/": coreSidebar(playerSidebar),
+      "/administrators/": coreSidebar(adminSidebar),
+      ...worldGuides.sidebar,
     },
     search: {
       provider: "local",

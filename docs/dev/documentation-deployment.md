@@ -2,14 +2,15 @@
 
 The canonical WR2 builder and player guides are at
 [core.writtenrealms.com/docs/](https://core.writtenrealms.com/docs/).
-VitePress builds only `docs/guides/`; engineering and architecture notes outside
-that directory are not part of the published site.
+VitePress normally builds only `docs/guides/`; engineering and architecture
+notes outside that directory are not part of the published site. Installations
+can explicitly compose [external world guides](world-guide-extensions.md).
 
-Core's web image builds the guides from the same Git revision as the application
-and serves the static output through Caddy. Documentation requests need no
-Django, database, or worker processing. Guide changes become live with a Core
-release, so the public manual follows the deployed game rather than unreleased
-changes on `main`.
+The deployment tooling builds the standard guides from the same Git revision
+as the application and serves the static output through Caddy. Documentation requests need no
+Django, database, or worker processing. Game releases update the standard manual. An installation may also publish
+combined docs separately, pinning the standard manual to the deployed game
+revision while updating its external world guides.
 
 ## Local verification
 
