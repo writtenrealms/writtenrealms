@@ -3,6 +3,8 @@
 This installs Core on your own computer using the repository's Docker Compose
 stack. You need Git, Docker with Compose v2, and OpenSSL for generating secrets.
 Python, Node, PostgreSQL, Redis, and RabbitMQ run inside containers.
+All setup commands and configuration templates are included in this public
+repository. You do not need private tooling or a cloud account.
 
 Use this stack on a trusted development machine. It publishes database and
 broker ports and runs Django and Vite in development mode. For an
@@ -16,29 +18,15 @@ from its root directory and skip `git clone`.
 ```sh
 git clone https://github.com/writtenrealms/writtenrealms.git
 cd writtenrealms
-cp .env.example .env
+./scripts/setup-dev
 ```
 
-Generate three different values:
-
-```sh
-openssl rand -hex 32
-openssl rand -hex 32
-openssl rand -hex 32
-```
-
-Edit `.env` and use one value for each of `POSTGRES_PASSWORD`,
-`DJANGO_SECRET_KEY`, and `JWT_SECRET`. Keep these settings for the local stack:
-
-```dotenv
-POSTGRES_DB=wrealms
-POSTGRES_USER=django
-DJANGO_SETTINGS_MODULE=backend.config.settings.container
-```
-
-Leave optional AWS, Sentry, and Google values blank unless you are configuring
-those integrations. Local email is printed to the backend logs, so you do not
-need an email provider for this walkthrough. Keep `.env` private and out of Git.
+The setup command (also available as `make setup`) checks for Docker Compose
+and OpenSSL, then creates an owner-readable `.env` with three different random
+secrets. It leaves an existing `.env` untouched, including its database password.
+You do not need to edit the generated file for this walkthrough. Optional
+integrations start blank; local email is printed to the backend logs. Keep
+`.env` private and out of Git.
 
 ## Start and check the services
 
@@ -83,18 +71,6 @@ Supply your email, a username, and a password. This creates an active staff
 superuser. The password is used by Django admin; the main site's sign-in form
 uses email links or a configured Google identity.
 
-On a **fresh installation**, initialize a private site with no main world:
-
-```sh
-docker compose exec backend python manage.py shell -c "from system.models import SiteControl; SiteControl.objects.update_or_create(name='prod', defaults={'access_mode': 'invite_only', 'building_enabled': False, 'main_world_id': None})"
-```
-
-The record name `prod` is the platform settings key, including in local
-development. This command deliberately sets those three fields; do not rerun
-it as an upgrade step over an existing site's choices. Without explicit
-initialization, admission and building default to open, and the homepage points
-at world 1 even if that world does not exist yet.
-
 Open `http://localhost:5200/login`, enter your administrator email, and request
 a login link. Read the local email output:
 
@@ -108,8 +84,15 @@ older links. The backend service uses unbuffered output so the message appears
 immediately. Do not share logs containing login links.
 
 Open `http://localhost:5200/staff` to check the
-[Control Panel](control-panel.md). Staff can sign in while the site is invite
-only, even with an empty whitelist.
+[Control Panel](control-panel.md). On a fresh installation, open **Access**,
+choose **Invite only**, uncheck **Allow everyone to create worlds**, clear
+**Promoted world ID**, and save. This gives you a private site with no main world
+until you create one. Staff can sign in and build while these restrictions are on.
+
+Until you save these choices, access and building default to open and the
+homepage points at world 1, which does not exist on a fresh database. Use the
+direct `/login` and `/staff` addresses above during initial setup. Configure
+access before letting other people connect.
 
 ## First world
 
@@ -131,6 +114,14 @@ only, even with an empty whitelist.
 
 Keep this database for your installation; an authored-world export does not
 include its accounts or player progress.
+
+## Optional: mob dialogue through an LLM
+
+Ordinary gameplay needs no provider account. The [LLM setup checklist](llm-integration.md#local-setup-checklist)
+walks through adding your own key, model, spending limits, and a conversational
+mob. Save `COMPOSE_PROFILES=ai` in `.env` when opting in; subsequent normal
+starts include the inference worker automatically. Provider and world enablement
+remain explicit choices.
 
 ## Stop, resume, and troubleshoot
 

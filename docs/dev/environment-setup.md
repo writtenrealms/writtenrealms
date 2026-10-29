@@ -9,33 +9,33 @@ deployment requirements; the default Compose stack is development-only.
 
 ## Quick Start
 
-1. **Copy the example environment file:**
+1. **Generate local configuration** (Docker Compose v2 and OpenSSL required):
    ```bash
-   cp .env.example .env
+   ./scripts/setup-dev
    ```
+   This generates the three required secrets in a private `.env`, leaving
+   optional integrations blank. Existing `.env` files are preserved.
+   `make setup` runs the same helper.
 
 2. **Use Docker's Python runtime.** The backend image uses Python 3.13; a host
    Python installation is not required for the Compose quick start.
 
-3. **Edit `.env`** with your actual credentials (this file is gitignored and won't be committed)
-
-4. **For frontend development:**
+3. **Start the stack:**
    ```bash
-   cd frontend
-   # For npm run dev-local (and the docker-compose frontend service):
-   # .env.localBackend is committed defaults for local backend URLs.
-   # Use .env.localBackend.local for your machine-specific overrides.
-   cat > .env.localBackend.local <<'EOF'
-   VITE_GOOGLE_CLIENT_ID=your_google_oauth_client_id_here
-   EOF
+   docker compose up -d --build
    ```
-   `VITE_GOOGLE_CLIENT_ID` is optional. If not set, Google login is hidden and email login/signup still works.
+   Compose loads `.env` automatically. Open `http://localhost:5200` and follow
+   the [admin quick start](../guides/administrators/quick-start.md#first-administrator)
+   to sign in and create a world.
 
-5. **Run with docker-compose:**
-   ```bash
-   docker compose up --build
-   ```
-   Docker Compose will automatically load variables from `.env`
+The frontend already has local API/WebSocket defaults in
+`frontend/.env.localBackend`. No frontend configuration is needed for email
+sign-in. Optional overrides, such as `VITE_GOOGLE_CLIENT_ID`, belong in
+`frontend/.env.localBackend.local`.
+
+For optional LLM dialogue, follow the [LLM setup checklist](../guides/administrators/llm-integration.md#local-setup-checklist).
+Save `COMPOSE_PROFILES=ai` in `.env` to include `llm-worker` on every normal
+startup, including `make docker-up-mount`. No private workspace wrapper is needed.
 
 ## Optional: bind-mount backend code for fast iteration
 
@@ -54,8 +54,9 @@ After code changes:
 # Django API changes
 docker compose restart backend
 
-# If your changes affect Celery / FastAPI too
-docker compose restart celery-worker celery-beat fastapi
+# Restart all active services after shared Python changes; this includes the
+# inference worker when COMPOSE_PROFILES=ai is saved in .env.
+docker compose restart
 ```
 
 Convenience targets:
@@ -221,7 +222,7 @@ to leave the stack stopped.
 
 ```
 .
-├── .env.example          # Template with placeholder values (committed)
+├── .env.example          # Local defaults and required-secret placeholders (committed)
 ├── .env                  # Your actual credentials (gitignored, for local dev)
 ├── frontend/
 │   ├── .env.localBackend        # Frontend defaults for dev-local mode (committed)
@@ -276,19 +277,14 @@ proxy. Keep credentials, private infrastructure state, and backups outside Git.
 
 ## Generating Secrets
 
-### Django SECRET_KEY
-```python
-python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
-```
+`./scripts/setup-dev` generates independent 64-character hexadecimal values for
+the database password and both signing secrets. It never prints them or changes
+an existing `.env`.
 
-### JWT_SECRET
+For manual setup, copy `.env.example` to `.env`, restrict access with
+`chmod 600 .env`, and run this once for each of the three required secrets:
 ```bash
-openssl rand -base64 64
-```
-
-### Database Password
-```bash
-openssl rand -base64 32
+openssl rand -hex 32
 ```
 
 ## Security Notes

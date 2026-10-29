@@ -97,7 +97,10 @@ test-serial:
 test-keepdb:
 	$(DJANGO_TEST) --parallel $(TEST_PARALLEL) --buffer --keepdb
 
-.PHONY: test test-serial test-keepdb docs docs-install docs-build docker-up docker-up-mount docker-restart docker-restart-mount reset-dev-db reset-dev-db-mount
+.PHONY: test test-serial test-keepdb docs docs-install docs-build setup docker-up docker-up-mount docker-restart docker-restart-mount reset-dev-db reset-dev-db-mount
+
+setup:
+	./scripts/setup-dev
 
 docker-up:
 	docker compose up -d --build

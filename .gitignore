@@ -33,6 +33,7 @@ advent/
 
 # Environment files with sensitive data
 .env
+.env.setup.*
 .env.local
 .env.*.local
 backend/.env

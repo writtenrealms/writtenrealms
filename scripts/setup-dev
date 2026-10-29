@@ -1,0 +1,54 @@
+#!/bin/sh
+# Prepare a fresh local checkout without changing an existing installation.
+set -eu
+
+case "${1:-}" in
+    --help|-h)
+        echo "Usage: scripts/setup-dev"
+        echo "Create a private .env with generated local secrets. Existing .env files are preserved."
+        exit 0
+        ;;
+    "") ;;
+    *) echo "Usage: scripts/setup-dev" >&2; exit 1 ;;
+esac
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repo_root"
+
+if [ -e .env ] || [ -L .env ]; then
+    echo ".env already exists; left unchanged."
+    exit 0
+fi
+
+for dependency in docker openssl; do
+    if ! command -v "$dependency" >/dev/null 2>&1; then
+        echo "Missing $dependency. Install Docker with Compose v2 and OpenSSL, then rerun this command." >&2
+        exit 1
+    fi
+done
+if ! docker compose version >/dev/null 2>&1; then
+    echo "Docker Compose v2 is required. Install or update Docker, then rerun this command." >&2
+    exit 1
+fi
+
+umask 077
+setup_env=$(mktemp "$repo_root/.env.setup.XXXXXX")
+trap 'rm -f "$setup_env"' 0
+trap 'exit 1' 1 2 15
+
+# Generate directly into the private file, never into command arguments or logs.
+while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+        POSTGRES_PASSWORD=*|DJANGO_SECRET_KEY=*|JWT_SECRET=*)
+            printf '%s=' "${line%%=*}"
+            openssl rand -hex 32
+            ;;
+        *) printf '%s\n' "$line" ;;
+    esac
+done < .env.example > "$setup_env"
+
+# Publish the completed file without overwriting an existing .env.
+ln "$setup_env" .env
+echo "Created .env with three generated secrets and owner-only permissions."
+echo "Next: docker compose up -d --build"
+echo "Then follow docs/guides/administrators/quick-start.md to sign in and create a world."

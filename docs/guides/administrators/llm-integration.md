@@ -7,6 +7,33 @@ conversations. Authored quests take priority; greetings, refusals, and eligibili
 checks are deterministic and free. AI help, moderation, world management, and
 the broader builder knowledge editor remain future work.
 
+## Local setup checklist
+
+Start with a running local installation from [Quick start](quick-start.md).
+Everything below uses this repository's Compose stack. No private operations
+repository is required.
+
+1. [Add your provider key](#one-provider-connection) to `.env`. Also uncomment
+   `COMPOSE_PROFILES=ai` there so normal startups include the inference worker.
+2. [Configure a model, prices, and budget](#configure-models-and-prices). The
+   provider key stays in `.env`; the model and budget are saved in the database.
+3. [Start the worker and enable the integration](#start-and-check-the-worker).
+4. [Author and enable a conversational mob](#enable-a-world-conversation-pilot)
+   in your own world. Enter its room, `talk <mob>`, then `say <message>` to test
+   a paid reply. The greeting alone does not call the provider.
+
+These are one-time configuration steps. Once complete, normal startup is:
+
+```bash
+docker compose up -d --build
+# Or, for source mounts:
+make docker-up-mount
+```
+
+Both read `COMPOSE_PROFILES=ai` from `.env` and start `llm-worker` alongside the
+game services. You do not need to reconfigure models or re-enable the world on
+each startup. Keep the same `.env` and PostgreSQL volume to retain your setup.
+
 ## One provider connection
 
 Choose **OpenAI** or **Anthropic** for the installation. Both capability profiles
@@ -21,6 +48,15 @@ key in your deployment's secret store or private, untracked `.env`:
 WR_LLM_API_KEY=your-provider-key
 WR_LLM_OPENAI_PROJECT=
 ```
+
+For local Compose, also save this line in `.env`:
+
+```dotenv
+COMPOSE_PROFILES=ai
+```
+
+This starts the dedicated worker on future normal startups. It does not enable
+spending by itself; the installation and world still need explicit enablement.
 
 `WR_LLM_OPENAI_PROJECT` is optional for OpenAI and unused for Anthropic. Never
 put keys in JSON configuration, YAML world manifests, source control, screenshots,
@@ -43,9 +79,8 @@ Run migrations before starting workers from this revision:
 docker compose exec backend python manage.py migrate
 ```
 
-Create a JSON configuration file accessible inside the backend container, such
-as `/tmp/llm-config.json`. Copy a local file in with `docker compose cp` if needed.
-Replace the placeholders below with a pinned model ID and current USD prices per
+Save the following JSON as `/tmp/llm-config.json` on your computer.
+Replace the placeholders with a pinned model ID and current USD prices per
 million tokens. Placeholder prices deliberately fail validation.
 
 ```json
@@ -93,6 +128,7 @@ An observed cost above its reservation records the discrepancy and disables the
 integration. Review and reconfigure the tariff/bounds before enabling it again.
 
 ```bash
+docker compose cp /tmp/llm-config.json backend:/tmp/llm-config.json
 docker compose exec backend python manage.py llm configure /tmp/llm-config.json
 docker compose exec backend python manage.py llm status
 ```
@@ -164,15 +200,23 @@ Ordinary game workers consume `celery`; the optional worker consumes only
 `inference`. The dedicated worker uses four processes and prefetch one. Keep
 those queues separate in any custom deployment, and run one scheduler.
 
-For the local Compose stack, recreate the API and regular worker to load secret
-changes, then start the optional worker. Include your usual mount override when
-running with bind-mounted source.
+For the local Compose stack, with `COMPOSE_PROFILES=ai` saved in `.env`, run
+normal startup again to load changed environment values and start the optional
+worker. Use `make docker-up-mount` instead of the first command if you use source
+mounts. A plain `restart` does not load changed environment values.
 
 ```bash
-docker compose up -d backend celery-worker celery-beat
-docker compose --profile ai up -d llm-worker
+docker compose up -d --build
+docker compose ps llm-worker
+docker compose logs --tail=50 llm-worker
 docker compose exec backend python manage.py llm enable
+docker compose exec backend python manage.py llm status
 ```
+
+Check that `llm-worker` is running and its startup log lists the `inference`
+queue and reports ready. If you prefer a temporary opt-in instead of saving
+the profile, `docker compose --profile ai up -d llm-worker` starts it explicitly;
+repeat that command after recreating the stack.
 
 Admission performs **no network I/O**: it writes a durable database request.
 The ordinary worker's bounded outbox dispatcher runs every two seconds and

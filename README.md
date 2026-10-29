@@ -6,8 +6,12 @@ A text-based multiplayer game engine with real-time websocket communication, bui
 
 ### Prerequisites
 
-- Docker and Docker Compose
+- Docker with Docker Compose v2
 - Git
+- OpenSSL (used once to generate local secrets)
+
+Python, Node, and the database run in containers. This repository contains
+everything needed for local setup; no private tooling or cloud account is required.
 
 ### Setup
 
@@ -17,18 +21,15 @@ A text-based multiplayer game engine with real-time websocket communication, bui
    cd writtenrealms
    ```
 
-2. **Configure environment variables**
+2. **Generate your local configuration**
    ```bash
-   cp .env.example .env
+   ./scripts/setup-dev
    ```
 
-   Edit `.env` and set your credentials (at minimum, set passwords and secret keys):
-   ```bash
-   # Required: Generate secure values for these
-   POSTGRES_PASSWORD=your_secure_password_here
-   DJANGO_SECRET_KEY=your_django_secret_key_here
-   JWT_SECRET=your_jwt_secret_here
-   ```
+   This creates a private `.env` with three random secrets and optional
+   integrations left off. It preserves any existing `.env`. `make setup` runs
+   the same command. No manual secret generation or `.env` editing is needed
+   for the standard local stack.
 
 3. **Start the services**
    ```bash
@@ -46,15 +47,16 @@ site access, and create a world. The default stack is for local development;
 read [production hosting](docs/guides/administrators/production-hosting.md) before
 exposing an installation to the internet.
 
-### Generating Secure Keys
+### Optional: LLM mob dialogue
 
-```bash
-# Django SECRET_KEY
-python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
+The game runs without an LLM provider. To enable conversations, follow the
+[LLM setup guide](docs/guides/administrators/llm-integration.md#local-setup-checklist):
+add your provider key, choose a model and budget, and enable an authored world
+and mob. This is a one-time setup.
 
-# JWT_SECRET and passwords
-openssl rand -base64 64
-```
+Save `COMPOSE_PROFILES=ai` in `.env` so ordinary `docker compose up -d --build`
+and `make docker-up-mount` starts include the dedicated `llm-worker`.
+Starting that worker alone does not enable paid requests.
 
 ### Useful Commands
 
@@ -89,8 +91,9 @@ Then after code changes:
 # Django API changes
 docker compose restart backend
 
-# If your changes affect Celery / FastAPI too
-docker compose restart celery-worker celery-beat fastapi
+# Restart all active services after shared Python changes (includes llm-worker
+# when COMPOSE_PROFILES=ai is saved in .env).
+docker compose restart
 ```
 
 Convenience targets:
