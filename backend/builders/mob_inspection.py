@@ -15,7 +15,7 @@ from inference.configuration import Unavailable
 from inference.models import InferenceControl
 from inference.providers import request_body
 from spawns.conversations.policy import GREETING, INSTRUCTIONS, bounded_prompt, knowledge_packet, policy_queryset, revision_for, world_knowledge
-from spawns.models import ActiveEffect, CombatParticipant, CommunicationSession, Mob, MobConversationFocus, MobState
+from spawns.models import ActiveEffect, CombatParticipant, CommunicationSession, Mob, MobConversationFocus, MobConversationFailure, MobState
 
 
 class MobPageQuery(serializers.Serializer):
@@ -157,6 +157,7 @@ class RuntimeMobDebugView(RuntimeMobView):
         return Response({'mob': mob_details(mob, policy), 'policy': record(policy),
                          'world_conversation': {'knowledge': world_knowledge(mob, policy)},
                          'focus': record(focus),
+                         'conversation_failure': record(MobConversationFailure.objects.filter(mob=mob).first()),
                          'combat': list(CombatParticipant.objects.filter(mob=mob, is_active=True).order_by('id').values()[:20]),
                          'inspected_at': timezone.now()})
 

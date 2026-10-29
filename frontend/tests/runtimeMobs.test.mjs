@@ -5,12 +5,13 @@ import { createServer } from 'vite';
 import { createSSRApp } from 'vue';
 import { renderToString } from 'vue/server-renderer';
 import { createRouter, createMemoryHistory } from 'vue-router';
-import { mob } from './fixtures/runtimeMobs.mjs';
+import { mob, failure } from './fixtures/runtimeMobs.mjs';
 
 const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true, watch: null, hmr: false }, optimizeDeps: { noDiscovery: true, include: [] } });
 after(() => server.close());
 const { default: Details } = await server.ssrLoadModule('/src/components/builder/RuntimeMobDetails.vue');
 const { default: JsonInspector } = await server.ssrLoadModule('/src/components/builder/JsonInspector.vue');
+const { default: ConversationFailure } = await server.ssrLoadModule('/src/components/builder/ConversationFailure.vue');
 async function render(data, staff = true) {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/build/worlds/:world_id/mobs/:mob_definition_id', name: 'builder_mob_definition_details', component: {} },
@@ -54,4 +55,20 @@ test('mob text and raw JSON are escaped, with a keyboard-accessible JSON panel',
   assert.match(html, /<pre[^>]*tabindex="0"/);
   assert.match(html, /&lt;script&gt;unsafe&lt;\/script&gt;/);
   assert.match(html, /COPY JSON/);
+});
+test('dialogue failure shows the actual response, exact reason, and escaped invisible characters', async () => {
+  const html = await renderToString(createSSRApp(ConversationFailure, { failure }));
+  for (const text of ['Latest dialogue failure', 'forbidden_speech_characters', 'U+000A', failure.request_id, 'Rejected response', '\\nWhat would convince you?']) assert.ok(html.includes(text), text);
+  const unsafe = await renderToString(createSSRApp(ConversationFailure, { failure: { ...failure, response: '<script>unsafe</script>', response_truncated: true } }));
+  assert.match(unsafe, /&lt;script&gt;unsafe&lt;\/script&gt;/);
+  assert.doesNotMatch(unsafe, /<script>unsafe/);
+  assert.match(unsafe, /first 4,096 characters/);
+});
+test('dialogue failure distinguishes unavailable output from no recorded failure', async () => {
+  const noOutput = await renderToString(createSSRApp(ConversationFailure, { failure: { ...failure, response: null } }));
+  assert.match(noOutput, /No returned response was available/);
+  assert.doesNotMatch(noOutput, /Rejected response/);
+  const empty = await renderToString(createSSRApp(ConversationFailure, { failure: null }));
+  assert.match(empty, /No technical failure has been recorded/);
+  assert.doesNotMatch(empty, /Not delivered/);
 });

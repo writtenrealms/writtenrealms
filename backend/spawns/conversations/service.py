@@ -6,7 +6,6 @@ No lock survives a provider request. Only active focuses enter the bounded poll.
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import timedelta, timezone as datetime_timezone
-import re
 import uuid
 
 from django.db import DatabaseError, transaction
@@ -20,12 +19,13 @@ from inference.configuration import Unavailable
 from inference.models import InferenceControl, InferenceRequest
 from quests.services.interactions import resolve_talk_interaction
 from spawns.conversations.inputs import AUTHORED_KEY, DELIVERY_KEY, INPUT_KEY
+from spawns.conversations.diagnostics import record_failure, speech_rejection
 from spawns.conversations.policy import GREETING, bounded_prompt, policy_queryset, revision_for
 from spawns.events import GameEvent, _enqueue_game_event_batch, flush_game_event_outbox_batch
 from spawns.instance_clock import clock_guard, current_simulation
 from spawns.models import (
     CombatParticipant, CommunicationSession, EventSubscriptionReceipt, Mob,
-    GameEventOutbox, MobConversationAllowance, MobConversationFocus, Player,
+    GameEventOutbox, MobConversationAllowance, MobConversationFocus, MobConversationFailure, Player,
 )
 
 IDLE = timedelta(seconds=90)
@@ -158,6 +158,19 @@ def _refuse(player, mob, allowance, now):
     allowance.save(update_fields=['last_notice_at'])
 
 
+def _technical_failure(player, mob, allowance, now, reason, *, request=None, details=None):
+    # Repeated admission attempts are throttled, just like social refusals.
+    if request is None and MobConversationFailure.objects.filter(
+            mob=mob, reason=reason, occurred_at__gt=now - NOTICE_INTERVAL).exists():
+        return
+    record_failure(mob, reason, request=request, details=details)
+    _emit([GameEvent(type='notification.mob.conversation', recipients=[player.key], data={},
+                    text=f"{mob.name}'s reply could not be delivered because of a technical problem. Please try talking again.")])
+    # Technical notices have their own throttle; allow an immediate new TALK.
+    allowance.last_notice_at = None
+    allowance.save(update_fields=['last_notice_at'])
+
+
 def _close(focus, *, invalidate=True):
     if focus is None:
         return
@@ -178,8 +191,12 @@ def _expire(player, mob, policy, focus, *, speech=None):
     if focus.expires_at > now and focus.hard_expires_at > now:
         return False
     if _eligible(player, mob, policy, focus=focus, speech=speech, check_expiry=False):
-        _emit([GameEvent(type='notification.mob.conversation', recipients=[player.key], data={},
-                         text=f'{mob.name} turns away, no longer listening to you.')])
+        if focus.pending_request_id:
+            _technical_failure(player, mob, _allowance(player, mob, now), now,
+                               'reply_timed_out', request=focus.pending_request)
+        else:
+            _emit([GameEvent(type='notification.mob.conversation', recipients=[player.key], data={},
+                             text=f'{mob.name} turns away, no longer listening to you.')])
     _close(focus)
     return True
 
@@ -232,8 +249,9 @@ def greet(player_id, event_data, *, authored=False):
             return
         try:
             capacity = inference.capacity(user_id=player.user_id, world_id=_base_world(player), purpose='mob_conversation')
-        except (Unavailable, DatabaseError):
-            _refuse(player, mob, allowance, now)
+        except (Unavailable, DatabaseError) as error:
+            _technical_failure(player, mob, allowance, now,
+                               str(error) if isinstance(error, Unavailable) else 'accounting_unavailable')
             return
         if allowance.last_notice_at and allowance.last_notice_at + NOTICE_INTERVAL > now:
             return
@@ -300,8 +318,9 @@ def hear(player_id, event_data, *, authored=False):
                 world_id=player.world_id, purpose='mob_conversation', **payload)
             if admission.reason:
                 raise Unavailable(admission.reason)
-        except (Unavailable, DatabaseError):
-            _refuse(player, mob, allowance, now)
+        except (Unavailable, DatabaseError) as error:
+            _technical_failure(player, mob, allowance, now,
+                               str(error) if isinstance(error, Unavailable) else 'accounting_unavailable')
             _close(focus)
             return
         focus.pending_request_id = admission.request_id
@@ -339,10 +358,7 @@ def dispatch_guard(request_id):
 
 
 def _spoken_text(result):
-    text = (result or {}).get('text', '')
-    if not isinstance(text, str) or not 1 <= len(text) <= 280 or re.search(r'[<>\[\]{}\x00-\x1f\x7f]', text):
-        return None
-    return text.strip() or None
+    return None if speech_rejection(result) else result['text'].strip()
 
 
 def finish(player_id):
@@ -362,11 +378,18 @@ def finish(player_id):
         request = focus.pending_request
         if request is None or request.status in inference.ACTIVE:
             return
-        result = inference.result_for(request.pk)
+        result, unavailable_reason = inference.result_for_with_reason(request.pk)
         text = _spoken_text(result)
         if text is None:
             allowance = _allowance(player, mob, timezone.now())
-            _refuse(player, mob, allowance, timezone.now())
+            rejected = request.result.get('rejection', {}) if isinstance(request.result, dict) else {}
+            # A provider failure can itself open the installation circuit. Show
+            # this request's failure rather than the resulting circuit state.
+            if request.error_code:
+                unavailable_reason = request.error_code
+            reason, details = ((rejected.get('reason') or unavailable_reason, {}) if unavailable_reason
+                               else speech_rejection(result))
+            _technical_failure(player, mob, allowance, timezone.now(), reason, request=request, details=details)
             _close(focus)
             return
         from spawns.actions.communication import SayAction, EmoteAction

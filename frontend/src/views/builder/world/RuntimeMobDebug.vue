@@ -12,6 +12,7 @@
     <p v-if="debug.loading.value" class="dashboard-empty" role="status">Loading debug data…</p>
     <p v-else-if="debug.error.value" role="alert" class="inline-notice inline-notice-error">{{ debug.error.value }}</p>
     <template v-else-if="debug.data.value">
+      <ConversationFailure :failure="debug.data.value.conversation_failure || null" />
       <section class="panel dashboard-section">
         <div class="dashboard-section-heading"><div><h2>LLM payload preview</h2><p>Reconstruct the request body using the current mob, room, policy, and model configuration.</p></div><span class="tag tag-secondary">Preview only</span></div>
         <p class="inline-notice">This does not call the LLM, spend budget, store a request, or advance a conversation. It is a hypothetical next reply, not a record of an earlier request.</p>
@@ -63,6 +64,7 @@ import { useRoute } from 'vue-router';
 import { Bug, RefreshCw } from '@lucide/vue';
 import JsonInspector from '@/components/builder/JsonInspector.vue';
 import InspectionFacts from '@/components/builder/InspectionFacts.vue';
+import ConversationFailure from '@/components/builder/ConversationFailure.vue';
 import { useInspectionRequest } from '@/composables/useInspectionRequest';
 const route = useRoute();
 const mobPath = computed(() => `/build/worlds/${route.params.world_id}/admin/${route.params.instance_id}/mobs/${route.params.mob_id}`);

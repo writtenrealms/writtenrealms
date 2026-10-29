@@ -76,7 +76,8 @@ resolves one interaction owner:
 | --- | --- | --- |
 | An applicable authored quest or conversation handles this interaction | Execute the authored interaction. | None, unless the quest explicitly delegates to AI conversation. |
 | No authored interaction handles it, and conversation admission succeeds | Publish an authored greeting and establish conversation focus. | None. |
-| The mob is unwilling, busy, unavailable, or lacks permitted AI capacity | Publish an authored refusal/social gesture, or remain silent after repeated refusals. | None. |
+| The mob is unwilling or busy | Publish an authored refusal/social gesture, or remain silent after repeated refusals. | None. |
+| Technical inference capacity or delivery fails | Send a private system notice and record the latest bounded failure for staff inspection. | None beyond an already dispatched request. |
 
 "Applicable" is specific to this player and current game state. A mob having
 some quest definition does not permanently exclude casual conversation.
@@ -751,6 +752,16 @@ The system policy requires local ignorance, distrust of claims, and no item or
 quest promises. JSON text is limited to 280 characters and rejects markup and
 control characters without a repair call. Semantic roleplay quality still needs
 review against the actual provider/model before expanding access.
+
+Technical admission, provider, output-validation, and pending-reply timeout
+failures send a private system notice instead of an NPC refusal gesture.
+`MobConversationFailure` retains only the latest such failure per loaded mob,
+including its exact code, bounded validation details, optional request ID, and
+at most 4,096 characters of rejected model output. It survives focus closure,
+is staff-only, and cascades on mob deletion. Success paths create no diagnostic
+record; failures add one bounded upsert and staff debug reads one primary-key
+lookup. No prompt or transcript is copied, no polling job or history scan is added,
+and replies erased before this feature cannot be recovered.
 
 Admission, dispatch, settlement consumption, and outbox delivery check fresh
 game state and configuration generations. Focus captures world session,

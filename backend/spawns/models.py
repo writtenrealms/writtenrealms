@@ -1683,6 +1683,18 @@ class MobConversationFocus(models.Model):
                                name='mob_conversation_expiry_idx')]
 
 
+class MobConversationFailure(models.Model):
+    """Only the latest technical failure for a loaded mob; never a prompt archive."""
+
+    mob = models.OneToOneField('Mob', on_delete=models.CASCADE, primary_key=True)
+    occurred_at = models.DateTimeField(default=timezone.now)
+    reason = models.CharField(max_length=64)
+    details = models.JSONField(default=dict)
+    request_id = models.UUIDField(null=True)
+    response = models.TextField(null=True)
+    response_truncated = models.BooleanField(default=False)
+
+
 class MobConversationAllowance(models.Model):
     owner = models.CharField(max_length=40)
     definition = models.ForeignKey('builders.MobDefinition', on_delete=models.CASCADE)

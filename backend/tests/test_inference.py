@@ -45,6 +45,16 @@ ANTHROPIC_RESPONSE = {'stop_reason': 'end_turn', 'usage': {
 
 
 class TestInferenceProviders(SimpleTestCase):
+    def test_rejected_model_output_is_bounded_and_has_a_specific_reason(self):
+        for value, reason in [('bad json', 'invalid_json'), ('{"text": 5}', 'invalid_text_type'),
+                              ('{"wrong": "field"}', 'invalid_response_fields'), ('x' * 5000, 'invalid_json')]:
+            response = copy.deepcopy(OPENAI_RESPONSE)
+            next(part for part in response['output'] if part['type'] == 'message')['content'][0]['text'] = value
+            outcome = providers.parse_response('openai', response)
+            self.assertEqual(outcome.error, 'invalid_output')
+            self.assertIsNone(outcome.result)
+            self.assertEqual(outcome.rejection, {'reason': reason, 'response': value[:4096], 'truncated': len(value) > 4096})
+
     def test_fractional_monetary_unit_cannot_increase_a_cap(self):
         self.assertEqual(micro('0.0000009'), 0)
         self.assertEqual(micro('90.0000009'), 90000000)

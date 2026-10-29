@@ -312,9 +312,11 @@ def _settle(control, request, outcome, now):
     elif late or not control.enabled or _stale(request, control, now):
         request.status = InferenceRequest.Status.DISCARDED
         request.error_code = 'late_result' if late else 'stale_result'
-    elif outcome.result is not None:
+    elif not outcome.error and outcome.result is not None:
         request.status = InferenceRequest.Status.SUCCEEDED
         request.result = outcome.result
+    if request.status in (InferenceRequest.Status.INVALID, InferenceRequest.Status.UNCERTAIN) and outcome.rejection:
+        request.result = {'rejection': outcome.rejection}
     request.payload = {}
     request.completed_at = now
     request.save()
@@ -334,7 +336,7 @@ def settle(request_id, dispatch_token, outcome):
 
 
 @transaction.atomic
-def result_for(request_id):
+def result_for_with_reason(request_id):
     """Read a still-usable result; the consumer must also recheck game state.
 
     Publication and its idempotency receipt belong in the consumer transaction.
@@ -344,12 +346,26 @@ def result_for(request_id):
         control = _control()
         now = timezone.now()
         _available(control, now)
-    except Unavailable:
-        return None
-    request = InferenceRequest.objects.filter(pk=request_id, status=InferenceRequest.Status.SUCCEEDED).first()
-    if request is None or _stale(request, control, now):
-        return None
-    return request.result
+    except Unavailable as error:
+        return None, str(error)
+    request = InferenceRequest.objects.filter(pk=request_id).first()
+    if request is None:
+        return None, 'request_missing'
+    if request.status != InferenceRequest.Status.SUCCEEDED:
+        return None, request.error_code or f'request_{request.status}'
+    if request.generation != control.generation:
+        return None, 'changed_configuration'
+    if request.expires_at <= now:
+        return None, 'reply_timed_out'
+    if request.created_at.astimezone(datetime_timezone.utc).date() != now.astimezone(datetime_timezone.utc).date():
+        return None, 'request_day_changed'
+    if request.result is None:
+        return None, 'response_missing'
+    return request.result, None
+
+
+def result_for(request_id):
+    return result_for_with_reason(request_id)[0]
 
 
 @transaction.atomic

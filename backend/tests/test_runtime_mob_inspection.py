@@ -14,7 +14,7 @@ from inference.models import BudgetBucket, InferenceRequest, InferenceControl
 from inference.providers import request_body
 from spawns.conversations.policy import bounded_prompt, set_enabled
 from spawns.communications import reset_communication_session
-from spawns.models import Mob, MobConversationFocus, MobConversationAllowance, MobState
+from spawns.models import Mob, MobConversationFocus, MobConversationAllowance, MobConversationFailure, MobState
 from tests.base import WorldTestCase
 from tests.test_inference import CONFIG
 from tests.utils import dispatch_text_command
@@ -101,6 +101,24 @@ class TestRuntimeMobInspection(WorldTestCase):
         url = self.url('detail')
         self.mob.delete()
         self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_latest_failure_is_staff_only_read_only_and_scoped_to_the_loaded_mob(self):
+        MobConversationFailure.objects.create(mob=self.mob, reason='forbidden_speech_characters',
+            response='<script>rejected</script>', details={'characters': [{'offset': 0, 'code_point': 'U+003C'}]})
+        self.assertNotIn('rejected', str(self.client.get(self.url('detail')).data))
+        self.assertEqual(self.client.get(self.url('debug')).status_code, 403)
+        self.staff()
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(self.url('debug'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['conversation_failure']['response'], '<script>rejected</script>')
+        self.assertEqual(response.data['conversation_failure']['reason'], 'forbidden_speech_characters')
+        self.assertEqual(response['Cache-Control'], 'no-store')
+        self.assertFalse(any(q['sql'].lstrip().startswith(('INSERT', 'UPDATE', 'DELETE')) for q in queries))
+        other_runtime = self.world.create_spawn_world()
+        self.assertEqual(self.client.get(self.url('debug', pk=str(other_runtime.pk))).status_code, 404)
+        MobConversationFailure.objects.all().delete()
+        self.assertIsNone(self.client.get(self.url('debug')).data['conversation_failure'])
 
     def test_preview_matches_live_builder_without_writes_or_provider_calls(self):
         self.staff()

@@ -324,9 +324,34 @@ Disabled integrations can still be previewed when a provider/model is configured
 Previewing is read-only: it makes no provider call, reserves no budget, stores no
 request, and does not advance or open a conversation. It reconstructs a possible
 request from **current** data; it cannot recover an earlier payload after the
-room, policy, transcript, or model configuration changes. No additional capture,
-request history, or retention is introduced. Raw current records are expandable
+room, policy, transcript, or model configuration changes. Previewing adds no prompt
+capture or request history. Raw current records are expandable
 below the preview. Refresh explicitly to load new data; the screen does not poll.
+
+### Latest dialogue failure
+
+The staff debug screen also shows the latest **technical failure** for this loaded
+mob: its time, request ID (when admitted), exact reason code, validation details,
+and the rejected model response when one was available. For example,
+`forbidden_speech_characters` identifies zero-based character offsets and Unicode
+code points; `speech_too_long` includes the actual and allowed lengths. Provider
+format failures distinguish invalid JSON, incorrect fields, and refusals. HTTP
+failures record the status code, never response bodies or authentication headers.
+
+This is one bounded record per loaded mob, replaced on its next technical failure
+and deleted with the mob. At most 4,096 response characters are retained; truncation
+is explicitly marked. Successful dialogue does not erase the last failure. No
+player speech, request payload, or conversation history is copied into this record.
+It is staff-only, excluded from ordinary mob details, and is not a historical log.
+Older erased replies cannot be reconstructed. Apply migration
+`spawns.0175_mob_conversation_failure` and restart API and workers to enable it.
+
+Technical failures produce a private system notice that the reply could not be
+delivered and invite the player to talk again. They do not make the mob perform
+an unwillingness gesture. A pending reply that times out uses this same technical
+notice; an idle conversation without a pending reply retains the ordinary
+“no longer listening” message. Character patience and daily dialogue limits remain
+separate. Admitted attempts still count toward those limits, including failures.
 
 ## Upgrade from separate conversation-policy knowledge
 
@@ -432,12 +457,15 @@ provider key, and recreate services to remove it from their environment.
 Stopping a worker or deleting a key is **not** evidence that an in-flight call
 was free. Keep the ordinary worker and scheduler running to recover its ledger.
 
-Completed input is erased immediately. Generated text is cleared after three days
+Completed input is erased immediately. Generated text and bounded provider-format
+rejection evidence in request records are cleared after three days
 by hourly bounded cleanup. Request metadata/usage/idempotency receipts last 90
 days; installation, world, and purpose spending buckets survive receipt cleanup.
 Old per-owner daily buckets are removed once their receipts are gone. Queued input is retained
 until dispatch/cancellation, so an installation with stopped workers/scheduler
 must resume cleanup to expire it. Backups have their own retention policy.
+The separate latest-failure record described above survives conversation closure
+and request cleanup, until replaced or its loaded mob is deleted.
 
 Conversation transcripts are cleared when focus closes. Inactive focus and
 allowance rows expire after three days. Conversation input receipts expire after

@@ -9,7 +9,7 @@ import AdminInstance from '../../src/views/builder/world/AdminInstance.vue';
 import RuntimeMobs from '../../src/views/builder/world/RuntimeMobs.vue';
 import RuntimeMobDebug from '../../src/views/builder/world/RuntimeMobDebug.vue';
 import { rootWorld, worldInstance } from '../fixtures/worldAdmin.mjs';
-import { mob, runtime, preview } from '../fixtures/runtimeMobs.mjs';
+import { mob, runtime, preview, failure } from '../fixtures/runtimeMobs.mjs';
 import '../../src/styles/app.scss';
 
 const params = new URLSearchParams(location.search);
@@ -42,7 +42,7 @@ axios.defaults.adapter = async config => {
   const results = empty ? [] : page.filter(entry => `${entry.name} ${entry.id} ${entry.room.name}`.toLowerCase().includes(query));
   const responses: Record<string, any> = { '/builder/worlds/12/': rootWorld, '/builder/worlds/12/map/': { rooms: {} }, '/lobby/config/': { main_world_id: 12, building_enabled: true },
     [api]: { world: { ...runtime, lifecycle: empty ? 'stopped' : 'running' }, results, next_after: !empty && !query && !config.params?.after && params.has('test') ? 128 : null },
-    [`${api}123/`]: { world: runtime, mob }, [`${api}123/debug/`]: { mob, world_conversation: { knowledge: 'The Agora is a marketplace.' }, policy: { enabled: true, world_id: 12 }, focus: null, combat: [], inspected_at: runtime.inspected_at } };
+    [`${api}123/`]: { world: runtime, mob }, [`${api}123/debug/`]: { mob, conversation_failure: params.has('failure') || params.has('test') ? failure : null, world_conversation: { knowledge: 'The Agora is a marketplace.' }, policy: { enabled: true, world_id: 12 }, focus: null, combat: [], inspected_at: runtime.inspected_at } };
   if (missing && config.url?.startsWith(api)) throw Object.assign(new Error('Missing'), { response: { status: 404 } });
   if (!(config.url! in responses)) throw new Error(`Unexpected fixture request: ${config.url}`);
   const data = config.method === 'post' ? preview(JSON.parse(config.data).speech) : responses[config.url!];
@@ -132,6 +132,9 @@ async function run() {
   await router.push(mobPath); await frame();
   (document.querySelector(`a[href="${mobPath}/debug"]`) as HTMLElement).click(); await frame();
   check(text().includes('LLM payload preview'), 'Debug navigation failed');
+  check(text().includes('Latest dialogue failure') && text().includes('forbidden_speech_characters'), 'Failure reason missing');
+  check(text().includes('Rejected response') && text().includes('U+000A') && text().includes('\\nWhat would convince you?'), 'Rejected response evidence missing');
+  layout();
   const input = document.querySelector('textarea')!;
   input.value = 'Can an agreed price still be unfair?'; input.dispatchEvent(new Event('input', { bubbles: true })); await frame();
   const before = calls.filter(c => c.method === 'post').length;
@@ -144,7 +147,7 @@ async function run() {
   button('REFRESH').click(); await frame();
   check(!text().includes('Reconstructed request'), 'Refreshing left stale preview visible');
   missing = true; button('REFRESH').click(); await frame();
-  check(text().includes('no longer available') && !text().includes('Current raw records'), 'Despawn left stale data visible');
+  check(text().includes('no longer available') && !text().includes('Current raw records') && !text().includes('Rejected response'), 'Despawn left stale data visible');
   missing = false; empty = true; await router.push('/build/worlds/12/admin/13/mobs'); await frame();
   button('REFRESH').click(); await frame();
   check(text().includes('This world is stopped'), 'Stopped-world explanation missing'); layout();

@@ -17,6 +17,12 @@ export const mob = {
 };
 mob.definition_record.conversation = { greeting: mob.conversation.greeting, knowledge: mob.conversation.knowledge, when: mob.conversation.when };
 export const runtime = { id: 13, name: 'Phalanx', lifecycle: 'running', root_world_id: 12, inspected_at: '2026-10-26T23:00:00Z' };
+export const failure = {
+  reason: 'forbidden_speech_characters', occurred_at: '2026-10-29T01:29:57Z',
+  request_id: '00000000-0000-4000-8000-000000000001',
+  details: { characters: [{ offset: 36, code_point: 'U+000A' }], count: 1, request_status: 'succeeded', provider: 'openai', model: 'example-model' },
+  response: 'Does a stone ask whether it is real?\nWhat would convince you?', response_truncated: false,
+};
 export function preview(speech) {
   const packet = { common_local_knowledge: 'The Agora is a place for trade and conversation.', speaker: { name: 'Menon', approved_knowledge: mob.conversation.knowledge }, here: { name: mob.room.name }, listener: 'An unfamiliar visitor.', allowed_game_actions: [] };
   const instructions = 'You are a living person in this fictional game. Speak directly to the stranger. Use only the supplied local knowledge.';

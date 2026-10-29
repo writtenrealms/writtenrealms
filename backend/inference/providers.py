@@ -21,6 +21,15 @@ class Outcome:
     usage: dict | None = None
     result: dict | None = None
     error: str = ''
+    rejection: dict | None = None
+
+
+def rejected_output(usage, reason, response=None, *, error='invalid_output'):
+    """Keep only bounded model output, never HTTP bodies, headers, or exceptions."""
+    return Outcome(usage=usage, error=error, rejection={
+        'reason': reason, 'response': response[:4096] if isinstance(response, str) else None,
+        'truncated': isinstance(response, str) and len(response) > 4096,
+    })
 
 
 def request_body(provider, profile, payload):
@@ -60,32 +69,42 @@ def parse_response(provider, data):
         return Outcome(error='unknown_billing_category')
     try:
         if provider == 'openai':
-            if data.get('status') != 'completed':
-                return Outcome(usage=usage, error='incomplete_output')
             output = data['output']
             if any(part['type'] not in ('message', 'reasoning') for part in output):
                 return Outcome(error='unknown_billing_category')
             parts = [part for item in output if item['type'] == 'message' for part in item['content']]
+            candidate = next((part.get('text') for part in parts if part.get('type') == 'output_text'), None)
+            if data.get('status') != 'completed':
+                return rejected_output(usage, 'provider_incomplete_output', candidate, error='incomplete_output')
             if len(parts) != 1 or parts[0]['type'] != 'output_text':
-                return Outcome(usage=usage, error='invalid_output')
+                refusal = next((part.get('refusal') for part in parts if part.get('type') == 'refusal'), None)
+                return rejected_output(usage, 'provider_refusal' if any(part.get('type') == 'refusal' for part in parts)
+                                       else 'unexpected_output_parts', refusal or candidate)
             value = parts[0]['text']
         else:
-            if data.get('stop_reason') != 'end_turn':
-                return Outcome(usage=usage, error='incomplete_output')
             parts = data['content']
             if any(part['type'] not in ('text', 'thinking', 'redacted_thinking') for part in parts):
                 return Outcome(error='unknown_billing_category')
             texts = [part['text'] for part in parts if part['type'] == 'text']
+            if data.get('stop_reason') != 'end_turn':
+                return rejected_output(usage, 'provider_incomplete_output', texts[0] if texts else None,
+                                       error='incomplete_output')
             if len(texts) != 1:
-                return Outcome(usage=usage, error='invalid_output')
+                return rejected_output(usage, 'unexpected_output_parts', texts[0] if texts else None)
             value = texts[0]
-        result = json.loads(value)
-        if (not isinstance(result, dict) or set(result) != {'text'} or
-                not isinstance(result['text'], str) or not 1 <= len(result['text']) <= 4096):
-            raise ValueError()
+        try:
+            result = json.loads(value)
+        except (ValueError, TypeError):
+            return rejected_output(usage, 'invalid_json', value)
+        if not isinstance(result, dict) or set(result) != {'text'}:
+            return rejected_output(usage, 'invalid_response_fields', value)
+        if not isinstance(result['text'], str):
+            return rejected_output(usage, 'invalid_text_type', value)
+        if not 1 <= len(result['text']) <= 4096:
+            return rejected_output(usage, 'provider_text_length', value)
         return Outcome(usage=usage, result=result)
     except (KeyError, TypeError, ValueError, AttributeError):
-        return Outcome(usage=usage, error='invalid_output')
+        return rejected_output(usage, 'malformed_provider_output')
 
 
 def perform(provider, profile, payload):
@@ -109,7 +128,7 @@ def perform(provider, profile, payload):
                           follow_redirects=False, transport=httpx.HTTPTransport(retries=0)) as client:
             with client.stream('POST', url, headers=headers, json=request_body(provider, profile, payload)) as response:
                 if response.status_code != 200:
-                    return Outcome(error='provider_http_error')
+                    return rejected_output(None, f'provider_http_{response.status_code}', error='provider_http_error')
                 content = bytearray()
                 for chunk in response.iter_bytes():
                     content.extend(chunk)

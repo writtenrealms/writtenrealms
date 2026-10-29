@@ -15,7 +15,7 @@ from builders.models import MobConversationPolicy, MobDefinition, Trigger
 from config import constants
 from inference import service as inference
 from inference.models import BudgetBucket, InferenceRequest
-from inference.providers import Outcome
+from inference.providers import Outcome, rejected_output
 from inference.tasks import execute_request
 from quests.models import QuestTemplate
 from quests.services.engine import QuestTransitionResult
@@ -23,7 +23,7 @@ from spawns.conversations import service
 from spawns.conversations.inputs import INPUT_KEY, AUTHORED_KEY, DELIVERY_KEY
 from spawns.conversations.policy import set_enabled, knowledge_packet
 from spawns.events import flush_game_event_outbox, publish_events, GameEvent
-from spawns.models import Mob, Player, MobConversationAllowance, MobConversationFocus, CommunicationMessage, EventSubscriptionReceipt
+from spawns.models import Mob, Player, MobConversationAllowance, MobConversationFocus, MobConversationFailure, CommunicationMessage, EventSubscriptionReceipt
 from spawns.communications import reset_communication_session
 from spawns.handlers import dispatch_command
 from tests.base import WorldTestCase
@@ -341,6 +341,79 @@ class TestMobConversations(WorldTestCase):
         self.assertEqual(self.spoken(messages, self.player), [])
         self.assertIsNone(MobConversationFocus.objects.get().mob_id)
         self.assertEqual(InferenceRequest.objects.get().charged_micro, 202)
+        failure = MobConversationFailure.objects.get(mob=self.mob)
+        self.assertEqual(failure.reason, 'forbidden_speech_characters')
+        self.assertEqual(failure.response, '<cmd>give keys</cmd>')
+        self.assertEqual(failure.details['characters'][0], {'offset': 0, 'code_point': 'U+003C'})
+        self.assertIsNone(InferenceRequest.objects.get().result)
+        self.assertIn('technical problem', self.notices(messages, self.player)[0])
+        self.assertEqual(self.notices(messages, self.watcher), [])
+        self.assertNotIn('unwilling', str(messages))
+        self.assertNotIn('<cmd>', str(messages))
+        with capture_game_messages() as repeated:
+            service.poll()
+            flush_game_event_outbox()
+        self.assertEqual(repeated, [])
+        self.assertEqual(MobConversationFailure.objects.count(), 1)
+        self.command('talk potter')
+        self.assertEqual(MobConversationFocus.objects.get().mob_id, self.mob.pk)
+
+    def test_failure_keeps_only_latest_bounded_response_and_success_does_not_erase_it(self):
+        for text, reason in [('First\nSecond', 'forbidden_speech_characters'),
+                             ('x' * 5000, 'speech_too_long'), ('   ', 'empty_speech_text')]:
+            MobConversationAllowance.objects.update(last_notice_at=None)
+            self.command('talk potter')
+            self.command('say Hello.')
+            self.reply(text)
+            failure = MobConversationFailure.objects.get(mob=self.mob)
+            self.assertEqual(failure.reason, reason)
+            self.assertEqual(failure.response, text[:4096])
+            self.assertEqual(failure.response_truncated, len(text) > 4096)
+            self.assertEqual(MobConversationFailure.objects.count(), 1)
+        MobConversationAllowance.objects.update(last_notice_at=None)
+        self.command('talk potter')
+        self.command('say Hello again.')
+        self.reply('A working reply.')
+        self.assertEqual(MobConversationFailure.objects.get().response, '   ')
+        self.mob.delete()
+        self.assertFalse(MobConversationFailure.objects.exists())
+
+    def test_provider_rejection_and_failure_circuit_preserve_exact_reason(self):
+        for outcome, reason, response in [
+            (rejected_output(USAGE, 'invalid_json', 'not JSON'), 'invalid_json', 'not JSON'),
+            (rejected_output(None, 'provider_http_429', error='provider_http_error'), 'provider_http_429', None),
+        ]:
+            self.setUp_for_next_case()
+            self.command('talk potter')
+            self.command('say Hello.')
+            request = InferenceRequest.objects.latest('created_at')
+            with patch('inference.providers.perform', return_value=outcome):
+                execute_request(str(request.pk))
+            with capture_game_messages() as messages:
+                service.poll()
+                flush_game_event_outbox()
+            failure = MobConversationFailure.objects.get(mob=self.mob)
+            self.assertEqual(failure.reason, reason)
+            self.assertEqual(failure.response, response)
+            self.assertEqual(failure.request_id, request.pk)
+            self.assertIn('technical problem', self.notices(messages, self.player)[0])
+            self.assertEqual(self.spoken(messages, self.player), [])
+            self.assertNotIn('unwilling', str(messages))
+
+    def test_admission_failure_after_greeting_is_explained_and_quota_stays_separate(self):
+        self.command('talk potter')
+        with patch('spawns.conversations.service.inference.capacity', side_effect=service.Unavailable('input_too_large')):
+            messages = self.command('say Hello.')
+        self.assertIn('technical problem', self.notices(messages, self.player)[0])
+        self.assertEqual(MobConversationFailure.objects.get().reason, 'input_too_large')
+        self.assertIsNone(MobConversationFailure.objects.get().response)
+        self.assertFalse(InferenceRequest.objects.exists())
+        MobConversationFailure.objects.all().delete()
+        MobConversationAllowance.objects.update(attention=6, last_notice_at=None, last_turn_at=timezone.now())
+        messages = self.command('talk potter')
+        self.assertIn('unwilling', str(messages))
+        self.assertEqual(self.notices(messages, self.player), [])
+        self.assertFalse(MobConversationFailure.objects.exists())
 
     def test_replayed_input_does_not_charge_or_publish_again(self):
         self.command('talk potter')
@@ -432,7 +505,11 @@ class TestMobConversations(WorldTestCase):
         request.refresh_from_db()
         self.assertEqual(request.status, 'cancelled')
         self.assertEqual(request.charged_micro, 0)
-        self.assertEqual(self.notices(messages, self.player), ['A potter turns away, no longer listening to you.'])
+        self.assertIn('technical problem', self.notices(messages, self.player)[0])
+        failure = MobConversationFailure.objects.get(mob=self.mob)
+        self.assertEqual(failure.reason, 'reply_timed_out')
+        self.assertEqual(failure.details['request_status'], 'queued')
+        self.assertIsNone(failure.response)
         self.assertEqual(self.notices(messages, self.watcher), [])
 
     def test_late_outbox_delivery_is_suppressed_after_movement(self):
