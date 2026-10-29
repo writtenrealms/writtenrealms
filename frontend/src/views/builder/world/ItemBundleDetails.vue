@@ -17,6 +17,7 @@
           <button class="btn-small" :disabled="!itemBundle.yaml" @click="editYaml">
             EDIT
           </button>
+          <YamlViewButton :source="itemBundle.yaml || ''" title="Item bundle YAML" />
         </div>
       </div>
 
@@ -35,6 +36,7 @@ import axios from "axios";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
+import YamlViewButton from "@/components/builder/world/YamlViewButton.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -120,12 +122,13 @@ watch(
     align-items: flex-start;
     display: flex;
     gap: 1rem;
+    flex-wrap: wrap;
     justify-content: space-between;
   }
 
   .item-bundle-actions {
     display: flex;
-    flex-shrink: 0;
+    flex-wrap: wrap;
     gap: 0.5rem;
   }
 

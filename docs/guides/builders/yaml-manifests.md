@@ -5,6 +5,39 @@ manifests. **World > Config**, **Zone > Config**, and entity detail screens such
 as Rooms, Mobs, Items, Factions, and Abilities also expose canonical YAML that
 is safe to copy, edit, and apply directly.
 
+## Viewing YAML
+
+Choose **View YAML** beside **Copy YAML** and **Save YAML** to open a large,
+read-only modal with the original page still visible around its edges.
+The same viewer is available on export and read-only YAML screens.
+It opens in **Builder View**, which provides:
+
+- Readable field labels alongside the original YAML keys.
+- Collapsible groups and lists, with **Expand All** and **Collapse All** controls.
+- Color-coded values and type labels, including explicit empty lists, empty maps,
+  empty strings, and unset values.
+- Wrapped descriptions, source line numbers, and search across field names, values,
+  and comments. Search opens matching sections automatically; clear it to restore
+  your previous expanded sections.
+
+Long text values, such as `name_exclusions`, start with a compact preview and a
+line or character count. Choose **Show Full Value** to read the entire value in
+its own scrollable area, then **Collapse Value** to shrink it again. Text longer
+than six lines or 480 characters uses this presentation, so a large field cannot
+push the rest of the config far down the page. Search checks the full text and
+shows an excerpt around the first match. **Expand All** opens groups and lists;
+long text still stays compact until you open that value.
+
+Switch to **YAML Source** for the exact original text, including comments and
+document separators. **Copy YAML** always copies that original text. The viewer
+includes your current unsaved edits and never saves or rewrites them. Close it
+with the **X**, **Escape**, or a click on the dimmed backdrop to return to the editor.
+
+Invalid or unusually large/complex YAML remains available in source view with an
+explanation. Large exports show fields in batches; use **Show Next Fields** to
+continue. Source highlighting is omitted for large exports to keep scrolling
+responsive.
+
 ## Basic Shape
 
 A manifest is a YAML mapping with a `kind`, identity under `metadata`, and

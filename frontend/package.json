@@ -20,7 +20,8 @@
     "vue": "^3.4.21",
     "vue-router": "^4.3.2",
     "vue3-google-login": "^2.0.26",
-    "vuex": "^4.1.0"
+    "vuex": "^4.1.0",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.2.0",

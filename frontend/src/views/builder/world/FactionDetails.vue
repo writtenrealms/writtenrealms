@@ -40,6 +40,7 @@
           </div>
         </section>
 
+        <YamlViewButton :source="loadedYaml" title="Faction YAML" class="mb-4" />
         <textarea
           :value="loadedYaml"
           class="manifest-output"
@@ -57,6 +58,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
 import ManifestYamlEditor from "@/components/builder/world/ManifestYamlEditor.vue";
+import YamlViewButton from "@/components/builder/world/YamlViewButton.vue";
 
 const route = useRoute();
 const router = useRouter();

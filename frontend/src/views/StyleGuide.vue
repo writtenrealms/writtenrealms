@@ -418,6 +418,22 @@
       <ManifestValue :value="manifestExample" />
     </section>
 
+    <section id="yaml-viewer" class="sg-section">
+      <h2>YAML viewer</h2>
+      <p class="sg-note">The shared <span class="sg-code">ManifestYamlEditor</span> includes VIEW YAML beside Copy and Save.
+        Use <span class="sg-code">YamlViewButton</span> with the current source on other YAML screens, including read-only views.
+        Its large inset dialog leaves the origin page visible behind a dim backdrop, with a dark frame and a persistent close button.
+        It opens in builder view with readable labels, original keys, collapsible groups, field search,
+        wrapped prose, and source line numbers. Source view preserves comments, whitespace, and document separators.
+        Keys and booleans use the secondary color; numbers use green-chat; empty values and structure use muted text.
+        Type labels keep those differences readable without color. Escape, the close button, or a backdrop click dismisses the
+        dialog and returns focus to its button. Keep a small visible margin even on mobile.
+        <span class="sg-code">YamlScalarValue</span> keeps values over six lines or 480 characters compact with a three-line
+        preview and a size label. Show Full Value opens a bounded, keyboard-scrollable text area; its collapse control stays
+        above the text. Search shows a matching excerpt without automatically expanding a long value.</p>
+      <YamlViewButton :source="yamlViewerExample" title="World YAML" />
+    </section>
+
     <section id="item-previews" class="sg-section">
       <h2>Item previews</h2>
       <p class="sg-note">
@@ -475,6 +491,36 @@
 import MarkdownContent from '@/components/MarkdownContent.vue';
 import InspectionFacts from '@/components/builder/InspectionFacts.vue';
 import JsonInspector from '@/components/builder/JsonInspector.vue';
+import YamlViewButton from '@/components/builder/world/YamlViewButton.vue';
+
+const yamlViewerExample = `apiVersion: writtenrealms.com/v1alpha3
+kind: world
+spec:
+  name: Phalanx
+  name_exclusions: |
+    Achaemenes
+    Achaimenes
+    Achelous
+    Achelaus
+    Achilles
+    Achilleus
+    Admetos
+    Admetus
+    Adonis
+    Aeacus
+  is_public: true
+  starting_room: room@87
+  death_currency_penalty_pct: 0.2
+  description: |
+    Dawn breaks over the Aegean. Sailors gather beside the harbor,
+    trading stories of distant islands and the armies beyond the sea.
+  death_routing:
+    routes:
+      - when:
+          eq: [zone.id, zone@1]
+        destination: room@1
+  reserved_names: []
+`;
 
 const markdownExample = '## Welcome to Phalanx\n\nExplore **ancient Greece** and choose your path. Read the [player guides](/docs/players/).\n\n- Meet the locals.\n- Find your first quest.\n\n> A world shaped by its players.\n\nType `look` to begin.\n\n```text\nA long passage can wrap naturally inside a code block, keeping the whole message readable even on a narrow screen.\n    Indentation and explicit line breaks are preserved.\n```\n\n| Place | Activity |\n| --- | --- |\n| Agora | Trade and conversation |';
 import { useStore } from "vuex";
@@ -535,6 +581,7 @@ const sections = [
   { id: "feedback", title: "Status" },
   { id: "navigation", title: "Navigation" },
   { id: "data", title: "Data" },
+  { id: "yaml-viewer", title: "YAML viewer" },
   { id: "item-previews", title: "Item previews" },
   { id: "mob-previews", title: "Mob previews" },
   { id: "colors", title: "Color tokens" },

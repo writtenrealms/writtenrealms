@@ -12,6 +12,7 @@
         <button class="btn-small primary-action" :disabled="!canSave" @click="emit('save')">
           {{ isSubmitting ? savingLabel : saveLabel }}
         </button>
+        <YamlViewButton :source="currentValue" :disabled="disabled" :has-changes="currentValue !== savedValue" />
         <slot name="actions" />
       </div>
     </div>
@@ -33,6 +34,7 @@
 <script lang="ts" setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useStore } from "vuex";
+import YamlViewButton from "./YamlViewButton.vue";
 
 const props = withDefaults(defineProps<{
   modelValue: string;

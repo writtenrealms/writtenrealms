@@ -32,6 +32,7 @@
         <button class="btn-small readonly-copy" :disabled="!loadedYaml" @click="copyYaml">
           COPY YAML
         </button>
+        <YamlViewButton :source="loadedYaml" class="ml-2" />
       </section>
 
       <textarea
@@ -74,6 +75,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useStore } from "vuex";
 import ManifestYamlEditor from "@/components/builder/world/ManifestYamlEditor.vue";
+import YamlViewButton from "@/components/builder/world/YamlViewButton.vue";
 import {
   applyWorldManifest,
   manifestApiErrorMessage,

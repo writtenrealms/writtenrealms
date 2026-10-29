@@ -6,6 +6,7 @@
       <button class="btn-small" :disabled="!zoneYaml" @click="copyZoneYaml">
         COPY YAML
       </button>
+      <YamlViewButton :source="zoneYaml" title="Zone YAML" />
       <button class="btn-thin" :disabled="!zoneDeleteYaml" @click="copyZoneDeleteYaml">
         COPY DELETE YAML
       </button>
@@ -123,6 +124,7 @@
 </template>
 
 <script lang='ts' setup>
+import YamlViewButton from "@/components/builder/world/YamlViewButton.vue";
 import { ref, computed, onUnmounted, watch } from "vue";
 import { useStore } from "vuex";
 import { useRouter, useRoute } from "vue-router";

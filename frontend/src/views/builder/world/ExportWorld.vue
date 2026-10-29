@@ -13,6 +13,7 @@
       <button class="btn-small" :disabled="isLoading || !yamlText" @click="copyYaml">
         COPY YAML
       </button>
+      <YamlViewButton :source="yamlText" :disabled="isLoading" title="World export YAML" class="ml-2" />
       <button class="btn-thin ml-2" :disabled="isLoading" @click="fetchExport">
         REFRESH
       </button>
@@ -32,6 +33,7 @@ import axios from "axios";
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useStore } from "vuex";
+import YamlViewButton from "@/components/builder/world/YamlViewButton.vue";
 
 const store = useStore();
 const route = useRoute();

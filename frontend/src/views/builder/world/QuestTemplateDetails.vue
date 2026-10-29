@@ -15,6 +15,7 @@
         <button class="btn-thin ml-2" :disabled="!manifestText.trim()" @click="copyCurrentYaml">
           COPY YAML
         </button>
+        <YamlViewButton :source="manifestText" :has-changes="manifestText !== loadedYaml" title="Quest YAML" class="ml-2" />
         <button v-if="quest" class="btn-thin ml-2" @click="copyDeleteYaml">
           COPY DELETE YAML
         </button>
@@ -39,6 +40,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
 import QuestTemplateCard from "@/components/builder/world/QuestTemplateCard.vue";
+import YamlViewButton from "@/components/builder/world/YamlViewButton.vue";
 
 const route = useRoute();
 const router = useRouter();

@@ -13,6 +13,7 @@
         </div>
         <div class="template-actions">
           <button class="btn-small template-copy-action" @click="copyTemplateYaml">COPY YAML</button>
+          <YamlViewButton :source="newTriggerTemplate.yaml || ''" title="New mob trigger YAML" />
           <button class="btn-thin template-toggle" @click="toggleTemplateExpanded">
             {{ isTemplateExpanded ? "HIDE YAML" : "SHOW YAML" }}
           </button>
@@ -35,6 +36,7 @@
         </div>
         <div class="trigger-actions">
           <button class="btn-thin" @click="copyYaml(trigger)">COPY YAML</button>
+          <YamlViewButton :source="trigger.yaml || ''" title="Mob trigger YAML" class="ml-2" />
           <button class="btn-thin ml-2" @click="copyDeleteYaml(trigger)">COPY DELETE YAML</button>
         </div>
       </div>
@@ -49,6 +51,7 @@ import axios from "axios";
 import { onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useStore } from "vuex";
+import YamlViewButton from "@/components/builder/world/YamlViewButton.vue";
 
 const route = useRoute();
 const store = useStore();
@@ -138,6 +141,7 @@ onMounted(async () => {
 
   .template-actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.5rem;
   }
