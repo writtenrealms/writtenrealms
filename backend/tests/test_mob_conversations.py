@@ -4,6 +4,7 @@ from datetime import timedelta
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from time import monotonic
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection, close_old_connections, connections
@@ -17,12 +18,14 @@ from inference import service as inference
 from inference.models import BudgetBucket, InferenceRequest
 from inference.providers import Outcome, rejected_output
 from inference.tasks import execute_request
+from inference.tasks import dispatch_requests
 from quests.models import QuestTemplate
 from quests.services.engine import QuestTransitionResult
 from spawns.conversations import service
+from spawns.conversations.tasks import finish_reply
 from spawns.conversations.inputs import INPUT_KEY, AUTHORED_KEY, DELIVERY_KEY
 from spawns.conversations.policy import set_enabled, knowledge_packet
-from spawns.events import flush_game_event_outbox, publish_events, GameEvent
+from spawns.events import flush_game_event_outbox, flush_game_event_outbox_batch, publish_events, GameEvent
 from spawns.models import Mob, Player, MobConversationAllowance, MobConversationFocus, MobConversationFailure, CommunicationMessage, EventSubscriptionReceipt
 from spawns.communications import reset_communication_session
 from spawns.handlers import dispatch_command
@@ -668,6 +671,7 @@ class TestMobConversations(WorldTestCase):
 @override_settings(LLM_API_KEY='test-only', LLM_WORKER=True, LLM_NETWORK_ENABLED=True)
 class TestConversationConcurrency(TransactionTestCase):
     def setUp(self):
+        self.notifications = self.enterContext(patch('inference.notifications.publish'))
         self.user = User.objects.create_user('conversations@example.com', 'p')
         self.world = World.objects.new_world(name='Pilot', author=self.user, config=WorldConfig.objects.create())
         self.runtime = self.world.create_spawn_world()
@@ -686,7 +690,7 @@ class TestConversationConcurrency(TransactionTestCase):
         reset_communication_session(self.runtime.pk)
         # Keep publication deterministic in these transaction/concurrency tests.
         self.flusher = patch('spawns.conversations.service.flush_game_event_outbox_batch')
-        self.flusher.start()
+        self.flush = self.flusher.start()
         self.addCleanup(self.flusher.stop)
 
     def data(self, player, text=None):
@@ -713,6 +717,102 @@ class TestConversationConcurrency(TransactionTestCase):
         service.greet(player.pk, self.data(player))
         with capture_game_messages():
             flush_game_event_outbox()
+
+    def test_after_commit_handoffs_deliver_without_polling(self):
+        player = self.players[0]
+        self.greet(player)
+        self.flush.side_effect = flush_game_event_outbox_batch
+        def notify(task, request_id, *, queue):
+            self.assertFalse(connection.in_atomic_block)
+            self.assertEqual(queue, 'inference' if task == execute_request else 'celery')
+            # Synchronously drain the mocked broker to exercise both real task
+            # bodies; neither a beat tick nor the provider network is involved.
+            task(request_id)
+        self.notifications.side_effect = notify
+        def perform(*args):
+            self.assertFalse(connection.in_atomic_block)
+            self.assertIsNotNone(MobConversationFocus.objects.get(player=player).pending_request_id)
+            return Outcome(usage=USAGE, result={'text': 'Fresh clay waits for nobody.'})
+        with capture_game_messages() as messages, patch('inference.providers.perform', side_effect=perform) as provider, \
+                patch('spawns.conversations.tasks.poll') as poll, patch('inference.service.dispatch_batch') as dispatch:
+            started = monotonic()
+            service.hear(player.pk, self.data(player, 'How long must I wait?'))
+            elapsed = monotonic() - started
+        provider.assert_called_once()
+        poll.assert_not_called()
+        dispatch.assert_not_called()
+        self.assertEqual([call.args[0] for call in self.notifications.call_args_list], [execute_request, finish_reply])
+        self.assertEqual(CommunicationMessage.objects.filter(text='Fresh clay waits for nobody.').count(), 1)
+        replies = [item for item in messages if item['message']['type'] == 'notification.cmd.say.success']
+        self.assertEqual(len([item for item in replies if item['player_key'] == player.key]), 1)
+        self.assertIsNone(MobConversationFocus.objects.get(player=player).pending_request_id)
+        self.assertEqual(InferenceRequest.objects.get().charged_micro, 202)
+        print(f'Immediate conversation handoffs: {elapsed:.3f}s with mocked broker/provider and no recovery polls.')
+
+    def test_recovery_scans_deliver_after_both_notifications_are_lost(self):
+        player = self.players[0]
+        self.greet(player)
+        # The mock accepts both notices but delivers neither, like a lost task.
+        service.hear(player.pk, self.data(player, 'Hello.'))
+        request = InferenceRequest.objects.get()
+        self.assertEqual(request.status, 'queued')
+        with patch('inference.tasks.execute_request.apply_async',
+                   side_effect=lambda **kwargs: execute_request(*kwargs['args'])), \
+                patch('inference.providers.perform', return_value=Outcome(usage=USAGE, result={'text': 'Still here.'})) as provider:
+            dispatch_requests()
+            dispatch_requests()
+        provider.assert_called_once()
+        with capture_game_messages() as messages:
+            service.poll()
+            flush_game_event_outbox()
+        self.assertEqual(CommunicationMessage.objects.filter(text='Still here.').count(), 1)
+        self.assertTrue(any(item['message']['type'] == 'notification.cmd.say.success' for item in messages))
+        self.assertEqual(InferenceRequest.objects.get().charged_micro, 202)
+
+    def test_duplicate_completion_notifications_racing_recovery_speak_once(self):
+        player = self.players[0]
+        self.greet(player)
+        service.hear(player.pk, self.data(player, 'Hello.'))
+        request = InferenceRequest.objects.get()
+        with patch('inference.providers.perform', return_value=Outcome(usage=USAGE, result={'text': 'Only once.'})):
+            execute_request(str(request.pk))
+        self.race([lambda: finish_reply(str(request.pk)), lambda: finish_reply(str(request.pk)), service.poll])
+        with capture_game_messages():
+            flush_game_event_outbox()
+        self.assertEqual(CommunicationMessage.objects.filter(text='Only once.').count(), 1)
+        self.assertIsNone(MobConversationFocus.objects.get(player=player).pending_request_id)
+
+    def test_delayed_notification_cannot_close_a_replacement_conversation(self):
+        player = self.players[0]
+        self.greet(player)
+        service.hear(player.pk, self.data(player, 'Hello.'))
+        old_request = InferenceRequest.objects.get()
+        service.stop(player.pk)
+        MobConversationAllowance.objects.update(last_notice_at=None)
+        self.greet(player)
+        replacement = MobConversationFocus.objects.get(player=player)
+        self.assertEqual(replacement.mob_id, self.mob.pk)
+        MobConversationFocus.objects.filter(pk=replacement.pk).update(expires_at=timezone.now() - timedelta(seconds=1))
+        # Simulate replacing the focus after finish_reply looked up its player.
+        service.finish(player.pk, request_id=str(old_request.pk))
+        replacement.refresh_from_db()
+        self.assertEqual(replacement.mob_id, self.mob.pk)
+        service.poll()
+        replacement.refresh_from_db()
+        self.assertIsNone(replacement.mob_id)
+
+    def test_immediate_completion_still_checks_player_location(self):
+        player = self.players[0]
+        self.greet(player)
+        service.hear(player.pk, self.data(player, 'Hello.'))
+        request = InferenceRequest.objects.get()
+        with patch('inference.providers.perform', return_value=Outcome(usage=USAGE, result={'text': 'Too late.'})):
+            execute_request(str(request.pk))
+        Player.objects.filter(pk=player.pk).update(location_sequence=player.location_sequence + 1)
+        finish_reply(str(request.pk))
+        with capture_game_messages():
+            flush_game_event_outbox()
+        self.assertFalse(CommunicationMessage.objects.filter(text='Too late.').exists())
 
     def test_two_players_cannot_claim_one_mob(self):
         inputs = [(player.pk, self.data(player)) for player in self.players]

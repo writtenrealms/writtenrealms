@@ -677,8 +677,13 @@ Performance requirements:
 Implemented: a single operator-controlled provider connection, bounded text
 adapters, fast/optional deliberate profiles, UTC monthly/daily ledgers,
 linked-owner quotas, base-world allocations, a durable request outbox, and a
-dedicated `inference` worker queue. Normal game paths only write the database;
-the bounded outbox dispatcher runs every two seconds. The operator guide is the
+dedicated `inference` worker queue. Admission writes the request and reservation
+inside the game transaction, then publishes its ID immediately after commit.
+`inference.notifications` uses a dedicated broker connection with one-second
+connect/read/write timeouts and no retries, avoiding unbounded producer-pool waits.
+A failed notification leaves durable work for the bounded two-second recovery
+dispatcher. No broker or provider I/O runs while game/accounting locks are held.
+The operator guide is the
 configuration reference; the examples later in this design are not import syntax.
 
 The worker claims a request under the accounting lock before calling a provider,
@@ -771,8 +776,19 @@ claims acquire gameplay locks before the inference control lock, release them
 before network work, and refuse unbound mob requests. Delayed output is
 suppressed after expiry, restart, disablement, or loss of authored eligibility.
 
-The regular worker polls at most 32 ready/expired focuses per second, never
-idle mobs or every historical relationship. Cleanup drains indexed expired rows
+Settlement registers an after-commit completion task on the ordinary `celery`
+queue. It finds the focus by pending request ID, then rechecks that ID under the
+existing gameplay locks before validation/publication. An old notification cannot
+close a replacement focus or consume a newer reply. Duplicate completion tasks
+and recovery polls use the same finish transaction and cannot publish twice.
+
+Normal exchanges use one ID-only notification per admission and mob-result
+settlement, with no extra admission queries or population-wide scans. Completion
+adds one indexed pending-request lookup. The existing budget and in-flight caps
+remain authoritative; immediate notification does not bypass backpressure.
+The regular worker still polls at most 32 ready/expired focuses per second for
+lost notifications and timeouts, never idle mobs or every historical relationship.
+Cleanup drains indexed expired rows
 in bounded batches each minute. Focus/allowance history lasts three days;
 conversation input receipts last ten minutes (past the maximum focus lifetime).
 Conversation preflight measured 14 queries both with a small room and 1,000

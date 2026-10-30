@@ -1,7 +1,8 @@
 """Deterministic conversation focus, admission, and public speech.
 
 Lock order is runtime clock, player, focus, nonblocking mob, allowance, inference control.
-No lock survives a provider request. Only active focuses enter the bounded poll.
+No lock survives a provider request. After-commit tasks deliver ready replies;
+only active focuses enter the bounded recovery/expiry poll.
 """
 from contextlib import contextmanager
 from dataclasses import replace
@@ -361,9 +362,12 @@ def _spoken_text(result):
     return None if speech_rejection(result) else result['text'].strip()
 
 
-def finish(player_id):
+def finish(player_id, *, request_id=None):
     with _guard(player_id) as player:
         focus = MobConversationFocus.objects.select_for_update(of=('self',)).select_related('pending_request').filter(player_id=player_id).first()
+        # An old notification must not inspect or close a replacement focus/turn.
+        if request_id is not None and (not focus or str(focus.pending_request_id) != str(request_id)):
+            return
         if not focus or not focus.mob_id:
             if focus and focus.pending_request_id:
                 _close(focus)

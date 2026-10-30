@@ -8,17 +8,17 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
 from time import monotonic
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import OperationalError, close_old_connections, connection, connections
+from django.db import OperationalError, close_old_connections, connection, connections, transaction
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
-from inference import providers, service, tasks
+from inference import notifications, providers, service, tasks
 from inference.configuration import Unavailable, maximum_cost, micro, validate_configuration
 from inference.models import BudgetBucket, InferenceControl, InferenceRequest
 from users.models import User
@@ -42,6 +42,39 @@ ANTHROPIC_RESPONSE = {'stop_reason': 'end_turn', 'usage': {
     'input_tokens': 100, 'output_tokens': 10,
     'cache_read_input_tokens': 20, 'cache_creation_input_tokens': 30,
     'service_tier': 'standard'}, 'content': [{'type': 'text', 'text': '{"text":"Hello."}'}]}
+
+
+class TestInferenceNotifications(SimpleTestCase):
+    def task(self):
+        task = MagicMock()
+        task.name = 'inference.tasks.execute_request'
+        task.app.conf.broker_transport_options = {'existing_option': True}
+        return task
+
+    def test_publication_is_bounded_without_connection_or_task_retries(self):
+        task = self.task()
+        broker = task.app.connection_for_write.return_value.__enter__.return_value
+        identity = uuid.uuid4()
+        notifications.publish(task, identity, queue='inference')
+        task.app.connection_for_write.assert_called_once_with(connect_timeout=1.0,
+            transport_options={'existing_option': True, 'read_timeout': 1.0, 'write_timeout': 1.0})
+        broker.ensure_connection.assert_called_once_with(max_retries=0)
+        task.apply_async.assert_called_once_with(args=[str(identity)], queue='inference',
+                                                connection=broker, expires=15, retry=False)
+
+    def test_connection_and_ambiguous_publication_failures_are_safe_to_recover(self):
+        for failing_stage in ('connect', 'publish'):
+            task = self.task()
+            broker = task.app.connection_for_write.return_value.__enter__.return_value
+            target = broker.ensure_connection if failing_stage == 'connect' else task.apply_async
+            target.side_effect = ConnectionError('amqp://private:secret@host')
+            with self.assertLogs('inference.notifications', level='WARNING') as logged:
+                notifications.publish(task, uuid.uuid4(), queue='inference')
+            self.assertNotIn('secret', '\n'.join(logged.output))
+            self.assertIn('recovery polling', '\n'.join(logged.output))
+            self.assertEqual(target.call_count, 1)
+            if failing_stage == 'connect':
+                task.apply_async.assert_not_called()
 
 
 class TestInferenceProviders(SimpleTestCase):
@@ -144,6 +177,8 @@ class TestInferenceProviders(SimpleTestCase):
 @override_settings(LLM_API_KEY='test-only', LLM_WORKER=True, LLM_NETWORK_ENABLED=True)
 class TestInferenceAccounting(TransactionTestCase):
     def setUp(self):
+        # Transaction tests must never publish jobs into the development broker.
+        self.notifications = self.enterContext(patch('inference.notifications.publish'))
         # Gateway tests isolate the consumer; playable conversations exercise
         # the real game admission guard in test_mob_conversations.
         self.enterContext(patch('spawns.conversations.service.dispatch_guard',
@@ -165,6 +200,63 @@ class TestInferenceAccounting(TransactionTestCase):
 
     def bucket(self):
         return BudgetBucket.objects.get(scope='installation:month')
+
+    def test_request_notification_waits_for_outer_commit_and_notifies_once(self):
+        identity = uuid.uuid4()
+        def notify(task, request_id, **kwargs):
+            self.assertFalse(connection.in_atomic_block)
+            self.assertEqual(InferenceRequest.objects.get(pk=request_id).status, 'queued')
+            self.assertGreater(self.bucket().reserved_micro, 0)
+        self.notifications.side_effect = notify
+        with transaction.atomic():
+            self.submit(request_id=identity)
+            self.submit(request_id=identity)
+            self.notifications.assert_not_called()
+        self.notifications.assert_called_once_with(tasks.execute_request, str(identity), queue='inference')
+
+    def test_rolled_back_admission_never_notifies_or_reserves(self):
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            self.submit()
+            raise RuntimeError('rollback')
+        self.notifications.assert_not_called()
+        self.assertFalse(InferenceRequest.objects.exists())
+        self.assertFalse(BudgetBucket.objects.exists())
+
+    def test_result_notification_waits_for_commit_and_duplicate_settlement_is_silent(self):
+        from spawns.conversations.tasks import finish_reply
+        request = self.row(self.submit())
+        claim = service.claim(request.pk)
+        self.notifications.reset_mock()
+        def notify(task, request_id, **kwargs):
+            self.assertFalse(connection.in_atomic_block)
+            self.assertEqual(InferenceRequest.objects.get(pk=request_id).result, GOOD.result)
+            self.assertEqual(self.bucket().spent_micro, 202)
+        self.notifications.side_effect = notify
+        with transaction.atomic():
+            service.settle(request.pk, claim.dispatch_token, GOOD)
+            self.notifications.assert_not_called()
+        service.settle(request.pk, claim.dispatch_token, GOOD)
+        self.notifications.assert_called_once_with(finish_reply, str(request.pk), queue='celery')
+
+    def test_rolled_back_result_is_not_delivered(self):
+        request = self.row(self.submit())
+        claim = service.claim(request.pk)
+        self.notifications.reset_mock()
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            service.settle(request.pk, claim.dispatch_token, GOOD)
+            raise RuntimeError('rollback')
+        self.notifications.assert_not_called()
+        request.refresh_from_db()
+        self.assertEqual(request.status, 'dispatching')
+        self.assertIsNone(request.result)
+        self.assertEqual(self.bucket().reserved_micro, request.reservation_micro)
+
+    def test_evaluation_results_do_not_notify_gameplay(self):
+        request = self.row(self.submit(purpose='mob_evaluation'))
+        claim = service.claim(request.pk)
+        self.notifications.reset_mock()
+        service.settle(request.pk, claim.dispatch_token, GOOD)
+        self.notifications.assert_not_called()
 
     def test_reservation_and_exactly_once_settlement(self):
         row = self.row(self.submit())
@@ -222,6 +314,7 @@ class TestInferenceAccounting(TransactionTestCase):
             self.assertFalse(InferenceRequest.objects.exists())
             self.assertFalse(BudgetBucket.objects.exists())
         provider.assert_not_called()
+        self.notifications.assert_not_called()
 
     def test_malformed_and_oversize_inputs_never_reserve(self):
         for change in ({'messages': [{'role': 'system', 'content': 'bad'}]},

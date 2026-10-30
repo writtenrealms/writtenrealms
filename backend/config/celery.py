@@ -42,11 +42,13 @@ app.conf.beat_schedule = {
         'options': {'expires': 60},
     },
     'finish-mob-conversations': {
+        # Recover missed completion notices and handle idle/hard expiry.
         'task': 'spawns.conversations.tasks.finish_conversations',
         'schedule': 1.0,
         'options': {'expires': 1},
     },
     'dispatch-inference': {
+        # Recover missed after-commit notices and expired worker leases.
         'task': 'inference.tasks.dispatch_requests',
         'schedule': 2.0,
         'options': {'expires': 2},

@@ -4,6 +4,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta, timezone as datetime_timezone
+from functools import partial
 
 from django.conf import settings
 from django.db import DatabaseError, transaction
@@ -14,6 +15,7 @@ from inference.configuration import (
     PURPOSES, Unavailable, maximum_cost, micro, usage_cost,
     validate_configuration, validate_payload,
 )
+from inference import notifications
 from inference.models import BudgetAllocation, BudgetBucket, InferenceControl, InferenceRequest
 from inference.providers import Outcome
 from users.models import User
@@ -92,8 +94,8 @@ def _bucket_specs(limits, purpose, owner, world_id, now):
 def submit(*, request_id, user_id, world_id, purpose, instructions, messages, profile='fast'):
     """Internal API, after the consumer's gameplay gates. A denial creates no job.
 
-    Admission only writes PostgreSQL. A bounded dispatcher publishes task IDs;
-    a broker outage cannot hold a player command open or lose its reservation.
+    Admission writes PostgreSQL, then notifies the worker after commit. A
+    bounded recovery scan finds work if that best-effort notification is lost.
     """
     try:
         return _submit(request_id=request_id, user_id=user_id, world_id=world_id,
@@ -207,6 +209,7 @@ def _submit(*, request_id, user_id, world_id, purpose, instructions, messages, p
     BudgetAllocation.objects.bulk_create([
         BudgetAllocation(request=request, bucket=bucket) for bucket in buckets.values()
     ])
+    transaction.on_commit(partial(notifications.request_ready, str(request.pk)), robust=True)
     return Admission(request_id=request.pk)
 
 
@@ -320,6 +323,8 @@ def _settle(control, request, outcome, now):
     request.payload = {}
     request.completed_at = now
     request.save()
+    if request.purpose == 'mob_conversation':
+        transaction.on_commit(partial(notifications.result_ready, str(request.pk)), robust=True)
 
 
 @transaction.atomic

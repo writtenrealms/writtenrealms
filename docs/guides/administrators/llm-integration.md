@@ -218,12 +218,22 @@ queue and reports ready. If you prefer a temporary opt-in instead of saving
 the profile, `docker compose --profile ai up -d llm-worker` starts it explicitly;
 repeat that command after recreating the stack.
 
-Admission performs **no network I/O**: it writes a durable database request.
-The ordinary worker's bounded outbox dispatcher runs every two seconds and
-publishes only request IDs. Provider work happens in the dedicated worker after
-another availability/generation check. The outbox recovers lost publication
-without retrying an ambiguous provider call. There can be roughly two seconds
-of queue delay before model latency; requests expire after 90 seconds.
+Admission writes a durable database request and budget reservation. Immediately
+after the enclosing game transaction commits, it publishes the request ID to
+the dedicated inference worker. The provider call runs there after another
+availability/generation check; no game transaction or lock spans that call.
+
+Once the worker saves a response and its usage accounting, an after-commit
+notification sends the request ID to the ordinary game worker for validation
+and delivery. Normal exchanges do not wait for a dispatch or completion poll.
+Worker queues, provider latency, and game-state checks still affect response time.
+
+Notifications use one-second broker connection/read/write timeouts and no
+publication retries. Failures leave the saved request/result available for
+recovery. The bounded dispatcher still runs every two seconds, and completion
+recovery runs every second. Duplicate notifications cannot claim a paid request
+twice or publish a reply twice. An ambiguous provider call is never automatically
+repeated. Requests expire after 90 seconds.
 
 The provider call has bounded timeouts, a 256 KiB response limit, a 35-second
 Celery soft limit and 40-second hard limit. A persisted dispatch lease expires
@@ -233,9 +243,11 @@ expired queued work do not cause unbounded provider fan-out.
 ## Enable a world conversation pilot
 
 Apply the migrations and run the API, regular worker, inference worker, and
-scheduler from the same revision. The regular worker checks at most 32 ready or
-expired conversations each second; it publishes replies through the existing
-game event outbox. Network inference stays on the dedicated worker. Restart
+scheduler from the same revision. The regular worker handles immediate completion
+notifications and checks at most 32 ready or expired conversations each second
+as a recovery/timeout fallback. Replies use the existing game event outbox.
+Completion notifications are tied to their request ID, so a delayed notice cannot
+affect a newer conversation. Network inference stays on the dedicated worker. Restart
 workers after updating Python code, even with source bind mounts.
 
 Author `spec.conversation` on each selected mob definition using the normal YAML
