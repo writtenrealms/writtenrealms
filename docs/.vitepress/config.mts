@@ -94,6 +94,7 @@ const playerSidebar: DefaultTheme.SidebarItem[] = [
   { text: "Merchants", link: "/players/merchants" },
   { text: "Crafting", link: "/players/crafting-player-guide" },
   { text: "Socials", link: "/players/socials" },
+  { text: "Founder’s Passes", link: "/players/founder-passes" },
 ];
 
 const adminSidebar: DefaultTheme.SidebarItem[] = [
@@ -112,6 +113,7 @@ const adminSidebar: DefaultTheme.SidebarItem[] = [
       { text: "Control Panel", link: "/administrators/control-panel" },
       { text: "Operations and backups", link: "/administrators/operations" },
       { text: "LLM integration", link: "/administrators/llm-integration" },
+      { text: "Founder’s Passes", link: "/administrators/founder-passes" },
     ],
   },
 ];

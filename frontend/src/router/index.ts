@@ -32,6 +32,11 @@ const routes = [
 
 
   // Auth
+  { path: '/account', name: 'account', component: () => import('@/views/auth/Account.vue'), beforeEnter: ifAuthenticated },
+  { path: '/account/passes', name: 'founder-passes', redirect: { name: 'account', hash: '#passes' } },
+  { path: '/account/email', name: 'account-email', redirect: { name: 'account', hash: '#email' } },
+  { path: '/account/pass-transfer', name: 'founder-transfer-confirm', component: () => import('@/views/auth/ConfirmAccountAction.vue') },
+  { path: '/account/email-confirm', name: 'account-email-confirm', component: () => import('@/views/auth/ConfirmAccountAction.vue') },
   { path: '/auth/wr1/start', name: 'wr1-start', component: () => import('@/views/auth/WR1SignIn.vue') },
   { path: '/auth/wr1/callback', name: 'wr1-callback', component: () => import('@/views/auth/WR1SignIn.vue') },
   { path: '/login', name: 'login', component: () => import('@/views/auth/Login.vue') },

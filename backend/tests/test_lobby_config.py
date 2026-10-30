@@ -15,12 +15,12 @@ class TestLobbyConfig(APITestCase):
         with self.assertNumQueries(1):
             response = self.client.get(self.endpoint)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, {'main_world_id': 1, 'building_enabled': True})
+        self.assertEqual(response.data, {'main_world_id': 1, 'building_enabled': True, 'founders_enabled': False})
 
     def test_new_site_control_defaults_to_world_one(self):
         site = SiteControl.objects.create(name='prod')
         self.assertEqual(site.main_world_id, 1)
-        self.assertEqual(self.client.get(self.endpoint).data, {'main_world_id': 1, 'building_enabled': True})
+        self.assertEqual(self.client.get(self.endpoint).data, {'main_world_id': 1, 'building_enabled': True, 'founders_enabled': False})
 
     def test_override_is_public_and_does_not_expose_other_settings(self):
         SiteControl.objects.create(
@@ -32,7 +32,7 @@ class TestLobbyConfig(APITestCase):
         with self.assertNumQueries(1):
             response = self.client.get(self.endpoint)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, {'main_world_id': 12, 'building_enabled': False})
+        self.assertEqual(response.data, {'main_world_id': 12, 'building_enabled': False, 'founders_enabled': False})
 
     def test_blank_restores_multi_world_mode_and_changes_are_immediate(self):
         site = SiteControl.objects.create(name='prod', main_world_id=12)

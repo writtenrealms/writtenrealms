@@ -14,12 +14,18 @@ from system.control_access import StaffSettingsView, StaffAllowlistView, StaffAl
 from system.control_jobs import StaffJobsView
 from users import views as user_views
 from users import wr1_sso
+from founders import views as founder_views
 from worlds import views as world_views
 from core.health import readiness
 
 
 # /api/v1/ non-router URLs
 api_v1_urls = [
+    path('founders/', founder_views.PassList.as_view(), name='founder-passes'),
+    path('founders/<int:pass_id>/<str:action>/', founder_views.PassAction.as_view(), name='founder-action'),
+    path('auth/founders/transfer/', founder_views.ConfirmTransfer.as_view(), name='founder-transfer-confirm'),
+    path('auth/email/change/', founder_views.RequestEmailChange.as_view(), name='email-change-request'),
+    path('auth/email/change/confirm/', founder_views.ConfirmEmailChange.as_view(), name='email-change-confirm'),
 
     path('auth/wr1/start/', wr1_sso.Start.as_view(), name='wr1-start'),
     path('auth/wr1/callback/', wr1_sso.Callback.as_view(), name='wr1-callback'),

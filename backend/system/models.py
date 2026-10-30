@@ -46,6 +46,7 @@ class EdeusUniques(AdventBaseModel):
 class SiteControl(AdventBaseModel):
 
     name = models.TextField()
+    founders_enabled = models.BooleanField(default=False)
     access_mode = models.CharField(max_length=16, default='open', choices=(
         ('open', 'Open'), ('invite_only', 'Invite only'), ('closed', 'Closed'),
     ))

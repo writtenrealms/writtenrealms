@@ -80,6 +80,7 @@ MIGRATION_MODULES = {
     'sessions': None,
 
     'core': None,
+    'founders': None,
     'inference': None,
     'builders': None,
     'quests': None,

@@ -58,8 +58,12 @@ def email_admitted(email, *, is_staff=False):
     if mode == 'closed' or not normalized:
         return False
     from system.models import AccessAllowlistEntry
-    return _cached(('email', normalized), lambda: AccessAllowlistEntry.objects.filter(
-        email=normalized).exists())
+    def admitted():
+        if AccessAllowlistEntry.objects.filter(email=normalized).exists():
+            return True
+        from founders.models import FounderPass
+        return FounderPass.objects.filter(user__email__iexact=normalized).exists()
+    return _cached(('email', normalized), admitted)
 
 
 def user_admitted(user_id):

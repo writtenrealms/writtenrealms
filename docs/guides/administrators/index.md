@@ -36,6 +36,7 @@ worlds; that role does not grant site administration privileges.
 | Inspect activity and recover delayed work | [Control Panel](control-panel.md#queues-and-jobs) |
 | Back up or restore an installation | [Operations and backups](operations.md#backups-and-restore) |
 | Configure providers, inference budgets, and worker isolation | [LLM integration](llm-integration.md) |
+| Configure and grant permanent complimentary world access | [Founder’s Passes](founder-passes.md) |
 
 ## Add your content
 

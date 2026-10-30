@@ -76,6 +76,7 @@ class User(AbstractUser):
     is_builder = models.BooleanField(default=False)
     is_temporary = models.BooleanField(default=False)
     is_confirmed = models.BooleanField(default=False)
+    invited_signup_pending = models.BooleanField(default=False, editable=False)
     # True when we know the e-mail address is invalid
     is_invalid = models.BooleanField(default=False)
     send_newsletter = models.BooleanField(default=False)
@@ -171,6 +172,30 @@ class ExternalIdentity(BaseModel):
     class Meta:
         constraints = [models.UniqueConstraint(
             fields=['issuer', 'subject'], name='users_external_identity_unique')]
+
+
+class AccountEmailChange(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    source_email = models.EmailField(max_length=255)
+    destination_email = models.EmailField(max_length=255)
+    token_hash = models.CharField(max_length=64, unique=True)
+    expires_at = models.DateTimeField(db_index=True)
+    used_at = models.DateTimeField(null=True)
+
+
+class AccountNotice(models.Model):
+    """Durable mail outbox. Bodies are cleared after delivery or expiration."""
+    recipient = models.EmailField(max_length=255)
+    subject = models.CharField(max_length=255)
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    next_attempt_at = models.DateTimeField(db_index=True)
+    attempts = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=12, default='pending', db_index=True)
+    # For operator status/resends; notifications never own the entitlement.
+    founder_pass = models.ForeignKey('founders.FounderPass', null=True,
+                                     on_delete=models.SET_NULL, related_name='notices')
 
 
 class WR1SignIn(models.Model):

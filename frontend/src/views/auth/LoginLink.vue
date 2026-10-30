@@ -9,7 +9,9 @@
       Success! Redirecting...
     </template>
     <template v-else>
-      This login link is invalid or expired.
+      <p class="inline-notice inline-notice-error" role="alert">{{ errorMessage }}</p>
+      <button v-if="retryable" class="btn-medium" @click="confirmLogin">Try again</button>
+      <p class="my-3"><router-link :to="{ name: 'login' }">Request a new login link</router-link></p>
     </template>
   </div>
 </template>
@@ -19,19 +21,26 @@ import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useStore } from "vuex";
 import { takePostLoginRedirect } from "@/core/authRedirect";
+import { loginLinkError } from '@/core/loginLinkError';
 
 const store = useStore();
 const route = useRoute();
 const router = useRouter();
 
 const status = ref("loading");
+const errorMessage = ref('');
+const retryable = ref(false);
 
-onMounted(async () => {
+async function confirmLogin() {
+  status.value = 'loading';
+  errorMessage.value = '';
+  retryable.value = false;
   try {
     const token = Array.isArray(route.params.token)
       ? route.params.token[0]
       : route.params.token;
     if (!token) {
+      errorMessage.value = 'This login link is missing its token. Please request a new one.';
       status.value = "error";
       return;
     }
@@ -39,9 +48,14 @@ onMounted(async () => {
     status.value = "success";
     router.push(takePostLoginRedirect() || { name: "lobby" });
   } catch (e: any) {
+    const failure = loginLinkError(e);
+    errorMessage.value = failure.message;
+    retryable.value = failure.retryable;
     status.value = "error";
   }
-});
+}
+
+onMounted(confirmLogin);
 </script>
 
 <style lang="scss" scoped>

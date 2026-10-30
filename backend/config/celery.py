@@ -36,6 +36,15 @@ def _spawn_plan_interval_seconds() -> float:
 
 
 app.conf.beat_schedule = {
+    'maintain-founder-passes': {
+        'task': 'users.tasks.maintain_founder_passes',
+        'schedule': 60.0,
+        'options': {'expires': 55},
+    },
+    'prune-account-challenges': {
+        'task': 'users.tasks.prune_account_challenges',
+        'schedule': crontab(minute='45'),
+    },
     'prune-mob-conversations': {
         'task': 'spawns.conversations.tasks.prune_conversations',
         'schedule': 60.0,

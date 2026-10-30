@@ -6,6 +6,7 @@ export interface PlatformConfig {
   main_world_id: number | null;
   // Whether any signed-up user may create worlds; staff always can.
   building_enabled: boolean;
+  founders_enabled?: boolean;
 }
 
 // One request per page load, shared by navigation and the header. Reloading
@@ -21,7 +22,8 @@ export function loadPlatformConfig(): Promise<PlatformConfig> {
       if (id !== null && (!Number.isSafeInteger(id) || id < 1)) {
         throw new Error('Invalid main world configuration');
       }
-      platformConfig.value = { main_world_id: id, building_enabled: data.building_enabled !== false };
+      platformConfig.value = { main_world_id: id, building_enabled: data.building_enabled !== false,
+        founders_enabled: data.founders_enabled === true };
       return platformConfig.value;
     }).finally(() => { pending = null; });
   }

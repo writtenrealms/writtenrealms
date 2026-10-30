@@ -223,6 +223,11 @@ is unavailable.
 
 ## Account Preferences
 
+Login-link errors distinguish an expired or used link from a connection or server
+problem. If the sign-in service is unavailable, try again when it recovers; you
+can also request a fresh link from the sign-in page. Generating another login
+link invalidates earlier unused links for the same account.
+
 When a site is invite-only, sign-up and sign-in show a notice inside the form
 if your email address has not been admitted. The notice explains how to request
 an invitation, and your entered details stay in place so you can try an invited
@@ -235,10 +240,19 @@ guest play is unavailable. Contact the administrator if your address has not
 been admitted. An invitation grants access to the server; it does not grant
 builder or administrator permissions.
 
-The account menu lets you update your profile name and preferences. Your login
+The **Account** page lets you update your profile name and preferences. Edit
+your username, newsletter preference, or accessibility layout, then choose
+**Save changes**. Founder’s Passes appear in their own section on this page
+when the program is enabled. Your login
 email and account verification are managed separately from those settings;
 profile edits cannot change them. Email login links establish ownership of the
-address used to sign in. Contact staff if you need help changing that address.
+address used to sign in. Use **Account → Change email address** and confirm the
+new address by email to keep your account and characters under a new address.
+The address must not already belong to another account. Previous linked sign-ins
+are disconnected after confirmation; use the new email to sign in.
+
+Participating worlds may grant [Founder’s Passes](founder-passes.md), providing
+permanent complimentary world access and, for direct recipients, one +1 invitation.
 
 ## Signing in from Alpha
 

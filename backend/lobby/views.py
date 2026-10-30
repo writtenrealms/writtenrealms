@@ -51,10 +51,10 @@ class LobbyConfig(APIView):
 
     def get(self, request):
         config = system_models.SiteControl.objects.filter(name='prod').values(
-            'main_world_id', 'building_enabled',
+            'main_world_id', 'building_enabled', 'founders_enabled',
         ).first()
         return Response(config if config is not None else {
-            'main_world_id': 1, 'building_enabled': True,
+            'main_world_id': 1, 'building_enabled': True, 'founders_enabled': False,
         })
 
 

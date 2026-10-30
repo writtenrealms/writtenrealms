@@ -113,6 +113,9 @@ class EmailLoginRequestSerializer(serializers.Serializer):
         elif user.is_invalid:
             return None
 
+        if not user.is_active:
+            raise serializers.ValidationError('This account is inactive.')
+
         _create_login_link_for_user(user)
         return user
 
@@ -140,19 +143,19 @@ class EmailLoginConfirmSerializer(serializers.Serializer):
         login_request.save(update_fields=['used_ts'])
 
         user = login_request.user
-        if user.is_invalid:
+        if user.is_invalid or not user.is_active:
             raise serializers.ValidationError("Invalid e-mail address.")
         if not user.is_confirmed:
             user.is_confirmed = True
         user.last_login = timezone.now()
-        user.save(update_fields=['is_confirmed', 'last_login'])
+        user.invited_signup_pending = False
+        user.save(update_fields=['is_confirmed', 'last_login', 'invited_signup_pending'])
         return user
 
 
 class SignupSerializer(serializers.Serializer):
 
-    email = serializers.EmailField(
-        validators=[validators.UniqueValidator(queryset=User.objects.all())])
+    email = serializers.EmailField()
     username = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -162,6 +165,12 @@ class SignupSerializer(serializers.Serializer):
     send_newsletter = serializers.BooleanField(default=False)
 
     def create(self, validated_data):
+        if getattr(self, 'invited_user', None) is not None:
+            # Prove mailbox ownership before editing this reserved account.
+            # In particular, never overwrite a profile or newsletter consent
+            # supplied by an authenticated owner with anonymous signup input.
+            _create_login_link_for_user(self.invited_user)
+            return self.invited_user
         # Create user
         user = User.objects.create(
             email=validated_data['email'],
@@ -182,8 +191,12 @@ class SignupSerializer(serializers.Serializer):
 
     def validate_email(self, value):
         require_allowed_email(value)
-        if User.objects.filter(email__iexact=value).exists():
-            raise serializers.ValidationError("Email already registered.")
+        existing = User.objects.filter(email__iexact=value).first()
+        if (type(self) is SignupSerializer and existing and existing.invited_signup_pending
+                and not existing.is_confirmed and existing.is_active):
+            self.invited_user = existing
+        elif existing:
+            raise serializers.ValidationError('This field must be unique.', code='unique')
         return value
 
 
@@ -271,6 +284,9 @@ class GoogleLoginDeserializer(serializers.Serializer):
         # First, see if we already have this e-mail address in our system
         email_user = User.objects.filter(email__iexact=email).first()
         google_user = User.objects.filter(google_id=google_id).first()
+
+        if any(user and (not user.is_active or user.is_invalid) for user in (email_user, google_user)):
+            raise serializers.ValidationError('This account cannot sign in.')
 
         # This is a new user, create it with no usable password
         if not email_user and not google_user:

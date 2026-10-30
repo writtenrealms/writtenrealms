@@ -138,7 +138,7 @@ class Signup(APIView):
 
         ip = get_ip(request)
         user.ip = ip
-        user.save()
+        user.save(update_fields=['ip'])
 
         security_logger.info("New user %s signed up from IP %s" % (user.email, ip))
 

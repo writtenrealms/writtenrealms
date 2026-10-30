@@ -24,6 +24,16 @@ export default function interceptorSetup() {
         return Promise.reject(error);
       }
 
+      // Network failures have no response. Keep the original error available
+      // to the form, and let the login-link page explain its own failure.
+      if (!error.response || router.currentRoute.value.name === 'loginlink') {
+        return Promise.reject(error);
+      }
+      if (router.currentRoute.value.name === 'account' && [400, 403].includes(error.response.status)) {
+        // Account sections keep validation/admission feedback beside the action.
+        return Promise.reject(error);
+      }
+
       if (error.response.status == 401) {
         store.commit("auth/auth_clear");
         // router.push({ name: "login" });

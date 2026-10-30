@@ -13,7 +13,7 @@
           <router-link to="/lobby" :class="{ 'selected': isLobbyActive }">{{ lobbyLabel }}</router-link>
           <router-link v-if="canCreateWorlds" :to="{ name: 'lobby_building' }">Build</router-link>
           <router-link v-if="store.state.auth.user?.is_staff" to="/staff" aria-label="Control Panel" :class="{ selected: router.currentRoute.value.path.startsWith('/staff') }">Control<span class="control-panel-suffix"> Panel</span></router-link>
-          <a href="#" @click.prevent="editAccount" v-if="!isTemporary">Account</a>
+          <router-link to="/account" :class="{ selected: router.currentRoute.value.path.startsWith('/account') }">Account</router-link>
           <a href="https://core.writtenrealms.com/docs/">Docs</a>
           <a href="#" @click.prevent="logout">Log Out</a>
         </template>
@@ -31,9 +31,6 @@
 import { computed, onMounted } from 'vue';
 import { useStore } from 'vuex';
 import { useRouter } from 'vue-router';
-import { FormElement, EntityForm } from '@/core/forms';
-import ConfirmEmail from '@/components/account/ConfirmEmail.vue';
-import StaffAccount from '@/components/account/StaffAccountSlot.vue';
 import { loadPlatformConfig, platformConfig } from '@/core/platform';
 import { useBuilding } from '@/composables/useBuilding';
 
@@ -44,7 +41,6 @@ const { canCreateWorlds } = useBuilding();
 
 const showMenu = true;
 const isAuthenticated = computed(() => store.getters.isAuthenticated);
-const isTemporary = false;
 const lobbyLabel = computed(() => platformConfig.value?.main_world_id === null ? 'Worlds' : 'Lobby');
 const isLobbyActive = computed(() => {
   const route = router.currentRoute.value;
@@ -55,53 +51,6 @@ const isLobbyActive = computed(() => {
 });
 onMounted(() => { loadPlatformConfig().catch(() => {}); });
 
-
-const editAccount = () => {
-
-  const SEND_NEWSLETTER: FormElement = {
-    attr: "send_newsletter",
-    label:
-      "Receive infrequent (less than monthly) updates about new game features.",
-    widget: "checkbox"
-  };
-
-  const ACCESSIBILITY: FormElement = {
-    attr: "accessibility_mode",
-    label: "Use Accessibility Layout",
-    widget: "checkbox"
-  };
-
-  const edit_account_schema = [
-    {
-      attr: "name",
-      label: "Username"
-    },
-    SEND_NEWSLETTER,
-    ACCESSIBILITY,
-  ];
-
-  // Optional email confirm / staff slot
-  let slot: any = null;
-  if (store.state.auth.user.is_staff) {
-    slot = StaffAccount;
-  } else if (store.state.auth.user.is_invalid) {
-    // Could also write a message here
-    slot = ConfirmEmail;
-  } else if (!store.state.auth.user.is_confirmed) {
-    slot = ConfirmEmail;
-  }
-
-  const formData: EntityForm = {
-    title: store.state.auth.user.email,
-    schema: edit_account_schema,
-    data: store.state.auth.user,
-    action: "auth/account_save",
-    submitLabel: "Save Changes",
-    slot: slot,
-  };
-
-  store.commit('ui/modal/open_form', formData);
-}
 
 const logout = () => {
   store.dispatch('auth/logout');

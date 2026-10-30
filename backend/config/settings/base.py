@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'rest_framework',
 
     'builders.apps.BuildersConfig',
+    'founders.apps.FoundersConfig',
     'inference.apps.InferenceConfig',
     'lobby.apps.LobbyConfig',
     'quests.apps.QuestsConfig',

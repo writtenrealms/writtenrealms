@@ -36,12 +36,16 @@ const { default: ui } = await server.ssrLoadModule('/src/store/modules/ui/index.
 const store = globalThis.authTestStore = createStore({ modules: { auth, ui } });
 const router = globalThis.authTestRouter = createRouter({
   history: createMemoryHistory(),
-  routes: ['signup', 'login', 'lobby', 'game'].map(name => ({ path: `/${name}`, name, component: {} })),
+  routes: [
+    ...['signup', 'login', 'lobby', 'game', 'account'].map(name => ({ path: `/${name}`, name, component: {} })),
+    { path: '/login-link/:token', name: 'loginlink', component: {} },
+  ],
 });
 const { default: setup } = await server.ssrLoadModule('/src/core/axiosInterceptors.ts');
 setup();
 const { default: Signup } = await server.ssrLoadModule('/src/views/auth/SignUp.vue');
 const { default: Login } = await server.ssrLoadModule('/src/views/auth/Login.vue');
+const { default: LoginLink } = await server.ssrLoadModule('/src/views/auth/LoginLink.vue');
 const { accessNotice } = await server.ssrLoadModule('/src/core/accessNotice.ts');
 
 const invite = { status: 403, data: { code: 'invite_only', detail:
@@ -49,8 +53,11 @@ const invite = { status: 403, data: { code: 'invite_only', detail:
 const closed = { status: 403, data: { code: 'site_closed', detail: 'This site is currently closed. Please check back later.' } };
 let failure;
 axios.defaults.adapter = async config => {
+  if (failure instanceof Error) throw failure;
   if (failure) throw { response: failure };
-  return { config, status: 201, statusText: 'Created', headers: {}, data: {} };
+  return { config, status: 201, statusText: 'Created', headers: {}, data: {
+    access: 'test-access', refresh: 'test-refresh', user: { id: 1, name: 'Alice', email: 'alice@example.com' },
+  } };
 };
 async function form(component, name) {
   await router.push(`/${name}?redirect=/worlds/12?create=1`);
@@ -112,4 +119,55 @@ test('other permission errors still show server details or a safe fallback', asy
   failure = invite;
   await assert.rejects(axios.post('/test/'));
   assert.equal(store.state.ui.notification, invite.data.detail);
+});
+
+test('login links distinguish service, network, rate-limit, admission, and actual token failures', async () => {
+  storage.delete('postLoginRedirect');
+  await router.push('/login-link/test-token');
+  let bindings;
+  await renderToString(createSSRApp({ setup() {
+    bindings = LoginLink.setup({}, { expose() {} });
+    return () => null;
+  } }).use(store).use(router));
+  for (const [response, expected, retryable] of [
+    [{ status: 500, data: 'Internal Server Error' }, /temporarily unavailable/, true],
+    [new Error('Network Error'), /Unable to reach/, true],
+    [{ status: 429, data: {} }, /Too many/, true],
+    [invite, /invite-only/, false],
+    [{ status: 400, data: { token: ['Login link has already been used.'] } }, /already been used/, false],
+    [{ status: 400, data: { token: ['Invalid or expired login link.'] } }, /Invalid or expired/, false],
+  ]) {
+    store.commit('ui/notification_clear');
+    failure = response;
+    await bindings.confirmLogin();
+    assert.equal(bindings.status.value, 'error');
+    assert.match(bindings.errorMessage.value, expected);
+    assert.equal(bindings.retryable.value, retryable);
+    assert.equal(store.state.ui.notification, '');
+  }
+  failure = null;
+  await bindings.confirmLogin();
+  assert.equal(bindings.status.value, 'success');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(router.currentRoute.value.name, 'lobby');
+});
+
+test('network failures outside login-link pages retain the original error', async () => {
+  await router.push('/signup');
+  failure = new Error('Network Error');
+  await assert.rejects(axios.post('/test/'), error => error === failure);
+});
+
+test('account validation stays inline while unauthorized sessions are still cleared', async () => {
+  await router.push('/account');
+  for (const status of [400, 403]) {
+    store.commit('ui/notification_clear');
+    failure = { status, data: { detail: 'Account action denied.' } };
+    await assert.rejects(axios.post('/test/'));
+    assert.equal(store.state.ui.notification, '');
+  }
+  store.commit('auth/auth_set_tokens', { access: 'expired' });
+  failure = { status: 401, data: {} };
+  await assert.rejects(axios.get('/user/'));
+  assert.equal(store.state.auth.token, '');
 });

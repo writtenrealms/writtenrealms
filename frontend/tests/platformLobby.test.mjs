@@ -61,7 +61,7 @@ test('entry and header share one request, retained across navigation', async () 
     finish({ data: { main_world_id: 12 } });
     await Promise.all([first, second]);
     // A server that predates the building switch leaves building open.
-    assert.deepEqual(await loadPlatformConfig(), { main_world_id: 12, building_enabled: true });
+    assert.deepEqual(await loadPlatformConfig(), { main_world_id: 12, building_enabled: true, founders_enabled: false });
     assert.equal(count, 1);
   } finally { axios.get = original; }
 });
@@ -78,7 +78,7 @@ test('failed or malformed config can be retried without guessing a destination',
       await assert.rejects(loadPlatformConfig());
       assert.equal(platformConfig.value, null);
       axios.get = async () => ({ data: { main_world_id: null, building_enabled: false } });
-      assert.deepEqual(await loadPlatformConfig(), { main_world_id: null, building_enabled: false });
+      assert.deepEqual(await loadPlatformConfig(), { main_world_id: null, building_enabled: false, founders_enabled: false });
     }
   } finally { axios.get = original; }
 });
