@@ -1,7 +1,7 @@
 <template>
   <div class="single-form">
     <h1>{{ transfer ? 'Confirm pass transfer' : 'Confirm email change' }}</h1>
-    <p v-if="transfer">Confirm to move the offered Founder’s Pass and its unused +1 invitation to the account for the address that received this link. This permanently claims it there. Characters and progress do not move.</p>
+    <p v-if="transfer">Confirm to move the offered pass and its unused +1 invitation to the account for the address that received this link. This permanently claims it there. Characters and progress do not move.</p>
     <p v-else>Confirm to use the address that received this link for your existing account. Your characters and passes stay with you.</p>
     <p>You will be signed in to the receiving account after confirmation.</p>
     <p v-if="error" class="inline-notice inline-notice-error" role="alert">{{ error }}</p>

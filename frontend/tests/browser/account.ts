@@ -14,8 +14,10 @@ let user = { id: 1, name: 'Alice', email: params.has('long') ? 'a-very-long-but-
   is_confirmed: true, send_newsletter: false, accessibility_mode: false, is_staff: false };
 store.state.auth.token = 'synthetic-preview';
 store.state.auth.user = user;
-const claimed = ['claimed', 'gift', 'invited'].includes(mode);
-let pass = { id: 1, world_id: 12, world_name: 'Phalanx', kind: mode === 'gift' ? 'gift' : 'direct',
+const claimed = ['claimed', 'gift', 'invited', 'paused'].includes(mode);
+let pass = { id: 1, world_id: 12, world_name: params.has('long-world') ? 'The Kingdom Beyond the Mountains of the Everlasting Winter' : 'Phalanx',
+  world_background: params.has('no-art') ? null : params.has('broken-art') ? '/tests/browser/unavailable-banner.jpg' : 'https://assets.writtenrealms.com/ui/lobby/demigods-banner.jpg',
+  kind: mode === 'gift' ? 'gift' : 'direct',
   claimed_at: claimed ? '2026-10-30T12:00:00Z' : null, claim_reason: '', claim_deadline: null,
   can_claim: !claimed, can_transfer: !claimed, can_invite: mode === 'claimed',
   invited_email: mode === 'invited' ? 'friend@example.com' : null,
@@ -23,10 +25,13 @@ let pass = { id: 1, world_id: 12, world_name: 'Phalanx', kind: mode === 'gift' ?
 axios.defaults.adapter = async config => {
   let data: any = {};
   const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
-  if (config.url?.endsWith('/lobby/config/')) data = { main_world_id: 12, building_enabled: false, founders_enabled: mode !== 'disabled' };
-  else if (config.url === '/founders/') data = { passes: mode === 'empty' ? [] : [pass] };
+  if (config.url?.endsWith('/lobby/config/')) data = { main_world_id: params.has('directory') ? null : 12, building_enabled: false, founders_enabled: !['disabled', 'paused'].includes(mode) };
+  else if (config.url === '/founders/') {
+    if (mode === 'error') throw { response: { status: 503, data: {} } };
+    data = { passes: ['empty', 'disabled'].includes(mode) ? [] : [pass] };
+  }
   else if (config.url === '/user/' && config.method === 'put') { user = { ...user, ...body }; data = user; }
-  else if (config.url === '/founders/1/claim/') { pass = { ...pass, claimed_at: '2026-10-30', can_claim: false, can_transfer: false, can_invite: true }; }
+  else if (config.url === '/founders/1/claim/') { pass = { ...pass, claimed_at: '2026-10-30T12:00:00Z', can_claim: false, can_transfer: false, can_invite: true }; }
   else if (config.url === '/founders/1/invite/') { pass = { ...pass, invited_email: body.email, can_invite: false }; }
   else if (config.url === '/founders/1/transfer/') { pass = { ...pass, transfer_email: body.email }; }
   else if (config.url === '/founders/1/cancel-transfer/') { pass = { ...pass, transfer_email: null }; }

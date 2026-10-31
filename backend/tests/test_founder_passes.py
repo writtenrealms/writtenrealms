@@ -297,16 +297,24 @@ class FounderPassTests(FounderSetup, APITestCase):
                 self.assertTrue(email_admitted(self.user.email))
 
     def test_list_does_not_add_queries_per_pass(self):
+        self.world.config.large_background = 'https://example.com/realm-banner.jpg'
+        self.world.config.save(update_fields=['large_background'])
         self.grant()
         self.client.force_authenticate(self.user)
         with self.assertNumQueries(3):
-            self.client.get(reverse('founder-passes'))
+            response = self.client.get(reverse('founder-passes'))
+        self.assertEqual(response.data['passes'][0]['world_background'], self.world.config.large_background)
         for index in range(3):
             world = World.objects.create(name=f'Realm {index}', author=self.staff, config=WorldConfig.objects.create())
             program = FounderProgram.objects.create(world=world, enabled=True)
             services.grant(program.pk, self.user.email, actor=self.staff)
+        # A world can temporarily lack configuration; its pass must still render.
+        World.objects.filter(pk=world.pk).update(config=None)
         with self.assertNumQueries(3):
-            self.assertEqual(len(self.client.get(reverse('founder-passes')).data['passes']), 4)
+            response = self.client.get(reverse('founder-passes'))
+        self.assertEqual(len(response.data['passes']), 4)
+        self.assertEqual(response.data['passes'][0]['world_background'], self.world.config.large_background)
+        self.assertTrue(all(item['world_background'] is None for item in response.data['passes'][1:]))
 
     def test_email_change_preserves_claim_invitation_identity_and_invalidates_old_login(self):
         founder_pass = services.claim(self.grant().pk, self.user)

@@ -76,10 +76,11 @@ test('failed profile saves keep edits, surface field errors, and allow retry', a
   assert.equal(form.saved.value, true);
 });
 
-test('Account is one navigation link, with passes embedded only when enabled', async () => {
+test('Account always includes subscriptions and passes regardless of issuance configuration', async () => {
   const ctx = await context();
-  for (const enabled of [false, true]) {
-    platformConfig.value = { main_world_id: 12, building_enabled: false, founders_enabled: enabled };
+  for (const config of [null, { main_world_id: 12, building_enabled: false, founders_enabled: false },
+    { main_world_id: 12, building_enabled: false, founders_enabled: true }]) {
+    platformConfig.value = config;
     const header = await renderToString(ctx.app(Header));
     assert.match(header, /href="\/account"[^>]*class="[^"]*selected[^"]*"[^>]*>Account<\/a>/);
     assert.doesNotMatch(header, />Passes<\/a>/);
@@ -87,7 +88,9 @@ test('Account is one navigation link, with passes embedded only when enabled', a
     assert.match(html, /<h1[^>]*>Account<\/h1>/);
     assert.match(html, /Profile/);
     assert.match(html, /Preferences/);
-    assert.equal(html.includes('id="passes"'), enabled);
+    assert.equal(html.includes('id="passes"'), true);
+    assert.match(html, /Subscriptions &amp; passes/);
+    assert.doesNotMatch(html, /founder/i);
     assert.doesNotMatch(html, /single-form|class="panel/);
   }
 });

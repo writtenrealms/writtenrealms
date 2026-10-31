@@ -2,6 +2,7 @@ export interface FounderPass {
   id: number;
   world_id: number;
   world_name: string;
+  world_background?: string | null;
   kind: 'direct' | 'gift';
   claimed_at: string | null;
   claim_reason: string;
@@ -15,8 +16,15 @@ export interface FounderPass {
 }
 
 export function passStatus(pass: FounderPass): string {
-  if (pass.claimed_at) return pass.kind === 'gift' ? 'Gifted · Claimed' : 'Claimed';
-  return pass.transfer_email ? 'Transfer awaiting confirmation' : 'Ready to claim';
+  if (pass.claimed_at) return '';
+  return pass.transfer_email ? 'Transfer awaiting confirmation' : '';
+}
+
+export function formatPassClaimDate(value: string): string {
+  const date = new Date(value);
+  // Match the recipient's local calendar day, including claims near midnight UTC.
+  return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0')].join('/');
 }
 
 export function accountActionError(error: any): string {

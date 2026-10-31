@@ -242,8 +242,8 @@ builder or administrator permissions.
 
 The **Account** page lets you update your profile name and preferences. Edit
 your username, newsletter preference, or accessibility layout, then choose
-**Save changes**. Founder’s Passes appear in their own section on this page
-when the program is enabled. Your login
+**Save changes**. The **Subscriptions & passes** section is always available
+and shows access attached to your account. Your login
 email and account verification are managed separately from those settings;
 profile edits cannot change them. Email login links establish ownership of the
 address used to sign in. Use **Account → Change email address** and confirm the
@@ -251,8 +251,8 @@ new address by email to keep your account and characters under a new address.
 The address must not already belong to another account. Previous linked sign-ins
 are disconnected after confirmation; use the new email to sign in.
 
-Participating worlds may grant [Founder’s Passes](founder-passes.md), providing
-permanent complimentary world access and, for direct recipients, one +1 invitation.
+See [Subscriptions & passes](subscriptions-and-passes.md) for world access.
+Paid subscriptions are not available yet; any passes you receive appear in Account.
 
 ## Signing in from Alpha
 

@@ -32,7 +32,7 @@ class PassList(APIView):
 
     def get(self, request):
         passes = list(FounderPass.objects.filter(user=request.user).select_related(
-            'program__world', 'gift').order_by('pk'))
+            'program__world__config', 'gift').order_by('pk'))
         # Deadline correctness does not depend on beat being on time.
         for founder_pass in passes:
             deadline = founder_pass.program.claim_deadline
@@ -50,6 +50,7 @@ class PassList(APIView):
             available = enabled and item.program.enabled
             data.append({
                 'id': item.pk, 'world_id': item.program.world_id, 'world_name': item.program.world.name,
+                'world_background': getattr(item.program.world.config, 'large_background', None) or None,
                 'kind': item.kind, 'claimed_at': item.claimed_at, 'claim_reason': item.claim_reason,
                 'claim_deadline': item.program.claim_deadline,
                 'can_claim': item.claimed_at is None,

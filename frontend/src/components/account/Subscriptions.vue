@@ -1,22 +1,34 @@
 <template>
   <section id="passes" class="account-section" aria-labelledby="passes-title">
-    <h2 id="passes-title">Founder’s Passes</h2>
+    <h2 id="passes-title">Subscriptions &amp; passes</h2>
     <p v-if="error" class="inline-notice inline-notice-error" role="alert">{{ error }}</p>
     <button v-if="error && !passes.length" class="btn-small button-gray" :disabled="loading" @click="load">Try again</button>
     <p v-if="notice" class="inline-notice" role="status">{{ notice }}</p>
-    <p v-if="loading" class="account-note" role="status">Loading your passes…</p>
-    <p v-else-if="!error && !passes.length" class="account-note">You don’t have a Founder’s Pass yet. If you received an invitation, sign in with the email address it was sent to.</p>
-    <article v-for="pass in passes" :key="pass.id" class="pass-entry" :aria-label="`${pass.world_name} Founder’s Pass`">
-      <h3>{{ pass.world_name }}</h3>
-      <span class="tag" :class="{ 'tag-green': pass.claimed_at }">{{ passStatus(pass) }}</span>
-      <p>Complimentary access, for as long as this world operates.</p>
-      <template v-if="pass.can_claim">
-        <p>Claim this pass to keep it on your account and unlock your +1 invitation.</p>
-        <p class="account-note" v-if="pass.claim_deadline">Automatically claimed on {{ date(pass.claim_deadline) }}.</p>
-        <p class="account-note" v-else>Automatically claimed at the end of beta. No date has been set yet.</p>
-        <button v-if="confirmation?.pass.id !== pass.id" class="btn-medium" :disabled="busy" @click="claimPass(pass)">Claim on this account</button>
-      </template>
-      <p v-else class="account-note">Claimed on your account. You can still <router-link :to="{ name: 'account', hash: '#email' }">change your email</router-link> and keep your pass and characters.</p>
+    <p v-if="loading" class="account-note" role="status">Loading subscriptions and passes…</p>
+    <template v-else-if="!error && !passes.length">
+      <p class="account-note">You don’t have any subscriptions or passes.</p>
+      <router-link class="account-link" to="/lobby">{{ platformConfig?.main_world_id === null ? 'Browse worlds' : 'Visit the lobby' }} <ArrowRight :size="16" aria-hidden="true" /></router-link>
+    </template>
+    <article v-for="pass in passes" :key="pass.id" class="pass-entry" :aria-label="`${pass.world_name} Founder Pass`">
+      <PassTicket :title="`${pass.world_name} Founder Pass`" :artwork="pass.world_background"
+        :status="passStatus(pass)">
+        <template #benefit>
+          <p>Complimentary access, for as long as this world operates.</p>
+        </template>
+        <template v-if="pass.can_claim">
+          <p class="account-note">Claim this pass to keep it on your account and unlock your +1 invitation.</p>
+          <p class="account-note" v-if="pass.claim_deadline">Automatically claimed on {{ date(pass.claim_deadline) }}.</p>
+          <button v-if="confirmation?.pass.id !== pass.id" class="btn-medium" :disabled="busy" @click="claimPass(pass)">Claim on this account</button>
+        </template>
+        <p v-else-if="pass.claimed_at" class="account-note">Claimed <time :datetime="pass.claimed_at">{{ formatPassClaimDate(pass.claimed_at) }}</time></p>
+        <div v-if="confirmation?.pass.id === pass.id && confirmation.action === 'claim'" class="inline-notice" role="group" aria-label="Confirm pass action">
+          <p>{{ confirmation.message }}</p>
+          <div class="account-actions">
+            <button class="btn-small" :disabled="busy" @click="confirmAction">Confirm claim</button>
+            <button class="btn-small button-gray" :disabled="busy" @click="confirmation = null">Cancel</button>
+          </div>
+        </div>
+      </PassTicket>
       <p v-if="pass.kind === 'gift'" class="account-note">This gifted pass cannot be transferred and does not include a +1 invitation.</p>
       <p v-if="pass.invited_email" class="account-note">Your +1 pass was granted to <strong>{{ pass.invited_email }}</strong>. It does not include another invitation.</p>
       <template v-if="pass.transfer_email">
@@ -29,10 +41,10 @@
         <div class="form-group"><label :for="`invite-${pass.id}`">Your +1’s email</label><input :id="`invite-${pass.id}`" v-model="emails[pass.id]" type="email" required :disabled="busy" /></div>
         <button class="btn-medium" :disabled="busy">Invite your +1</button>
       </form>
-      <div v-if="confirmation?.pass.id === pass.id" class="inline-notice" role="group" aria-label="Confirm pass action">
+      <div v-if="confirmation?.pass.id === pass.id && confirmation.action === 'invite'" class="inline-notice" role="group" aria-label="Confirm pass action">
         <p>{{ confirmation.message }}</p>
         <div class="account-actions">
-          <button class="btn-small" :disabled="busy" @click="confirmAction">{{ confirmation.action === 'claim' ? 'Confirm claim' : 'Send +1 invitation' }}</button>
+          <button class="btn-small" :disabled="busy" @click="confirmAction">Send +1 invitation</button>
           <button class="btn-small button-gray" :disabled="busy" @click="confirmation = null">Cancel</button>
         </div>
       </div>
@@ -45,7 +57,6 @@
           <button class="btn-small button-gray" :disabled="busy">Send transfer confirmation</button>
         </form>
       </details>
-      <p class="account-note pass-terms">Normal conduct rules and usage limits apply.</p>
       <router-link class="account-link" :to="{ name: 'lobby_world_details', params: { world_id: pass.world_id } }">Visit {{ pass.world_name }} <ArrowRight :size="16" aria-hidden="true" /></router-link>
     </article>
   </section>
@@ -55,7 +66,9 @@
 import axios from 'axios';
 import { onMounted, ref } from 'vue';
 import { ArrowRight, ChevronRight } from '@lucide/vue';
-import { accountActionError, passStatus, type FounderPass } from '@/core/founderPasses';
+import PassTicket from '@/components/account/PassTicket.vue';
+import { accountActionError, formatPassClaimDate, passStatus, type FounderPass } from '@/core/founderPasses';
+import { platformConfig } from '@/core/platform';
 const emit = defineEmits(['loaded']);
 const passes = ref<FounderPass[]>([]);
 const emails = ref<Record<number, string>>({});
@@ -107,12 +120,9 @@ onMounted(async () => { await load(); emit('loaded'); });
 @import '@/styles/colors.scss';
 @import '@/styles/fonts.scss';
 .pass-entry {
-  padding-bottom: 28px;
-  border-bottom: 1px solid $color-background-border;
-  & + & { padding-top: 28px; }
-  h3 { @include font-title-regular; color: $color-text; opacity: 1; font-size: 28px; margin: 0 0 10px; }
+  max-width: 480px;
+  & + & { margin-top: 32px; }
   h4 { @include font-title-regular; font-size: 17px; margin: 0 0 12px; }
   .pass-invite { border-top: 1px solid $color-background-border; margin-top: 24px; padding-top: 24px; }
-  .pass-terms { margin: 24px 0 8px; font-size: 12px; }
 }
 </style>

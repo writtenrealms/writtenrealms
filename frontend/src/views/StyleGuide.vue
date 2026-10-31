@@ -327,8 +327,8 @@
       <p class="inline-notice" role="status">This site is currently invite-only. Please sign in with an invited email address, or contact the administrator to request an invitation.</p>
       <p class="sg-note">Show character-limit feedback after the user selects New Character.</p>
       <p class="inline-notice" role="status">This world allows 1 character per account. You have reached the limit.</p>
-      <p class="sg-note">Founder’s Passes live within Account. Use neutral tags for unclaimed or pending transfers, green tags for claimed passes, and inline notices for confirmation. Show the destination email before an irreversible claim or +1 invitation.</p>
-      <div class="sg-inline"><span class="tag">Ready to claim</span><span class="tag">Transfer awaiting confirmation</span><span class="tag tag-green">Gifted · Claimed</span></div>
+      <p class="sg-note">Passes live within Account’s Subscriptions &amp; passes section. Only name and describe pass types the account actually holds. Use neutral tags only for pending transfers and inline notices for confirmation. Claimed passes show “Claimed YYYY/MM/DD” in the stub, using the recipient’s local date; do not repeat it as a badge on the face. Show the destination email before an irreversible claim or invitation.</p>
+      <div class="sg-inline"><span class="tag">Transfer awaiting confirmation</span></div>
       <div class="sg-row sg-flush-row">
         <span class="sg-code">.tag</span>
         <div class="sg-inline">
@@ -361,13 +361,19 @@
       <h2>Account sections</h2>
       <p class="sg-note">Account follows the world lobby: open columns, generous spacing, gold uppercase section headings, and thin dividers. Use .account-section for the shared typography; .account-label, .account-note, .account-actions, and .account-link for fields, supporting text, wrapping controls, and destination links. Keep secondary forms inside .account-disclosure. The full page stacks its columns on narrow screens.</p>
       <div class="account-section">
-        <h2>Founder’s Passes</h2>
-        <span class="tag">Ready to claim</span>
-        <p>Complimentary access, for as long as this world operates.</p>
-        <p class="account-note">Claiming keeps the pass on this account and unlocks your +1 invitation.</p>
-        <div class="account-actions"><button class="btn-medium">Claim on this account</button></div>
-        <details class="account-disclosure"><summary><ChevronRight :size="16" aria-hidden="true" />Transfer to another account</summary><p class="account-note">Secondary actions expand in place. Confirm the destination before completing a transfer.</p></details>
-        <a href="#account" class="account-link">Visit Phalanx <ArrowRight :size="16" aria-hidden="true" /></a>
+        <h2>Subscriptions &amp; passes</h2>
+        <p class="account-note">You don’t have any subscriptions or passes.</p>
+        <a href="#account" class="account-link">Visit the lobby <ArrowRight :size="16" aria-hidden="true" /></a>
+      </div>
+      <p class="sg-note">Always show this section, including while loading and when no passes are held. Keep the empty state generic; do not promote invitation-only programs or show unavailable purchase controls. Existing passes remain visible when new issuance is paused.</p>
+      <p class="sg-note">Keep ordinary account sections open and flat. Owned passes are a deliberate exception: a collectible object can use its world's lobby artwork, a Written Realms seal, and a fine inset gold frame. Reserve this treatment for the pass itself; do not turn surrounding settings into decorative cards. Keep the established typefaces, color tokens, and orange primary action. No animated glints, invented rarity labels, or decorative serial numbers.</p>
+      <p class="sg-note">Use PassTicket with title, optional artwork and status props. Its benefit slot describes access; the default slot holds supporting copy and actions. The .pass-ticket-face, .pass-ticket-art, .pass-ticket-seal, .pass-ticket-heading, and .pass-ticket-title styles form the face; .pass-ticket-stub holds the perforation and action. Artwork is decorative, lazy-loaded, and falls back to the dark engraved face if unavailable. Long titles wrap. Keep the claim explanation in .account-note, show a deadline only when set, and keep transfer and invitation forms outside. This generic example does not advertise a real pass program.</p>
+      <div class="account-section sg-form">
+        <PassTicket title="Example world pass">
+          <template #benefit><p>Your access to this world.</p></template>
+          <p class="account-note">A short explanation of the available action.</p>
+          <button class="btn-medium">Claim on this account</button>
+        </PassTicket>
       </div>
     </section>
 
@@ -505,6 +511,7 @@
 
 <script lang="ts" setup>
 import MarkdownContent from '@/components/MarkdownContent.vue';
+import PassTicket from '@/components/account/PassTicket.vue';
 import InspectionFacts from '@/components/builder/InspectionFacts.vue';
 import JsonInspector from '@/components/builder/JsonInspector.vue';
 import YamlViewButton from '@/components/builder/world/YamlViewButton.vue';

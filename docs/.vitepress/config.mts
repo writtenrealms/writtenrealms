@@ -94,7 +94,7 @@ const playerSidebar: DefaultTheme.SidebarItem[] = [
   { text: "Merchants", link: "/players/merchants" },
   { text: "Crafting", link: "/players/crafting-player-guide" },
   { text: "Socials", link: "/players/socials" },
-  { text: "Founder’s Passes", link: "/players/founder-passes" },
+  { text: "Subscriptions & passes", link: "/players/subscriptions-and-passes" },
 ];
 
 const adminSidebar: DefaultTheme.SidebarItem[] = [

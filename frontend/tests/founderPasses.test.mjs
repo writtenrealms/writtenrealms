@@ -12,7 +12,7 @@ const server = await createServer({
   optimizeDeps: { noDiscovery: true, include: [] },
 });
 after(() => server.close());
-const { default: Passes } = await server.ssrLoadModule('/src/components/account/FounderPasses.vue');
+const { default: Passes } = await server.ssrLoadModule('/src/components/account/Subscriptions.vue');
 const { passStatus } = await server.ssrLoadModule('/src/core/founderPasses.ts');
 
 const direct = { id: 1, world_name: 'Phalanx', kind: 'direct', claimed_at: null,
@@ -62,11 +62,11 @@ test('transfer failures preserve email input and report the server explanation',
   assert.equal(bindings.notice.value, '');
 });
 
-test('status distinguishes unclaimed, pending transfer, claimed, and gifted passes', () => {
-  assert.equal(passStatus(direct), 'Ready to claim');
+test('only pending transfers need a status badge', () => {
+  assert.equal(passStatus(direct), '');
   assert.equal(passStatus({ ...direct, transfer_email: 'new@example.com' }), 'Transfer awaiting confirmation');
-  assert.equal(passStatus({ ...direct, claimed_at: 'date' }), 'Claimed');
-  assert.equal(passStatus({ ...direct, kind: 'gift', claimed_at: 'date' }), 'Gifted · Claimed');
+  assert.equal(passStatus({ ...direct, claimed_at: 'date' }), '');
+  assert.equal(passStatus({ ...direct, kind: 'gift', claimed_at: 'date' }), '');
 });
 
 test('a failed claim retains its review and never displays a false success', async () => {
